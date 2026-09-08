@@ -1,0 +1,14 @@
+services:
+  watcher:
+    build: .
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      DOWNLOAD_DIR: /downloads
+      WANTED_LINKS_FILE: /downloads/wanted_tracks.txt
+      IN_DOCKER: "true"
+    volumes:
+      - ${HOST_DOWNLOAD_DIR:?Set HOST_DOWNLOAD_DIR in .env}:/downloads
+      - ${HOST_DATA_DIR:?Set HOST_DATA_DIR in .env}:/data
+      - ./.env:/app/.env
+    restart: unless-stopped

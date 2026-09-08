@@ -1,0 +1,14 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.session
+*.session-journal
+data/
+downloads/
+app-data/
+*.log
+*.part
+
+*.egg-info/

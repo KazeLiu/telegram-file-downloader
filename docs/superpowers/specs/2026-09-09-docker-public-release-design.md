@@ -11,7 +11,7 @@ The release supports Docker Compose on any host that can run Docker. It watches 
 ## User workflow
 
 1. Clone the repository and copy `.env.example` to `.env`.
-2. Set `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `DOWNLOAD_DIR`, `DATA_DIR`, and, if desired, `ALLOWED_EXTENSIONS` in `.env`.
+2. Set `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `HOST_DOWNLOAD_DIR`, `HOST_DATA_DIR`, and, if desired, `ALLOWED_EXTENSIONS` in `.env`.
 3. Run `docker compose run --rm configure`.
 4. Complete Telegram's interactive sign-in prompts and choose a group or channel from the presented eligible chats. The setup command saves the selected chat ID into `.env`.
 5. Start the service with `docker compose up -d`.
@@ -24,8 +24,8 @@ The public `.env.example` documents these settings:
 - `TELEGRAM_API_ID`: Telegram application API ID; required.
 - `TELEGRAM_API_HASH`: Telegram application API hash; required and secret.
 - `TELEGRAM_CHAT`: selected Telegram channel or group ID; written by configure and required by the watcher.
-- `DOWNLOAD_DIR`: absolute host directory mounted at `/downloads`; required.
-- `DATA_DIR`: absolute host directory mounted at `/data`; required. It holds the Telegram session and logs.
+- `HOST_DOWNLOAD_DIR`: absolute host directory mounted at `/downloads`; required.
+- `HOST_DATA_DIR`: absolute host directory mounted at `/data`; required. It holds the Telegram session and logs.
 - `ALLOWED_EXTENSIONS`: comma-separated extension allow-list. Entries may include or omit the leading period and are normalized to lowercase. The default is `.mp3,.flac,.wav,.m4a,.aac,.ogg,.opus,.aiff,.alac`.
 - `WANTED_LINKS_FILE`: optional path inside `/downloads`; it defaults to `/downloads/wanted_tracks.txt`.
 
@@ -37,8 +37,8 @@ The public `.env.example` documents these settings:
 
 `compose.yaml` defines one service image with two named bind mounts derived from `.env`:
 
-- `${DOWNLOAD_DIR}:/downloads`
-- `${DATA_DIR}:/data`
+- `${HOST_DOWNLOAD_DIR}:/downloads`
+- `${HOST_DATA_DIR}:/data`
 
 The service passes only container paths to the application (`DOWNLOAD_DIR=/downloads`, `DATA_DIR=/data`). The container does not need a host network port. It uses a restart policy suitable for a long-lived watcher.
 
