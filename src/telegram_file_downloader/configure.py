@@ -30,7 +30,7 @@ async def configure() -> None:
     env_path = root / ".env"
     existing = dotenv_values(env_path) if env_path.exists() else {}
 
-    print("\nTelegram File Watcher setup")
+    print("\nTelegram File Downloader setup")
     print("Create Telegram API credentials at https://my.telegram.org/apps before continuing.\n")
     api_id_text = prompt(existing.get("TELEGRAM_API_ID"), "Telegram API ID")
     try:

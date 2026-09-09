@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir . \
     && useradd --create-home --uid 10001 app
 
 USER app
-CMD ["telegram-file-watcher-service"]
+CMD ["telegram-file-downloader-service"]

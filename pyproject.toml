@@ -3,27 +3,19 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "telegram-file-watcher"
+name = "telegram-file-downloader"
 version = "0.1.0"
-description = "Windows tray watcher that downloads new Telegram group files"
+description = "Docker service that downloads allowed files from a Telegram channel or group"
 requires-python = ">=3.11"
 dependencies = [
     "Telethon==1.44.0",
     "cryptg==0.6.0",
-    "Pillow==12.3.0",
-    "pystray==0.19.5",
     "python-dotenv==1.2.2",
 ]
 
 [project.scripts]
-telegram-file-watcher = "telegram_file_watcher.__main__:main"
-telegram-file-watcher-configure = "telegram_file_watcher.configure:main"
-telegram-file-watcher-service = "telegram_file_watcher.service:main"
+telegram-file-downloader-configure = "telegram_file_downloader.configure:main"
+telegram-file-downloader-service = "telegram_file_downloader.service:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.pytest.ini_options]
-addopts = "-q"
-testpaths = ["tests"]
-pythonpath = ["src"]

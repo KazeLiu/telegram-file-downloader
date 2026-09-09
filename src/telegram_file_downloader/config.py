@@ -28,7 +28,7 @@ class AppConfig:
 
     @property
     def log_path(self) -> Path:
-        return self.data_dir / "telegram_file_watcher.log"
+        return self.data_dir / "telegram_file_downloader.log"
 
 
 def _absolute_path(value: str, field: str) -> Path:
