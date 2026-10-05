@@ -81,9 +81,9 @@ class LinkRecorder:
             for link in extract_supported_links(text):
                 if link not in known:
                     added.append(link)
-                    known.add(link)
             if added:
                 with self.path.open("a", encoding="utf-8", newline="\n") as handle:
                     for link in added:
                         handle.write(f"{link}\n")
+                known.update(added)
         return added

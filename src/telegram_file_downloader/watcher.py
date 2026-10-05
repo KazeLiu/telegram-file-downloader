@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import datetime, timezone
+from contextlib import suppress
+from datetime import datetime, timedelta, timezone
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient, utils
 
 from .config import AppConfig
 from .downloader import DownloadQueue
+from .history import DownloadHistory
 from .links import LinkRecorder
 from .processor import MessageProcessor
 from .state import AppState, ConnectionStatus
@@ -65,9 +67,9 @@ class TelegramWatcher:
 
     async def _run_connected_session(self) -> None:
         assert self.client is not None
-        download_queue: DownloadQueue | None = None
-        download_task: asyncio.Task | None = None
-        handler = None
+        history = None
+        scan_task = None
+        stop_tasks = []
         self.state.set_status(ConnectionStatus.CONNECTING)
         try:
             await self.client.connect()
@@ -75,45 +77,73 @@ class TelegramWatcher:
                 raise RuntimeError("Telegram login is required. Run the configure command from the project folder.")
 
             target = await self.client.get_entity(self.config.chat)
+            account = await self.client.get_me()
+            history = DownloadHistory(
+                self.config.data_dir / "download_history.sqlite3",
+                f"{account.id}:{utils.get_peer_id(target)}",
+                self.config.history_start_date or self.started_at,
+            )
             recorder = LinkRecorder(self.config.wanted_links_file)
-            download_queue = DownloadQueue(self.client, self.config.download_dir, self.state.set_error)
-            processor = MessageProcessor(recorder, download_queue, self.started_at, self.config.allowed_extensions)
-            download_task = asyncio.create_task(download_queue.run(), name="download-queue")
-
-            async def handle_message(event) -> None:
-                try:
-                    await processor.process(event.message)
-                except Exception as exc:
-                    LOGGER.exception("Could not process Telegram message")
-                    self.state.set_error(f"Could not process a Telegram message: {exc}")
-
-            handler = handle_message
-            self.client.add_event_handler(handler, events.NewMessage(chats=target))
-            LOGGER.info("Watching Telegram chat %s", getattr(target, "title", self.config.chat))
+            download_queue = DownloadQueue(self.client, self.config.download_dir, self.state.set_error, history=history)
+            processor = MessageProcessor(recorder, download_queue, self.config.allowed_extensions)
+            LOGGER.info(
+                "Watching Telegram chat %s; tracking since %s; resume after message %s (%s); last complete scan %s",
+                getattr(target, "title", self.config.chat), history.since.isoformat(), history.message_id,
+                history.progress["message_date"], history.progress["checked_at"],
+            )
             self.state.clear_error()
             self.state.set_status(ConnectionStatus.CONNECTED)
 
-            while not self.shutdown.is_set() and not self.reconnect_requested.is_set():
-                if self.client.is_connected():
+            async def scan_loop():
+                while not self.shutdown.is_set() and not self.reconnect_requested.is_set():
+                    if not self.client.is_connected():
+                        self.state.set_status(ConnectionStatus.DISCONNECTED)
+                        await self.client.connect()
+                    complete = await self._scan_history(target, processor, history)
                     self.state.set_status(ConnectionStatus.CONNECTED)
-                else:
-                    self.state.set_status(ConnectionStatus.DISCONNECTED)
-                    await self.client.connect()
-                try:
-                    await asyncio.wait_for(self.shutdown.wait(), timeout=2)
-                except TimeoutError:
-                    pass
+                    if complete:
+                        self.state.clear_error()
+                    # History is authoritative, including gaps during automatic reconnects.
+                    await asyncio.sleep(5 if complete else 30)
+
+            scan_task = asyncio.create_task(scan_loop(), name="history-scan")
+            stop_tasks = [asyncio.create_task(self.shutdown.wait()), asyncio.create_task(self.reconnect_requested.wait())]
+            done, _ = await asyncio.wait([scan_task, *stop_tasks], return_when=asyncio.FIRST_COMPLETED)
+            if scan_task in done:
+                await scan_task
         finally:
-            if handler:
-                self.client.remove_event_handler(handler)
-            if download_queue and download_task:
-                await download_queue.stop()
-                try:
-                    await asyncio.wait_for(download_task, timeout=10)
-                except TimeoutError:
-                    download_task.cancel()
+            for task in [scan_task, *stop_tasks]:
+                if task is not None:
+                    task.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await task
+            if history:
+                history.close()
             if self.client.is_connected():
                 await self.client.disconnect()
+
+    async def _scan_history(self, target, processor: MessageProcessor, history: DownloadHistory) -> bool:
+        assert self.client is not None
+        started = datetime.now(timezone.utc)
+        before = history.message_id
+        options = {"min_id": before, "reverse": True}
+        if not before:
+            # Telegram's offset is exclusive; include the boundary second then filter locally.
+            options["offset_date"] = history.since - timedelta(seconds=1)
+        async for message in self.client.iter_messages(target, **options):
+            if self.shutdown.is_set() or self.reconnect_requested.is_set():
+                return False
+            if message.id <= history.message_id:
+                continue
+            if message.date >= history.since and not await processor.process(message):
+                LOGGER.warning("Catch-up paused at message %s; checkpoint retained for retry", message.id)
+                return False
+            history.advance(message.id, message.date)
+            LOGGER.info("Progress saved through Telegram message %s dated %s", message.id, message.date.isoformat())
+        history.checked(started)
+        if history.message_id != before:
+            LOGGER.info("Catch-up complete; checked through %s", started.isoformat())
+        return True
 
     def request_reconnect(self) -> None:
         self.reconnect_requested.set()

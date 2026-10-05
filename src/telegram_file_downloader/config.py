@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
@@ -21,6 +22,7 @@ class AppConfig:
     wanted_links_file: Path
     data_dir: Path
     allowed_extensions: frozenset[str]
+    history_start_date: datetime | None = None
 
     @property
     def session_path(self) -> Path:
@@ -93,6 +95,18 @@ def config_from_mapping(values: Mapping[str, str | None], project_dir: Path) -> 
         else download_dir / "wanted_tracks.txt"
     )
 
+    history_start_date = None
+    if value := values.get("HISTORY_START_DATE"):
+        try:
+            history_start_date = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            if history_start_date.tzinfo is None:
+                history_start_date = history_start_date.replace(tzinfo=timezone.utc)
+            history_start_date = history_start_date.astimezone(timezone.utc)
+        except ValueError as exc:
+            raise ConfigError("HISTORY_START_DATE must be an ISO date or timestamp") from exc
+        if history_start_date > datetime.now(timezone.utc):
+            raise ConfigError("HISTORY_START_DATE cannot be in the future")
+
     return AppConfig(
         api_id=api_id,
         api_hash=api_hash,
@@ -101,6 +115,7 @@ def config_from_mapping(values: Mapping[str, str | None], project_dir: Path) -> 
         wanted_links_file=wanted_file,
         data_dir=_absolute_path(str(values.get("DATA_DIR") or project_dir / "data"), "DATA_DIR"),
         allowed_extensions=_parse_extensions(values.get("ALLOWED_EXTENSIONS")),
+        history_start_date=history_start_date,
     )
 
 
@@ -120,6 +135,7 @@ def load_config(project_dir: Path | None = None) -> AppConfig:
         "DATA_DIR",
         "WANTED_LINKS_FILE",
         "ALLOWED_EXTENSIONS",
+        "HISTORY_START_DATE",
     ):
         if key in os.environ:
             merged[key] = os.environ[key]

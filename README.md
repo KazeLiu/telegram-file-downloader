@@ -1,8 +1,8 @@
 # Telegram File Downloader
 
-A Docker service that watches one Telegram channel or group through your own Telegram account and saves new files into a folder you choose. It downloads only extensions in your allow-list. The default allow-list is music-focused, but you can use any file extension.
+A Docker service that watches one Telegram channel or group through your own Telegram account and saves files into a folder you choose. It downloads only extensions in your allow-list. The default allow-list is music-focused, but you can use any file extension.
 
-The watcher never scans existing history. It handles only messages received after it starts.
+The watcher remembers its progress and catches up on messages sent while Docker or your connection was offline.
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ The watcher never scans existing history. It handles only messages received afte
 
 2. Edit `.env` with a text editor. Set `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `HOST_DOWNLOAD_DIR`, and `HOST_DATA_DIR`.
 
-   `HOST_DOWNLOAD_DIR` is the folder where allowed files will be saved. `HOST_DATA_DIR` is a separate, private folder for the Telegram login session and logs. Both must be absolute host paths.
+   `HOST_DOWNLOAD_DIR` is the folder where allowed files will be saved. `HOST_DATA_DIR` is a separate, private folder for the Telegram login session, download history, and logs. Both must be absolute host paths.
 
    Windows example:
 
@@ -89,7 +89,48 @@ docker compose run --rm watcher telegram-file-downloader-configure
 docker compose up -d --force-recreate
 ```
 
-The image exposes no web ports. Your Telegram session and logs remain only in `HOST_DATA_DIR`; downloads remain only in `HOST_DOWNLOAD_DIR`.
+The image exposes no web ports. Your Telegram session, download history, and logs remain only in `HOST_DATA_DIR`; downloads remain only in `HOST_DOWNLOAD_DIR`.
+
+## Catch-up and download history
+
+Progress is stored in `HOST_DATA_DIR/download_history.sqlite3`, separately for each
+Telegram account and chat. Keep this directory when stopping, rebuilding, or
+recreating Docker. The watcher reads messages oldest first at startup and checks
+for new messages every five seconds. It resumes from saved message IDs, so messages
+with the same timestamp are not lost.
+
+On the **first run with tracking**, set an optional recovery date in `.env`:
+
+```dotenv
+HISTORY_START_DATE=2026-09-24T13:15:16Z
+```
+
+A date alone means midnight UTC. An empty setting starts tracking when first
+enabled. Once a checkpoint exists for that account/chat, this setting is ignored;
+future restarts resume automatically. An upgrade from the old watcher has no
+checkpoint: use the old logs to choose a recovery date. Files downloaded by the old
+version have no completion records, so an overlapping initial scan can create
+numbered copies, but will never intentionally overwrite existing files. Messages
+deleted from Telegram before catch-up are unavailable.
+
+Rebuild and start after updating the code or setting the initial date:
+
+```powershell
+docker compose up -d --build
+docker compose logs -f watcher
+```
+
+Logs show the tracking start date, saved message ID/date, and latest completed scan
+time. The checkpoint advances only when a file is safely saved, or a message has no
+allowed attachment. If a download fails after three attempts, catch-up pauses at
+that message and retries after 30 seconds; later messages cannot conceal the
+failure by advancing the checkpoint. Interrupted transfers reuse their reserved
+`.part` path on restart. Completed tracked downloads are not downloaded again.
+
+Previously skipped extensions are not replayed when the allow-list changes.
+Moving or deleting a downloaded file does not reset its completion record. Run
+one watcher per data directory, and retain the same download mount when resuming
+an interrupted transfer.
 
 ## Security
 
