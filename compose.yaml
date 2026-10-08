@@ -2,6 +2,7 @@ name: telegramfiledownloader
 
 services:
   watcher:
+    image: telegram-file-downloader:1.1.0
     build: .
     env_file: .env
     environment:
