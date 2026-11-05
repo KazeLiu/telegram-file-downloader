@@ -25,7 +25,8 @@ async def run() -> None:
     watcher = TelegramWatcher(config, AppState())
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(signum, watcher.request_shutdown)
+        # Windows does not implement asyncio's add_signal_handler.
+        signal.signal(signum, lambda _signum, _frame: loop.call_soon_threadsafe(watcher.request_shutdown))
     await watcher.run()
 
 

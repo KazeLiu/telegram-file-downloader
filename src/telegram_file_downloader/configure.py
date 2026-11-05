@@ -8,6 +8,8 @@ from pathlib import Path
 from dotenv import dotenv_values, set_key
 from telethon import TelegramClient
 
+from .config import PROXY_ENV_KEYS, configuration_path, proxy_from_mapping
+
 
 def project_root() -> Path:
     return Path.cwd()
@@ -27,7 +29,7 @@ def prompt(current: str | None, label: str, secret: bool = False) -> str:
 
 async def configure() -> None:
     root = project_root()
-    env_path = root / ".env"
+    env_path = configuration_path(root)
     existing = dotenv_values(env_path) if env_path.exists() else {}
 
     print("\nTelegram File Downloader setup")
@@ -39,9 +41,11 @@ async def configure() -> None:
         raise SystemExit("Telegram API ID must be a number.") from exc
     api_hash = prompt(existing.get("TELEGRAM_API_HASH"), "Telegram API hash", secret=True)
 
-    data_dir = Path(os.environ.get("DATA_DIR", root / "data"))
+    proxy_values = {**existing, **{key: os.environ[key] for key in PROXY_ENV_KEYS if key in os.environ}}
+    proxy = proxy_from_mapping(proxy_values)
+    data_dir = Path(os.environ.get("DATA_DIR") or existing.get("DATA_DIR") or root / "data").expanduser().resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
-    client = TelegramClient(str(data_dir / "telegram"), api_id, api_hash)
+    client = TelegramClient(str(data_dir / "telegram"), api_id, api_hash, proxy=proxy)
 
     print("\nSigning in to Telegram. Codes and passwords remain on this PC.")
     await client.start()
@@ -62,11 +66,15 @@ async def configure() -> None:
         while True:
             selection = input("Group number: ").strip()
             try:
-                chosen = dialogs[int(selection) - 1]
+                number = int(selection)
+                if not 1 <= number <= len(dialogs):
+                    raise ValueError
+                chosen = dialogs[number - 1]
                 break
-            except (ValueError, IndexError):
+            except ValueError:
                 print("Enter one of the group numbers shown above.")
 
+        env_path.parent.mkdir(parents=True, exist_ok=True)
         env_path.touch(exist_ok=True)
         set_key(env_path, "TELEGRAM_API_ID", str(api_id), quote_mode="never")
         set_key(env_path, "TELEGRAM_API_HASH", api_hash, quote_mode="never")
@@ -74,7 +82,7 @@ async def configure() -> None:
 
         print(f"\nConfigured chat: {chosen.name}")
         if os.environ.get("IN_DOCKER") == "true":
-            print("Download and data folders are configured with HOST_DOWNLOAD_DIR and HOST_DATA_DIR in .env.")
+            print("Download and data folders are controlled by the Compose volume mounts.")
         else:
             default_download = existing.get("DOWNLOAD_DIR") or str(Path.home() / "Downloads" / "Telegram Inbox")
             download_dir = Path(prompt(default_download, "Download folder")).expanduser().resolve()

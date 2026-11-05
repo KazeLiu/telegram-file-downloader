@@ -9,6 +9,15 @@ from typing import Mapping
 from dotenv import dotenv_values
 
 
+PROXY_ENV_KEYS = (
+    "TELEGRAM_PROXY_TYPE",
+    "TELEGRAM_PROXY_HOST",
+    "TELEGRAM_PROXY_PORT",
+    "TELEGRAM_PROXY_USERNAME",
+    "TELEGRAM_PROXY_PASSWORD",
+)
+
+
 class ConfigError(ValueError):
     """Raised when local configuration is missing or invalid."""
 
@@ -23,6 +32,7 @@ class AppConfig:
     data_dir: Path
     allowed_extensions: frozenset[str]
     history_start_date: datetime | None = None
+    proxy: dict[str, object] | None = None
 
     @property
     def session_path(self) -> Path:
@@ -65,6 +75,36 @@ def _parse_extensions(value: str | None) -> frozenset[str]:
             raise ConfigError(f"Invalid extension in ALLOWED_EXTENSIONS: {raw_extension}")
         extensions.add(extension)
     return frozenset(extensions)
+
+
+def configuration_path(project_dir: Path) -> Path:
+    return Path(os.environ.get("ENV_FILE_PATH") or project_dir / ".env")
+
+
+def proxy_from_mapping(values: Mapping[str, str | None]) -> dict[str, object] | None:
+    if not any(values.get(key) for key in PROXY_ENV_KEYS):
+        return None
+
+    proxy_type = (values.get("TELEGRAM_PROXY_TYPE") or "socks5").strip().lower()
+    host = (values.get("TELEGRAM_PROXY_HOST") or "").strip()
+    port_text = (values.get("TELEGRAM_PROXY_PORT") or "").strip()
+    if proxy_type not in {"socks5", "http"}:
+        raise ConfigError("TELEGRAM_PROXY_TYPE must be socks5 or http")
+    if not host or not port_text:
+        raise ConfigError("Set both TELEGRAM_PROXY_HOST and TELEGRAM_PROXY_PORT; the proxy will not fall back to a direct connection")
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise ConfigError("TELEGRAM_PROXY_PORT must be a number") from exc
+    if not 1 <= port <= 65535:
+        raise ConfigError("TELEGRAM_PROXY_PORT must be between 1 and 65535")
+
+    proxy: dict[str, object] = {"proxy_type": proxy_type, "addr": host, "port": port, "rdns": True}
+    if username := values.get("TELEGRAM_PROXY_USERNAME"):
+        proxy["username"] = username
+    if password := values.get("TELEGRAM_PROXY_PASSWORD"):
+        proxy["password"] = password
+    return proxy
 
 
 def config_from_mapping(values: Mapping[str, str | None], project_dir: Path) -> AppConfig:
@@ -116,12 +156,13 @@ def config_from_mapping(values: Mapping[str, str | None], project_dir: Path) -> 
         data_dir=_absolute_path(str(values.get("DATA_DIR") or project_dir / "data"), "DATA_DIR"),
         allowed_extensions=_parse_extensions(values.get("ALLOWED_EXTENSIONS")),
         history_start_date=history_start_date,
+        proxy=proxy_from_mapping(values),
     )
 
 
 def load_config(project_dir: Path | None = None) -> AppConfig:
     root = (project_dir or Path.cwd()).resolve()
-    env_path = root / ".env"
+    env_path = configuration_path(root)
     if not env_path.exists():
         raise ConfigError(f"Configuration file not found: {env_path}")
 
@@ -136,6 +177,7 @@ def load_config(project_dir: Path | None = None) -> AppConfig:
         "WANTED_LINKS_FILE",
         "ALLOWED_EXTENSIONS",
         "HISTORY_START_DATE",
+        *PROXY_ENV_KEYS,
     ):
         if key in os.environ:
             merged[key] = os.environ[key]

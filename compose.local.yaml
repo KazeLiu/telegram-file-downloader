@@ -1,0 +1,19 @@
+name: tg-group-watcher
+
+services:
+  watcher:
+    image: telegram-file-downloader:1.1.0-local
+    build: .
+    environment:
+      ENV_FILE_PATH: /config/.env
+      DATA_DIR: /data
+      DOWNLOAD_DIR: /downloads
+      IN_DOCKER: "true"
+    volumes:
+      # Mount the directory so python-dotenv can atomically replace .env during setup.
+      - ./config:/config
+      - ./data:/data
+      - ./downloads:/downloads
+    stdin_open: true
+    tty: true
+    restart: unless-stopped

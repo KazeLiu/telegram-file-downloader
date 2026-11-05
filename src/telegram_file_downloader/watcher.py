@@ -36,6 +36,7 @@ class TelegramWatcher:
             str(self.config.session_path),
             self.config.api_id,
             self.config.api_hash,
+            proxy=self.config.proxy,
             auto_reconnect=True,
             catch_up=False,
             sequential_updates=True,

@@ -1,5 +1,7 @@
 # Telegram File Downloader
 
+[中文部署说明（本地适配版）](README.zh-CN.md) · [Upstream and selection notes](UPSTREAM.md)
+
 A Docker service that watches one Telegram channel or group through your own Telegram account and saves files into a folder you choose. It downloads only extensions in your allow-list. The default allow-list is music-focused, but you can use any file extension.
 
 The watcher remembers its progress and catches up on messages sent while Docker or your connection was offline.
@@ -90,6 +92,29 @@ docker compose up -d --force-recreate
 ```
 
 The image exposes no web ports. Your Telegram session, download history, and logs remain only in `HOST_DATA_DIR`; downloads remain only in `HOST_DOWNLOAD_DIR`.
+
+## Telegram proxy
+
+Both interactive sign-in and the watcher support the same optional proxy settings:
+
+```dotenv
+TELEGRAM_PROXY_TYPE=socks5
+TELEGRAM_PROXY_HOST=host.docker.internal
+TELEGRAM_PROXY_PORT=YOUR_ACTUAL_PROXY_PORT
+TELEGRAM_PROXY_USERNAME=
+TELEGRAM_PROXY_PASSWORD=
+```
+
+Supported types are `socks5` and `http`. Use `127.0.0.1` for a proxy on the same
+computer when running natively; `host.docker.internal` is for a Docker Desktop
+container accessing its host. Set the actual numeric port before running. Leave
+all proxy fields empty to retain direct access. Partially configured proxies are
+rejected rather than silently bypassed.
+
+The local `compose.local.yaml` profile reads `/config/.env` through
+`ENV_FILE_PATH`. It mounts the configuration directory, so the setup command can
+atomically save the chosen chat. See the Chinese guide for this profile; the
+original `compose.yaml` layout is unchanged.
 
 ## Catch-up and download history
 
