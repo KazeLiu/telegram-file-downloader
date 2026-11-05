@@ -11,6 +11,17 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from .files import collision_safe_path
 
 
+STREAM_EXTENSIONS = frozenset({".gz", ".gzip", ".bz2", ".bzip2", ".xz", ".zst", ".zstd", ".lzma", ".z"})
+ARCHIVE_EXTENSIONS = STREAM_EXTENSIONS | frozenset({
+    ".zip", ".rar", ".7z", ".tar", ".tgz", ".tbz", ".tbz2", ".txz", ".tzst", ".tlz", ".taz",
+    ".cab", ".arj", ".lzh", ".lha",
+})
+TAR_WRAPPER_SUFFIXES = (
+    ".tar.gzip", ".tar.bzip2", ".tar.zstd", ".tar.lzma", ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tar.z",
+    ".tgz", ".tbz", ".tbz2", ".txz", ".tzst", ".tlz", ".taz",
+)
+
+
 class ExtractionError(ValueError):
     pass
 
@@ -25,7 +36,9 @@ def seven_zip() -> str | None:
 
 
 def multipart(name: str) -> bool:
-    return bool(re.search(r"(?:\.part\d+\.rar|\.r\d\d|\.z\d\d|\.(?:zip|rar|7z)\.\d+)$", name, re.I))
+    stem, _, volume = name.lower().rpartition(".")
+    return bool(re.search(r"(?:\.part\d+\.rar|\.r\d\d|\.z\d\d)$", name, re.I)
+                or (volume.isdigit() and Path(stem).suffix in ARCHIVE_EXTENSIONS))
 
 
 async def _command(executable, *args):
@@ -58,13 +71,38 @@ def _validate_listing(listing: str):
                 or re.search(r"(?:^|\s)[lbcps]", attributes) or "Reparse" in values):
             raise ExtractionError("压缩包含有链接或特殊文件，已保留原包")
         paths.append(normalized)
-        unpacked += int(values.get("Size", "0"))
+        if size := values.get("Size"):
+            unpacked += int(size)
     if not paths:
         raise ExtractionError("无法读取压缩包文件列表，已保留原包")
     return unpacked
 
 
-async def extract_archive(archive: Path, passwords: list[str]) -> Path:
+def _validate_extracted(directory: Path):
+    resolved = directory.resolve()
+    for root, directories, files in os.walk(directory, followlinks=False):
+        for name in [*directories, *files]:
+            item = Path(root) / name
+            reparse = getattr(item.lstat(), "st_file_attributes", 0) & 0x400
+            if item.is_symlink() or reparse or not item.resolve().is_relative_to(resolved):
+                raise ExtractionError("解压结果含有不安全链接，已保留原包")
+
+
+async def _expand_tar(executable: str, archive: Path, staging: Path) -> Path:
+    code, listing = await _command(executable, "l", "-ttar", "-slt", "-ba", "-sccUTF-8", "--", str(archive))
+    if code:
+        raise ExtractionError("组合压缩包中的 TAR 无法读取，已保留原包")
+    if shutil.disk_usage(staging).free < _validate_listing(listing):
+        raise ExtractionError("展开 TAR 的空间不足，已保留原包")
+    contents = Path(tempfile.mkdtemp(prefix=".tg-tar-", dir=staging))
+    code, _ = await _command(executable, "x", "-ttar", "-y", "-aoa", "-sccUTF-8", f"-o{contents}", "--", str(archive))
+    if code:
+        raise ExtractionError("组合压缩包中的 TAR 解压失败，已保留原包")
+    _validate_extracted(contents)
+    return contents
+
+
+async def extract_archive(archive: Path, passwords: list[str], source_name: str | None = None) -> Path:
     executable = seven_zip()
     if not executable:
         raise ExtractionError("未找到 7-Zip；原包已保留。Windows 请安装 7-Zip 后重试")
@@ -91,14 +129,20 @@ async def extract_archive(archive: Path, passwords: list[str]) -> Path:
                                      f"-o{staging}", "--", str(archive))
             if code:
                 continue
-            for root, directories, files in os.walk(staging, followlinks=False):
-                for name in [*directories, *files]:
-                    item = Path(root) / name
-                    reparse = getattr(item.lstat(), "st_file_attributes", 0) & 0x400
-                    if item.is_symlink() or reparse or not item.resolve().is_relative_to(staging.resolve()):
-                        raise ExtractionError("解压结果含有不安全链接，已保留原包")
-            target = collision_safe_path(archive.parent, archive.stem + "_解压")
-            staging.rename(target)
+            _validate_extracted(staging)
+            format_name = source_name or archive.name
+            wrapper_suffix = next((suffix for suffix in TAR_WRAPPER_SUFFIXES if format_name.lower().endswith(suffix)), None)
+            output = staging
+            if wrapper_suffix or archive.suffix.lower() in STREAM_EXTENSIONS:
+                entries = list(staging.iterdir())
+                inner = entries[0] if len(entries) == 1 and entries[0].is_file() else None
+                if wrapper_suffix or (inner and inner.suffix.lower() == ".tar"):
+                    if inner is None:
+                        raise ExtractionError("组合压缩包没有唯一的 TAR 文件，已保留原包")
+                    output = await _expand_tar(executable, inner, staging)
+            stem = format_name[:-len(wrapper_suffix)] if wrapper_suffix else archive.stem
+            target = collision_safe_path(archive.parent, stem + "_解压")
+            output.rename(target)
             return target
         finally:
             if staging.exists():

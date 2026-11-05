@@ -70,12 +70,12 @@ onBeforeUnmount(clearSecrets)
           <section class="settings-section"><h2>收集哪些文件</h2><p class="muted">修改后只影响之后处理的消息，不会重新扫描已跳过的内容。</p>
             <label class="toggle-row"><span class="setting-icon"><Icon name="video" /></span><span><strong>视频</strong><small>选择 Telegram 提供的最高可用清晰度，不转码</small></span><input v-model="settingsModel.form.videos" type="checkbox" role="switch" /></label>
             <label class="toggle-row"><span class="setting-icon"><Icon name="photo" /></span><span><strong>图片</strong><small>保存最高可用尺寸；文档方式发送的图片保留原文件</small></span><input v-model="settingsModel.form.photos" type="checkbox" role="switch" /></label>
-            <label class="toggle-row"><span class="setting-icon"><Icon name="archive" /></span><span><strong>ZIP / RAR / 7z 压缩包</strong><small>保留原文件名，同名文件自动编号</small></span><input v-model="settingsModel.form.archives" type="checkbox" role="switch" /></label>
+            <label class="toggle-row"><span class="setting-icon"><Icon name="archive" /></span><span><strong>压缩包</strong><small>ZIP、RAR、7z、TAR、GZ、BZ2、XZ、ZST 等；同名文件自动编号</small></span><input v-model="settingsModel.form.archives" type="checkbox" role="switch" /></label>
           </section>
           <section class="settings-section"><h2>文件保存位置</h2><div class="path-box"><Icon name="folder" /><code>{{ status.download_dir }}</code></div><p class="muted">这是程序内部的下载目录。Docker 的实际存放位置由 Compose 下载挂载决定。</p></section>
         </template>
         <template v-if="settingsModel.section === 'processing'">
-          <section class="settings-section"><h2>解压与清理</h2><label class="toggle-row"><span><strong>自动解压 ZIP / RAR / 7z</strong><small>先尝试无密码，再依次尝试已保存的密码</small></span><input v-model="settingsModel.form.extract" type="checkbox" role="switch" /></label>
+          <section class="settings-section"><h2>解压与清理</h2><label class="toggle-row"><span><strong>自动解压压缩包</strong><small>先尝试无密码，再依次尝试已保存的密码</small></span><input v-model="settingsModel.form.extract" type="checkbox" role="switch" /></label>
             <label class="toggle-row"><span><strong>解压成功后删除原包</strong><small>只有完整解压成功才删除；失败和分卷压缩包保留</small></span><input v-model="settingsModel.form.delete_archive" type="checkbox" role="switch" :disabled="!settingsModel.form.extract" /></label>
             <p v-if="!status.extractor_available" class="notice">未找到 7-Zip，当前只下载、不解压。Windows 安装 7-Zip 后重新连接即可。</p>
             <div class="password-heading"><span>解压密码 <small class="muted">已保存 {{ settings.archive_passwords_count }} 个</small></span><button type="button" class="text-button" @click="settingsModel.replace_passwords = !settingsModel.replace_passwords">{{ settingsModel.replace_passwords ? '取消替换' : '替换密码列表' }}</button></div>

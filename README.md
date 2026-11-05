@@ -8,7 +8,7 @@ original upstream setup below is retained; the Chinese guide covers the fork's
 proxy-enabled deployment and Windows-native option.
 
 The web console adds persistent login/settings, proxy configuration, media rules,
-download history, progress receipts, and safe ZIP/RAR/7z extraction. See
+download history, progress receipts, and safe extraction of common archives. See
 [the web deployment guide](WEB_GUIDE.zh-CN.md). The original CLI instructions follow.
 
 A Docker service that watches one Telegram channel or group through your own Telegram account and saves files into a folder you choose. It downloads only extensions in your allow-list. The default allow-list is music-focused, but you can use any file extension.

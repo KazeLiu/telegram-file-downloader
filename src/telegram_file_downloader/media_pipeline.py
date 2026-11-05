@@ -7,7 +7,7 @@ from pathlib import Path
 
 from telethon import errors, types
 
-from .archives import ExtractionError, extract_archive, multipart
+from .archives import ARCHIVE_EXTENSIONS, ExtractionError, extract_archive, multipart
 from .console_store import now
 from .downloader import DownloadQueue
 from .files import message_filename
@@ -39,7 +39,7 @@ def select_media(message, settings):
             selected._file = None
             return selected, "video", f"{width} × {height}"
         return message, "video", "原始附件"
-    if settings["archives"] and (Path(name).suffix.lower() in {".zip", ".rar", ".7z"} or multipart(name)):
+    if settings["archives"] and (Path(name).suffix.lower() in ARCHIVE_EXTENSIONS or multipart(name)):
         return message, "archive", ""
     return None
 
@@ -167,7 +167,7 @@ class ConsoleProcessor:
             self.store.update_task(task_id, status="extracting", error="", completed_at=None)
             await self.receipt(self.store.task(task_id))
             try:
-                output = await extract_archive(archive, self.settings["archive_passwords"])
+                output = await extract_archive(archive, self.settings["archive_passwords"], source_name=task["filename"])
             except (ExtractionError, OSError) as exc:
                 self.store.update_task(task_id, status="extraction_failed", error=str(exc), completed_at=now())
                 return

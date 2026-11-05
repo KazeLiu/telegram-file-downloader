@@ -6,7 +6,7 @@ from pathlib import Path
 
 from telethon import TelegramClient, errors, utils
 
-from .archives import seven_zip
+from .archives import ARCHIVE_EXTENSIONS, seven_zip
 from .config import AppConfig, proxy_from_mapping
 from .console_store import ConsoleStore
 from .media_pipeline import ConsoleProcessor
@@ -120,7 +120,7 @@ class WebRuntime:
             await self._disconnect_auth()
             config = AppConfig(int(settings["api_id"]), settings["api_hash"], int(settings["chat"]),
                 self.download_dir, self.download_dir / "wanted_tracks.txt", self.data_dir,
-                frozenset({".zip", ".rar", ".7z"}), proxy=telegram_proxy(settings))
+                ARCHIVE_EXTENSIONS, proxy=telegram_proxy(settings))
 
             def processor_factory(client, history, recorder):
                 return ConsoleProcessor(client, self.download_dir, history, recorder,
