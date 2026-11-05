@@ -11,10 +11,11 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from telethon import errors
 
 from .console_store import ConsoleStore
+from .config import compact_connection_input
 from .web_runtime import WebRuntime, telegram_proxy
 
 
@@ -45,9 +46,19 @@ class SettingsPatch(BaseModel):
     receipts: bool | None = None
     mark_read: bool | None = None
 
+    @field_validator("proxy_host", "proxy_port", mode="before")
+    @classmethod
+    def clean_endpoint(cls, value):
+        return compact_connection_input(value) if isinstance(value, str) else value
+
 
 class Phone(BaseModel):
     phone: str = Field(pattern=r"^\+?[0-9]{7,16}$")
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def clean_phone(cls, value):
+        return compact_connection_input(value) if isinstance(value, str) else value
 
 
 class LoginCode(BaseModel):
@@ -128,6 +139,7 @@ def create_app():
     @app.exception_handler(ConnectionError)
     @app.exception_handler(OSError)
     @app.exception_handler(TimeoutError)
+    @app.exception_handler(EOFError)
     async def network_error(request, exc):
         return JSONResponse({"detail": "连接或文件操作失败，请检查代理、网络和目录权限"}, status_code=400)
 
@@ -202,7 +214,10 @@ def create_app():
         if settings["proxy_type"] not in {"socks5", "http", "direct"}:
             raise ValueError("请选择 SOCKS5、HTTP 或直连")
         if settings["proxy_host"] or settings["proxy_port"] or settings["api_id"]:
-            telegram_proxy(settings)
+            proxy = telegram_proxy(settings)
+            if proxy:
+                settings.update(proxy_type=proxy["proxy_type"], proxy_host=proxy["addr"],
+                                proxy_port=str(proxy["port"]))
         if any(len(value) > 256 for value in settings["archive_passwords"]):
             raise ValueError("单个解压密码不能超过 256 个字符")
         if runtime.account and (settings["api_id"], settings["api_hash"]) != (previous["api_id"], previous["api_hash"]):

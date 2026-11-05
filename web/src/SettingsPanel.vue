@@ -24,9 +24,9 @@ function resetForm() {
 watch(() => props.settings, () => { if (!settingsModel.dirty) resetForm() }, { immediate: true })
 async function action(key: string, run: () => Promise<unknown>, message = '') {
   settingsModel.busy = key; settingsModel.error = ''
-  try { await run(); if (message) emit('message', message); emit('refresh') }
+  try { await run(); if (message) emit('message', message) }
   catch (error) { settingsModel.error = (error as Error).message }
-  finally { settingsModel.busy = '' }
+  finally { settingsModel.busy = ''; emit('refresh') }
 }
 async function save() {
   await action('save', async () => {
@@ -41,6 +41,11 @@ async function save() {
   }, props.status.active ? '已保存，当前任务结束后应用' : '设置已保存')
 }
 function loadDialogs() { return action('dialogs', async () => { settingsModel.dialogs = await api('/telegram/dialogs') }) }
+function cleanPhone() { settingsModel.phone = settingsModel.phone.replace(/[\s\p{Cf}]/gu, '') }
+function sendCode() {
+  cleanPhone()
+  return action('code', () => api('/telegram/code', { phone: settingsModel.phone }), '验证码已发送，请在 Telegram 客户端查看')
+}
 const noBusy = computed(() => !settingsModel.busy && !props.status.pending)
 function clearSecrets() { settingsModel.api_hash = settingsModel.proxy_password = settingsModel.password = settingsModel.code = settingsModel.archive_passwords = '' }
 onBeforeUnmount(clearSecrets)
@@ -56,7 +61,7 @@ onBeforeUnmount(clearSecrets)
             <p class="muted">使用小号的 API 信息登录，大号只负责转发资源。</p>
             <div class="form-grid"><label>API ID<input v-model="settingsModel.form.api_id" inputmode="numeric" autocomplete="off" placeholder="数字 ID" :disabled="!!status.account" /></label><label>API Hash<input v-model="settingsModel.api_hash" type="password" autocomplete="new-password" :placeholder="settings.api_hash_saved ? '已保存，留空保持不变' : '填写 API Hash'" :disabled="!!status.account" /></label></div>
           </section>
-          <section class="settings-section"><h2>网络代理</h2><p class="muted">容器访问宿主机代理用 host.docker.internal，Windows 直接运行用 127.0.0.1。</p>
+          <section class="settings-section"><h2>网络代理</h2><p class="muted">支持 IP、域名或完整代理 URL，保存后自动拆分。容器访问宿主机代理用 host.docker.internal，Windows 直接运行用 127.0.0.1。</p>
             <div class="form-grid"><label>代理类型<select v-model="settingsModel.form.proxy_type"><option value="socks5">SOCKS5</option><option value="http">HTTP / Mixed</option><option value="direct">直连（不使用代理）</option></select></label><span></span></div>
             <template v-if="settingsModel.form.proxy_type !== 'direct'"><div class="form-grid host-port"><label>代理地址<input v-model="settingsModel.form.proxy_host" placeholder="host.docker.internal" autocomplete="off" /></label><label>端口<input v-model="settingsModel.form.proxy_port" inputmode="numeric" placeholder="7890" /></label></div><div class="form-grid"><label>用户名（可选）<input v-model="settingsModel.form.proxy_username" autocomplete="off" /></label><label>密码（可选）<input v-model="settingsModel.proxy_password" type="password" autocomplete="new-password" :placeholder="settings.proxy_password_saved ? '已保存，留空保持不变' : '无认证时留空'" :disabled="settingsModel.clear_proxy_password" /></label></div><label v-if="settings.proxy_password_saved" class="clear-password"><input v-model="settingsModel.clear_proxy_password" type="checkbox" />清除已保存的代理密码</label></template>
           </section>
@@ -87,12 +92,12 @@ onBeforeUnmount(clearSecrets)
           <div v-if="settingsModel.confirm_logout" class="notice"><p>退出后停止收集。文件和历史保留，可以重新登录。</p><button class="secondary" @click="settingsModel.confirm_logout = false">取消</button> <button class="danger" :disabled="!noBusy" @click="action('logout', async () => { await api('/telegram/logout', {}); settingsModel.confirm_logout = false })">确认退出</button></div>
           <div class="group-picker"><label>收集群<select v-model="settingsModel.chat" :disabled="!settingsModel.dialogs.length"><option :value="settings.chat">{{ settings.chat_title || '先加载群列表' }}</option><option v-for="dialog in settingsModel.dialogs.filter(d => d.id !== settings.chat)" :key="dialog.id" :value="dialog.id">{{ dialog.title }}</option></select></label><button class="secondary" :disabled="!noBusy" @click="loadDialogs">{{ settingsModel.busy === 'dialogs' ? '加载中…' : '加载群列表' }}</button><button v-if="settingsModel.chat && settingsModel.chat !== settings.chat" class="primary" :disabled="!noBusy" @click="action('chat', () => api('/telegram/chat', { id: settingsModel.chat }), '收集群已保存')">选用此群</button></div>
         </template>
-        <template v-else-if="configured && !status.pending && status.phase !== 'connection_error'">
-          <form v-if="!['code', 'password'].includes(status.phase)" class="inline-form" @submit.prevent="action('code', () => api('/telegram/code', { phone: settingsModel.phone }), '验证码已发送，请在 Telegram 客户端查看')"><label>手机号（含国家区号）<input v-model="settingsModel.phone" type="tel" autocomplete="tel" placeholder="+86 …" required /></label><button class="primary" :disabled="!noBusy">发送验证码</button></form>
+        <template v-else-if="configured && !status.pending && ['phone', 'code', 'password'].includes(status.phase)">
+          <form v-if="status.phase === 'phone'" class="inline-form" @submit.prevent="sendCode"><label>手机号（含国家区号）<input v-model="settingsModel.phone" type="tel" autocomplete="tel" placeholder="+86 …" required @blur="cleanPhone" /></label><button class="primary" :disabled="!noBusy">发送验证码</button></form>
           <form v-else-if="status.phase === 'code'" class="inline-form" @submit.prevent="action('login', async () => { await api('/telegram/login', { code: settingsModel.code }); settingsModel.code = '' })"><label>登录验证码<input v-model="settingsModel.code" inputmode="numeric" autocomplete="one-time-code" placeholder="在 Telegram 客户端查看" required /></label><button class="primary" :disabled="!noBusy">验证并继续</button><button type="button" class="text-button" :disabled="!noBusy" @click="action('reset', () => api('/telegram/reconnect', {}))">重新输入手机号</button></form>
           <form v-else class="inline-form" @submit.prevent="action('login', async () => { await api('/telegram/login', { password: settingsModel.password }); settingsModel.password = '' })"><label>Telegram 两步验证密码<input v-model="settingsModel.password" type="password" autocomplete="current-password" required /></label><button class="primary" :disabled="!noBusy">完成登录</button></form>
         </template>
-        <p v-else class="muted">{{ status.pending ? '正在应用连接设置…' : '先保存上方 API 和代理设置，再完成登录。' }}</p>
+        <p v-else class="muted">{{ status.pending ? '正在应用连接设置…' : status.phase === 'connection_error' ? '连接尚未就绪，请修正代理后保存，或点击重新连接。' : '先保存上方 API 和代理设置，再完成登录。' }}</p>
         <button v-if="configured" class="text-button reconnect" :disabled="!noBusy" @click="action('reconnect', () => api('/telegram/reconnect', {}))"><Icon name="refresh" :size="16" />重新连接</button>
       </section>
       <section v-if="settingsModel.section === 'security'" class="settings-section"><h2>管理页面密码</h2><p class="muted">只用于登录这个工作台，与 Telegram 密码无关。</p><form class="security-form" @submit.prevent="action('password', async () => { await api('/auth/password', { current_password: settingsModel.current_password, password: settingsModel.new_password }); settingsModel.current_password = settingsModel.new_password = '' }, '管理密码已更新')"><label>原管理密码<input v-model="settingsModel.current_password" type="password" autocomplete="current-password" required /></label><label>新管理密码<input v-model="settingsModel.new_password" type="password" minlength="10" maxlength="256" autocomplete="new-password" required placeholder="至少 10 个字符" /></label><button class="primary" :disabled="!!settingsModel.busy">更新密码</button></form><div class="security-note"><Icon name="lock" /><p>请仅通过本机、局域网或 Tailscale 访问。数据目录包含 Telegram 登录会话，备份时请妥善保管。</p></div></section>

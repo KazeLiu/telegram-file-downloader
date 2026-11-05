@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from telethon import TelegramClient, errors, utils
@@ -21,6 +21,20 @@ def telegram_proxy(settings):
         "TELEGRAM_PROXY_PORT": str(settings["proxy_port"]),
         "TELEGRAM_PROXY_USERNAME": settings["proxy_username"], "TELEGRAM_PROXY_PASSWORD": settings["proxy_password"],
     })
+
+
+def connection_error_message(error, settings):
+    if isinstance(error, EOFError):
+        if settings["proxy_type"] == "direct":
+            return "Telegram 握手连接被关闭。当前为直连，请设置可用代理后重新连接"
+        return "Telegram 握手连接被关闭，请核对代理类型、端口及其 Telegram 访问能力，再重新连接"
+    if isinstance(error, TimeoutError):
+        return "Telegram 连接或登录请求超时，请检查代理和网络后重新连接；请勿连续发送验证码"
+    if isinstance(error, OSError):
+        if settings["proxy_type"] == "direct":
+            return "无法直连 Telegram，请设置可用代理后重新连接"
+        return "无法通过代理连接 Telegram，请检查容器能否访问代理，以及代理类型和端口是否正确"
+    return "Telegram 连接失败，请检查 API 信息、代理和账号状态后重新连接"
 
 
 class WebRuntime:
@@ -63,10 +77,11 @@ class WebRuntime:
             self.changed.clear()
             try:
                 async with self.control_lock, self.operation_lock:
-                    await self._apply()
-            except (ValueError, OSError, ConnectionError, errors.RPCError, TimeoutError):
+                    async with asyncio.timeout(60):
+                        await self._apply()
+            except (ValueError, OSError, EOFError, errors.RPCError) as exc:
                 self.phase = "connection_error"
-                self.error = "连接失败，请检查 API、代理和网络后点击重新连接"
+                self.error = str(exc) if isinstance(exc, ValueError) else connection_error_message(exc, self.store.settings())
                 await self._disconnect_auth()
             finally:
                 self.pending = self.changed.is_set()
@@ -147,6 +162,18 @@ class WebRuntime:
         self.account = {"name": " ".join(filter(None, [user.first_name, user.last_name])),
                         "username": user.username or "", "id": user.id}
 
+    @asynccontextmanager
+    async def _login_connection(self):
+        try:
+            async with asyncio.timeout(60):
+                yield await self._connect()
+        except (OSError, EOFError) as exc:
+            self.phase = "connection_error"
+            self.error = connection_error_message(exc, self.store.settings())
+            self.phone = self.phone_code_hash = None
+            await self._disconnect_auth()
+            raise ValueError(self.error) from exc
+
     async def send_code(self, phone):
         async with self.control_lock, self.operation_lock:
             if self.pending:
@@ -154,32 +181,34 @@ class WebRuntime:
             if self.account:
                 raise ValueError("当前账号已登录；更换账号请先退出 Telegram")
             await self._stop_watcher()
-            client = await self._connect()
-            sent = await client.send_code_request(phone)
-            self.phone, self.phone_code_hash = phone, sent.phone_code_hash
-            self.phase, self.error = "code", ""
+            async with self._login_connection() as client:
+                sent = await client.send_code_request(phone)
+                self.phone, self.phone_code_hash = phone, sent.phone_code_hash
+                self.phase, self.error = "code", ""
 
     async def sign_in(self, code="", password=""):
         async with self.control_lock:
-            client = await self._connect()
-            try:
-                if password:
-                    if self.phase != "password":
-                        raise ValueError("请先完成验证码步骤")
-                    await client.sign_in(password=password)
-                else:
-                    if not self.phone or not self.phone_code_hash:
-                        raise ValueError("请先发送登录验证码")
-                    code = code.strip().replace(" ", "")
-                    if self.phase != "code" or not code.isdigit():
-                        raise ValueError("请输入收到的数字验证码")
-                    await client.sign_in(phone=self.phone, code=code, phone_code_hash=self.phone_code_hash)
-            except errors.SessionPasswordNeededError:
-                self.phase = "password"
-                return
-            await self._identify(client)
-            self.phone = self.phone_code_hash = None
-            self.schedule_apply()
+            if self.pending:
+                raise ValueError("连接配置正在应用，请稍后再试")
+            async with self._login_connection() as client:
+                try:
+                    if password:
+                        if self.phase != "password":
+                            raise ValueError("请先完成验证码步骤")
+                        await client.sign_in(password=password)
+                    else:
+                        if not self.phone or not self.phone_code_hash:
+                            raise ValueError("请先发送登录验证码")
+                        code = code.strip().replace(" ", "")
+                        if self.phase != "code" or not code.isdigit():
+                            raise ValueError("请输入收到的数字验证码")
+                        await client.sign_in(phone=self.phone, code=code, phone_code_hash=self.phone_code_hash)
+                except errors.SessionPasswordNeededError:
+                    self.phase = "password"
+                    return
+                await self._identify(client)
+                self.phone = self.phone_code_hash = None
+                self.schedule_apply()
 
     async def dialogs(self):
         async with self.control_lock:

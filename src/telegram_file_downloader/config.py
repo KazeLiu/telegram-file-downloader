@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
@@ -81,15 +83,41 @@ def configuration_path(project_dir: Path) -> Path:
     return Path(os.environ.get("ENV_FILE_PATH") or project_dir / ".env")
 
 
+def compact_connection_input(value: str) -> str:
+    """Phone numbers and endpoints cannot contain copied spacing/formatting characters."""
+    return "".join(char for char in value if not char.isspace() and unicodedata.category(char) != "Cf")
+
+
 def proxy_from_mapping(values: Mapping[str, str | None]) -> dict[str, object] | None:
     if not any(values.get(key) for key in PROXY_ENV_KEYS):
         return None
 
     proxy_type = (values.get("TELEGRAM_PROXY_TYPE") or "socks5").strip().lower()
-    host = (values.get("TELEGRAM_PROXY_HOST") or "").strip()
-    port_text = (values.get("TELEGRAM_PROXY_PORT") or "").strip()
+    host = compact_connection_input(values.get("TELEGRAM_PROXY_HOST") or "")
+    port_text = compact_connection_input(values.get("TELEGRAM_PROXY_PORT") or "")
+    if host:
+        # A complete URL is authoritative for its protocol and embedded port.
+        endpoint = host
+        if "://" not in endpoint:
+            if endpoint.count(":") > 1 and not endpoint.startswith("["):
+                endpoint = f"[{endpoint}]"
+            endpoint = "//" + endpoint
+        try:
+            parsed = urlsplit(endpoint)
+            embedded_port = parsed.port
+        except ValueError as exc:
+            raise ConfigError("代理地址或端口格式不正确，请填写 IP、域名或完整代理 URL") from exc
+        if parsed.scheme:
+            proxy_type = parsed.scheme.lower()
+        if parsed.username is not None or parsed.password is not None:
+            raise ConfigError("代理地址中不要包含账号密码，请使用独立的用户名和密码输入框")
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment or parsed.netloc.endswith(":"):
+            raise ConfigError("代理地址只能包含主机和端口，不能包含路径、查询参数或空端口")
+        host = parsed.hostname or ""
+        if embedded_port is not None:
+            port_text = str(embedded_port)
     if proxy_type not in {"socks5", "http"}:
-        raise ConfigError("TELEGRAM_PROXY_TYPE must be socks5 or http")
+        raise ConfigError("代理协议仅支持 socks5:// 或 http://；HTTP / Mixed 请选择 HTTP")
     if not host or not port_text:
         raise ConfigError("Set both TELEGRAM_PROXY_HOST and TELEGRAM_PROXY_PORT; the proxy will not fall back to a direct connection")
     try:
