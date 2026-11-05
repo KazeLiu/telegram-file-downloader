@@ -39,7 +39,7 @@ def select_media(message, settings):
             selected._file = None
             return selected, "video", f"{width} × {height}"
         return message, "video", "原始附件"
-    if settings["archives"] and (Path(name).suffix.lower() in {".zip", ".rar"} or multipart(name)):
+    if settings["archives"] and (Path(name).suffix.lower() in {".zip", ".rar", ".7z"} or multipart(name)):
         return message, "archive", ""
     return None
 

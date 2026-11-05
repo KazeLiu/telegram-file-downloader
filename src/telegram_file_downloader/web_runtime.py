@@ -120,7 +120,7 @@ class WebRuntime:
             await self._disconnect_auth()
             config = AppConfig(int(settings["api_id"]), settings["api_hash"], int(settings["chat"]),
                 self.download_dir, self.download_dir / "wanted_tracks.txt", self.data_dir,
-                frozenset({".zip", ".rar"}), proxy=telegram_proxy(settings))
+                frozenset({".zip", ".rar", ".7z"}), proxy=telegram_proxy(settings))
 
             def processor_factory(client, history, recorder):
                 return ConsoleProcessor(client, self.download_dir, history, recorder,

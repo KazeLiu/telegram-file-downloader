@@ -29,7 +29,7 @@ Windows 客户端的自动媒体缓存不应直接等同于“指定群附件自
 2. 增加 python-socks 的 asyncio 运行依赖。
 3. 修正原生 Windows 不支持 asyncio.add_signal_handler 的入口问题；保持 Ctrl+C / SIGTERM 的正常停止路径。
 4. 新增 compose.local.yaml，使用可写配置目录供登录向导保存群 ID；原 Compose 和默认 .env 入口保留。
-5. 增加 ZIP / RAR 专用模板与中文操作说明；原来的可自定义扩展名用法仍保留。
+5. 增加 ZIP / RAR / 7z 专用模板与中文操作说明；原来的可自定义扩展名用法仍保留。
 6. 登录向导沿用已配置的数据目录，避免原生运行登录后找不到同一会话；群选择编号只接受显示范围内的正整数。
 7. 增加 GitHub Actions 镜像发布和 compose.ghcr.yaml，服务器直接拉取 GHCR 镜像，不必自行构建。
 

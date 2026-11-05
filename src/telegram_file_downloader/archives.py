@@ -72,10 +72,11 @@ async def extract_archive(archive: Path, passwords: list[str]) -> Path:
         raise ExtractionError("分卷压缩包已下载；为避免缺卷误删，请收齐后手动解压")
     # No password is attempted first. Never include subprocess output/arguments in errors: it can contain secrets.
     for password in dict.fromkeys(["", *passwords]):
-        code, listing = await _command(executable, "l", "-slt", "-ba", "-sccUTF-8", f"-p{password}", "--", str(archive))
+        password_args = (f"-p{password}",) if password else ()
+        code, listing = await _command(executable, "l", "-slt", "-ba", "-sccUTF-8", *password_args, "--", str(archive))
         if code:
             continue
-        code, metadata = await _command(executable, "l", "-slt", "-sccUTF-8", f"-p{password}", "--", str(archive))
+        code, metadata = await _command(executable, "l", "-slt", "-sccUTF-8", *password_args, "--", str(archive))
         if code:
             continue
         if (re.search(r"(?m)^(?:Volume|Multivolume) = \+\r?$", metadata)
@@ -86,7 +87,7 @@ async def extract_archive(archive: Path, passwords: list[str]) -> Path:
             raise ExtractionError("解压空间不足，已保留原包")
         staging = Path(tempfile.mkdtemp(prefix=".tg-extract-", dir=archive.parent))
         try:
-            code, _ = await _command(executable, "x", "-y", "-aoa", "-sccUTF-8", f"-p{password}",
+            code, _ = await _command(executable, "x", "-y", "-aoa", "-sccUTF-8", *password_args,
                                      f"-o{staging}", "--", str(archive))
             if code:
                 continue
