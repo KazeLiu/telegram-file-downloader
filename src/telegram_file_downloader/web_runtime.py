@@ -170,6 +170,9 @@ class WebRuntime:
                 else:
                     if not self.phone or not self.phone_code_hash:
                         raise ValueError("请先发送登录验证码")
+                    code = code.strip().replace(" ", "")
+                    if self.phase != "code" or not code.isdigit():
+                        raise ValueError("请输入收到的数字验证码")
                     await client.sign_in(phone=self.phone, code=code, phone_code_hash=self.phone_code_hash)
             except errors.SessionPasswordNeededError:
                 self.phase = "password"

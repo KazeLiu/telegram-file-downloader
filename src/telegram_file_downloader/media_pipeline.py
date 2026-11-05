@@ -85,6 +85,8 @@ class ConsoleProcessor:
             else:
                 sent = await self.client.send_message(chat, text, reply_to=task["message_id"], parse_mode=None)
                 self.store.update_task(task["id"], receipt_id=sent.id)
+            if self.store.task(task["id"])["warning"].startswith("群回执"):
+                self.store.update_task(task["id"], warning="")
         except errors.MessageNotModifiedError:
             pass
         except errors.FloodWaitError as exc:
