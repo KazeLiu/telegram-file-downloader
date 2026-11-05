@@ -76,7 +76,7 @@ class ConsoleProcessor:
             text += "\n原压缩包已删除"
         if task["error"]:
             text += "\n" + task["error"]
-        if task["warning"]:
+        if task["warning"] and not task["warning"].startswith("群回执"):
             text += "\n" + task["warning"]
         chat = int(task["scope"].split(":", 1)[1])
         try:
