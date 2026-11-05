@@ -16,12 +16,14 @@ export interface Settings {
   proxy_type: string; proxy_host: string; proxy_port: string; proxy_username: string; proxy_password_saved: boolean
   videos: boolean; photos: boolean; archives: boolean; extract: boolean; delete_archive: boolean
   archive_passwords_count: number; receipts: boolean; mark_read: boolean; enabled: boolean
+  download_parallelism: 1 | 2 | 4
 }
 export interface Task {
   id: number; filename: string; status: string; kind: string; size: number; downloaded: number
   speed: number; average_speed: number; elapsed: number; eta: number | null; quality: string
   created_at: string; started_at: string | null; completed_at: string | null
   path: string; output: string; error: string; warning: string; archive_deleted: boolean; message_id: number
+  wait_until?: number | null; wait_reason?: string; parallelism?: number | null
 }
 export interface Status {
   phase: string; connection: string; account: { name: string; username: string; id: number } | null
@@ -30,7 +32,7 @@ export interface Status {
 }
 export const taskLabels: Record<string, string> = {
   queued: '等待下载', downloading: '下载中', downloaded: '下载完成', extracting: '解压中', completed: '已下载',
-  extracted: '已解压', failed: '下载失败', extraction_failed: '待处理', interrupted: '等待恢复',
+  extracted: '已解压', failed: '下载失败', extraction_failed: '待处理', interrupted: '等待恢复', waiting: '限流等待',
 }
 export const phaseLabels: Record<string, string> = {
   unconfigured: '尚未连接', connecting: '正在连接', phone: '等待登录', code: '等待验证码', password: '两步验证',
@@ -51,3 +53,4 @@ export function date(value: string | null): string {
   return value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '—'
 }
 export function percent(task: Task): number { return task.size ? Math.min(100, task.downloaded / task.size * 100) : 0 }
+export function waitRemaining(task: Task): number { return Math.max(0, (task.wait_until || 0) - Date.now() / 1000) }

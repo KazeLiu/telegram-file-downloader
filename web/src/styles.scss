@@ -35,6 +35,7 @@ svg { flex-shrink: 0; vertical-align: middle; }
   &.completed, &.extracted { color: var(--success); background: #edf5f0; }
   &.downloading, &.extracting { color: var(--blue); background: #edf4fd; }
   &.failed, &.extraction_failed { color: var(--danger); background: #fff1ee; }
+  &.waiting { color: #805514; background: #fbf2df; }
 }
 .notice { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 14px 18px; background: #f0f4fa; color: #355477; font-size: 14px; border-radius: 11px; line-height: 1.6; margin-bottom: 20px; overflow-wrap: anywhere;
   &.error { background: #fff1ee; color: var(--danger); }

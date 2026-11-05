@@ -7,19 +7,25 @@ from pathlib import Path
 
 from .files import collision_safe_path, message_filename
 from .history import DownloadHistory
+from .transfers import TransferThrottle, transfer_media
 
 LOGGER = logging.getLogger(__name__)
 
 
 class DownloadQueue:
     def __init__(self, client: object, directory: Path, on_error, max_attempts: int = 3,
-                 history: DownloadHistory | None = None, progress=None):
+                 history: DownloadHistory | None = None, progress=None, parallelism=None,
+                 throttle=None, on_wait=None, on_notice=None):
         self.client = client
         self.directory = directory
         self.on_error = on_error
         self.max_attempts = max_attempts
         self.history = history
         self.progress = progress
+        self.parallelism = parallelism
+        self.throttle = throttle or TransferThrottle(parallelism or 1)
+        self.on_wait = on_wait
+        self.on_notice = on_notice
         self.queue: asyncio.Queue[object | None] = asyncio.Queue()
 
     async def enqueue(self, message: object) -> None:
@@ -59,8 +65,8 @@ class DownloadQueue:
         for attempt in range(1, self.max_attempts + 1):
             try:
                 LOGGER.info("Downloading message %s to %s", getattr(message, "id", "?"), destination)
-                options = {"progress_callback": self.progress} if self.progress else {}
-                downloaded = await self.client.download_media(message, file=str(partial), **options)
+                downloaded = await transfer_media(self.client, message, partial, self.parallelism,
+                    self.throttle, self.progress, self.on_wait, self.on_notice)
                 if not downloaded:
                     raise RuntimeError("Telegram returned no downloaded file")
 

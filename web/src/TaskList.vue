@@ -10,7 +10,7 @@ defineEmits<{ select: [task: Task] }>()
     <button v-for="task in tasks" :key="task.id" class="task-row" @click="$emit('select', task)">
       <span class="file-cell"><span class="file-icon" :class="task.kind"><Icon :name="task.kind === 'archive' ? 'archive' : task.kind === 'video' ? 'video' : task.kind === 'photo' ? 'photo' : 'file'" :size="22" /></span><span class="file-text"><strong>{{ task.filename }}</strong><small>{{ bytes(task.size) }}<template v-if="task.quality"> · {{ task.quality }}</template></small></span></span>
       <span class="date-cell">{{ date(task.created_at) }}</span><span class="speed-cell">{{ task.average_speed ? bytes(task.average_speed) + '/s' : '—' }}</span>
-      <span class="status-cell"><span class="badge" :class="task.status">{{ taskLabels[task.status] || task.status }}</span><progress v-if="task.status === 'downloading'" :value="percent(task)" max="100" :aria-label="task.filename + ' 下载进度'" /></span><Icon name="chevron" :size="16" />
+      <span class="status-cell"><span class="badge" :class="task.status">{{ taskLabels[task.status] || task.status }}</span><progress v-if="['downloading', 'waiting'].includes(task.status)" :value="percent(task)" max="100" :aria-label="task.filename + ' 下载进度'" /></span><Icon name="chevron" :size="16" />
     </button>
   </div>
 </template>

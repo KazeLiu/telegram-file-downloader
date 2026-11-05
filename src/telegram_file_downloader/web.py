@@ -5,6 +5,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -45,6 +46,7 @@ class SettingsPatch(BaseModel):
     delete_archive: bool | None = None
     receipts: bool | None = None
     mark_read: bool | None = None
+    download_parallelism: Literal[1, 2, 4] | None = None
 
     @field_validator("proxy_host", "proxy_port", mode="before")
     @classmethod

@@ -73,6 +73,8 @@ onBeforeUnmount(clearSecrets)
             <label class="toggle-row"><span class="setting-icon"><Icon name="video" /></span><span><strong>视频</strong><small>选择 Telegram 提供的最高可用清晰度，不转码</small></span><input v-model="settingsModel.form.videos" type="checkbox" role="switch" /></label>
             <label class="toggle-row"><span class="setting-icon"><Icon name="photo" /></span><span><strong>图片</strong><small>保存最高可用尺寸；文档方式发送的图片保留原文件</small></span><input v-model="settingsModel.form.photos" type="checkbox" role="switch" /></label>
             <label class="toggle-row"><span class="setting-icon"><Icon name="archive" /></span><span><strong>压缩包</strong><small>ZIP、RAR、7z、TAR、GZ、BZ2、XZ、ZST 等；同名文件自动编号</small></span><input v-model="settingsModel.form.archives" type="checkbox" role="switch" /></label>
+            <div class="form-grid"><label>单文件分片并发上限<select v-model="settingsModel.form.download_parallelism"><option :value="1">1 路</option><option :value="2">2 路</option><option :value="4">4 路（默认）</option></select></label></div>
+            <p class="muted">仍一次处理一个文件。遇到 Telegram 限流会按要求等待并降低并发；代理拥堵时可手动改为 1 或 2 路。</p>
           </section>
           <section class="settings-section"><h2>文件保存位置</h2><div class="path-box"><Icon name="folder" /><code>{{ status.download_dir }}</code></div><p class="muted">这是程序内部的下载目录。Docker 的实际存放位置由 Compose 下载挂载决定。</p></section>
         </template>

@@ -11,6 +11,7 @@ from .archives import ARCHIVE_EXTENSIONS, ExtractionError, extract_archive, mult
 from .console_store import now
 from .downloader import DownloadQueue
 from .files import message_filename
+from .transfers import TransferThrottle
 
 def select_media(message, settings):
     file = message.file
@@ -58,18 +59,27 @@ class ConsoleProcessor:
         self.recorder, self.store, self.settings = recorder, store, settings
         self.operation_lock = operation_lock
         self.receipt_disabled_until = 0.0
+        self.receipt_lock = asyncio.Lock()
 
     async def receipt(self, task):
+        async with self.receipt_lock:
+            await self._receipt(task["id"])
+
+    async def _receipt(self, task_id):
+        task = self.store.task(task_id)
         if not self.settings["receipts"] or time.monotonic() < self.receipt_disabled_until:
             return
         labels = {"queued": "已接收", "downloading": "下载中", "extracting": "下载完成，正在解压",
                   "completed": "下载完成", "extracted": "下载、解压完成", "failed": "下载失败",
-                  "extraction_failed": "下载完成，解压未完成"}
+                  "extraction_failed": "下载完成，解压未完成", "waiting": "Telegram 限流，等待恢复"}
         text = f"{labels.get(task['status'], task['status'])}\n{task['filename']}"
         if task["status"] == "downloading":
             percent = task["downloaded"] * 100 / task["size"] if task["size"] else 0
             eta = f"{int(task['eta'])} 秒" if task["eta"] is not None else "计算中"
             text += f"\n{percent:.1f}% · {size_text(task['speed'])}/s · 剩余 {eta}"
+        elif task["status"] == "waiting":
+            remaining = max(0, int((task.get("wait_until") or 0) - time.time()))
+            text += f"\n{size_text(task['downloaded'])} / {size_text(task['size'])} · 约 {remaining} 秒后恢复"
         else:
             text += f"\n{size_text(task['downloaded'])} · 平均 {size_text(task['average_speed'])}/s"
         if task["archive_deleted"]:
@@ -81,9 +91,9 @@ class ConsoleProcessor:
         chat = int(task["scope"].split(":", 1)[1])
         try:
             if task["receipt_id"]:
-                await self.client.edit_message(chat, task["receipt_id"], text, parse_mode=None)
+                await asyncio.wait_for(self.client.edit_message(chat, task["receipt_id"], text, parse_mode=None), 10)
             else:
-                sent = await self.client.send_message(chat, text, reply_to=task["message_id"], parse_mode=None)
+                sent = await asyncio.wait_for(self.client.send_message(chat, text, reply_to=task["message_id"], parse_mode=None), 10)
                 self.store.update_task(task["id"], receipt_id=sent.id)
             if self.store.task(task["id"])["warning"].startswith("群回执"):
                 self.store.update_task(task["id"], warning="")
@@ -92,8 +102,8 @@ class ConsoleProcessor:
         except errors.FloodWaitError as exc:
             self.receipt_disabled_until = time.monotonic() + exc.seconds
             self.store.update_task(task["id"], warning=f"群回执暂时限流，{exc.seconds} 秒后恢复")
-        except (errors.RPCError, OSError, ConnectionError):
-            self.store.update_task(task["id"], warning="群回执发送失败，请检查群发言权限；下载继续")
+        except (errors.RPCError, OSError, EOFError):
+            self.store.update_task(task["id"], warning="群回执发送失败，请检查网络或群发言权限；下载继续")
 
     async def process(self, message):
         async with self.operation_lock:
@@ -118,41 +128,76 @@ class ConsoleProcessor:
                 except (errors.RPCError, OSError, ConnectionError):
                     self.store.update_task(task["id"], warning="已接收任务，但标记已读失败")
             start = time.monotonic()
-            last_write, last_receipt = 0.0, 0.0
+            last_write = 0.0
             last_bytes, last_time = 0, start
-            self.store.update_task(task["id"], status="downloading", started_at=task["started_at"] or now(), error="", completed_at=None)
+            task_id = task["id"]
+            effective_workers = self.settings["download_parallelism"] if selected.document and selected.document.size else 1
+            cooldown_key = f"transfer_backoff:{self.history.scope.split(':', 1)[0]}"
+            throttle = TransferThrottle(effective_workers, self.store.get(cooldown_key),
+                                        lambda value: self.store.put(cooldown_key, value))
+            self.store.update_task(task_id, status="downloading", started_at=task["started_at"] or now(),
+                error="", completed_at=None, wait_until=None, wait_reason="", parallelism=throttle.parallelism)
 
             async def progress(current, total):
-                nonlocal last_write, last_receipt, last_bytes, last_time
+                nonlocal last_write, last_bytes, last_time
                 moment = time.monotonic()
-                if moment - last_write < 1 and current != total:
+                existing = self.store.task(task_id)
+                if moment - last_write < 1 and current != total and existing["status"] != "waiting":
                     return
                 speed = max(0, current - last_bytes) / max(moment - last_time, .001)
-                task = self.store.update_task(task_id, downloaded=current, size=total or 0, speed=speed,
-                    eta=max(0, (total - current) / speed) if total and speed else None,
-                    elapsed=moment - start, average_speed=current / max(moment - start, .001))
+                waiting = (existing.get("wait_until") or 0) > time.time()
+                self.store.update_task(task_id, downloaded=current, size=total or 0, speed=0 if waiting else speed,
+                    eta=max(0, (total - current) / speed) if not waiting and total and speed else None,
+                    elapsed=moment - start, average_speed=current / max(moment - start, .001),
+                    status="waiting" if waiting else "downloading", parallelism=min(effective_workers, throttle.parallelism),
+                    wait_until=existing.get("wait_until") if waiting else None,
+                    wait_reason=existing.get("wait_reason", "") if waiting else "")
                 last_write, last_bytes, last_time = moment, current, moment
-                if moment - last_receipt >= 10:
-                    await self.receipt(task)
-                    last_receipt = moment
 
-            task_id = task["id"]
+            async def waiting(until, reason, parallelism):
+                current = self.store.task(task_id)
+                if current["status"] == "waiting" and (current.get("wait_until") or 0) >= until:
+                    return
+                self.store.update_task(task_id, status="waiting", wait_until=until, wait_reason=reason,
+                                       parallelism=min(effective_workers, parallelism), speed=0, eta=None)
+
+            def notice(text):
+                nonlocal effective_workers
+                effective_workers = 1
+                self.store.update_task(task_id, warning=text, parallelism=1)
+
+            stop_receipts = asyncio.Event()
+
+            async def report_progress():
+                while not stop_receipts.is_set():
+                    await self.receipt(self.store.task(task_id))
+                    try:
+                        await asyncio.wait_for(stop_receipts.wait(), 10)
+                    except TimeoutError:
+                        pass
+
             recovered = self.history.download(message.id)
             recovered_complete = recovered and recovered["ready"] and Path(recovered["path"]).is_file()
-            await self.receipt(self.store.task(task_id))
-            queue = DownloadQueue(self.client, self.directory, lambda _: None, history=self.history, progress=progress)
-            path = await queue.download(selected)
-            elapsed = time.monotonic() - start
+            queue = DownloadQueue(self.client, self.directory, lambda _: None, history=self.history, progress=progress,
+                parallelism=self.settings["download_parallelism"], throttle=throttle, on_wait=waiting, on_notice=notice)
+            reporter = asyncio.create_task(report_progress(), name="download-receipt")
+            try:
+                path = await queue.download(selected)
+                elapsed = time.monotonic() - start
+            finally:
+                stop_receipts.set()
+                await reporter
             if not path:
                 task = self.store.update_task(task_id, status="failed", completed_at=now(), speed=0,
-                                              eta=None, error="下载失败；保留进度，稍后自动重试")
+                                              eta=None, wait_until=None, error="下载失败；保留进度，稍后自动重试")
                 await self.receipt(task)
                 return False
             should_extract = kind == "archive" and self.settings["extract"]
             task = self.store.update_task(task_id, status="downloaded" if should_extract else "completed", path=str(path),
                 downloaded=path.stat().st_size,
                 average_speed=task["average_speed"] if recovered_complete else path.stat().st_size / max(elapsed, .001),
-                elapsed=task["elapsed"] if recovered_complete else elapsed, speed=0, eta=0, completed_at=now())
+                elapsed=task["elapsed"] if recovered_complete else elapsed, speed=0, eta=0, completed_at=now(),
+                wait_until=None, wait_reason="")
             if should_extract:
                 await self.unpack(task_id)
             await self.receipt(self.store.task(task_id))
