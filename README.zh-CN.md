@@ -12,15 +12,27 @@
 - 当前配置只保存 ZIP / RAR；暂不自动解压，也不上传云服务。
 - 无网页端口。通过运行日志查看连接和下载状态。
 
-推荐先用 Docker 常驻。若想省去 Docker，也可以按文末的 Windows 方式运行；它是控制台程序，不是完整的 TG 聊天客户端或免安装 GUI EXE。
+推荐直接拉取已发布的 Docker 镜像常驻运行，服务器不需要编译源码。若想省去 Docker，也可以按文末的 Windows 方式运行；它是控制台程序，不是完整的 TG 聊天客户端或免安装 GUI EXE。
+
+- Fork 仓库：https://github.com/KazeLiu/telegram-file-downloader
+- Docker 镜像：ghcr.io/kazeliu/telegram-file-downloader:latest
+- 发布流水线：https://github.com/KazeLiu/telegram-file-downloader/actions/workflows/publish-image.yml
 
 ## 一、Docker：准备新目录
 
-将整个源码包解压到 KazeLiu-Server 的独立目录，例如：
+在 KazeLiu-Server 克隆 fork，或把 GitHub 下载的源码 ZIP 解压到独立目录，例如：
 
 ```text
 C:\docker\tg-group-watcher
 ```
+
+如果使用 Git，可执行：
+
+```powershell
+git clone https://github.com/KazeLiu/telegram-file-downloader.git C:\docker\tg-group-watcher
+```
+
+运行镜像实际上只需 compose.ghcr.yaml 和 config 下的配置，保留整个仓库方便以后更新文档和配置模板。
 
 不要覆盖旧的 telegram_media_downloader 目录。两个项目的登录会话格式和进度不同，不要复制旧 sessions 目录到这里。
 
@@ -56,13 +68,13 @@ TELEGRAM_PROXY_HOST=host.docker.internal
 
 这个部署模板明确启用了代理，因此端口留空会直接报配置错误，不会偷偷改成直连。TELEGRAM_CHAT 先保持空白，HISTORY_START_DATE 也保持空白。
 
-Docker 拉取基础镜像、安装依赖需要联网；它们使用 Docker 的网络/代理设置。上述 TELEGRAM_PROXY 配置只负责程序连接 TG，两者不能混为一谈。
+Docker 拉取 GHCR 镜像需要使用 Docker 自身的网络/代理设置。上述 TELEGRAM_PROXY 配置只负责程序连接 TG，两者不能混为一谈。
 
-## 三、构建、登录小号并选群
+## 三、拉取镜像、登录小号并选群
 
 ```powershell
-docker compose -f compose.local.yaml build
-docker compose -f compose.local.yaml run --rm watcher telegram-file-downloader-configure
+docker compose -f compose.ghcr.yaml pull
+docker compose -f compose.ghcr.yaml run --rm watcher telegram-file-downloader-configure
 ```
 
 设置向导会读取刚才的 API 信息，回车可保留已填写值。按照提示输入小号手机号、小号收到的验证码，以及可能需要的两步验证密码。
@@ -74,8 +86,8 @@ docker compose -f compose.local.yaml run --rm watcher telegram-file-downloader-c
 ## 四、常驻运行
 
 ```powershell
-docker compose -f compose.local.yaml up -d
-docker compose -f compose.local.yaml logs -f watcher
+docker compose -f compose.ghcr.yaml up -d
+docker compose -f compose.ghcr.yaml logs -f watcher
 ```
 
 日志中出现 Watching Telegram chat 后，再用大号往共同群转发一个新的小 ZIP / RAR。正常应在下一轮检查中开始下载。
@@ -87,22 +99,37 @@ docker compose -f compose.local.yaml logs -f watcher
 
 按 Ctrl+C 只退出日志查看，后台容器继续运行。
 
-如需把资源放到另一目录，修改 compose.local.yaml 的下载挂载源，例如把 ./downloads:/downloads 改为 "D:/TG-Resources:/downloads"，再执行 up -d。已有未完成下载时先等其结束，不要在半途中更换挂载目录。
+如需把资源放到另一目录，修改 compose.ghcr.yaml 的下载挂载源，例如把 ./downloads:/downloads 改为 "D:/TG-Resources:/downloads"，再执行 up -d。已有未完成下载时先等其结束，不要在半途中更换挂载目录。
 
 暂停与恢复：
 
 ```powershell
-docker compose -f compose.local.yaml stop watcher
-docker compose -f compose.local.yaml up -d
+docker compose -f compose.ghcr.yaml stop watcher
+docker compose -f compose.ghcr.yaml up -d
 ```
 
 修改代理、扩展名或选群后，重新运行 up -d 并重启 watcher，让正在运行的进程重新读取配置：
 
 ```powershell
-docker compose -f compose.local.yaml restart watcher
+docker compose -f compose.ghcr.yaml restart watcher
 ```
 
 不要删除 data 来排查普通网络问题：这里保存了登录会话和首次启动时间，删除后会失去原有进度。程序必须运行时才能下载；Docker / Windows 停机期间的新附件会在恢复后尝试补齐，前提是文件仍在 TG 上且小号仍能访问。
+
+### 更新镜像
+
+```powershell
+docker compose -f compose.ghcr.yaml pull
+docker compose -f compose.ghcr.yaml up -d
+```
+
+推送 master 会触发 GitHub Actions 构建镜像。latest 指向最近发布版本；也可以将 Compose 中的镜像标签换成流水线发布的 sha-完整提交号，固定到某次构建。
+
+仅开发时需要自行构建；对应入口仍是 compose.local.yaml：
+
+```powershell
+docker compose -f compose.local.yaml build
+```
 
 ## 五、也可以直接在 Windows 运行
 
@@ -137,6 +164,6 @@ notepad .env
 
 ## 验证状态与账号保护
 
-此包已做源码、调用关系和配置差异检查；未在服务器登录 TG、构建镜像或验证真实下载。首次登录、代理连通及新压缩包落盘，按上面的短流程在服务器确认。
+镜像由 GitHub Actions 构建并推送到 GHCR，具体构建状态以仓库的发布流水线为准。服务器上的首次登录、代理连通及新压缩包落盘，仍需按上面的短流程确认。
 
 config\.env / .env 含 API 信息，data 含可复用的账号登录会话，不要发送给别人，也不要把填写后的目录重新上传作为源码包。持续运行的是小号，大号继续用你平时的官方客户端挑选和转发资源。

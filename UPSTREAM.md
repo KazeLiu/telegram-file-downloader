@@ -3,6 +3,7 @@
 ## 选择：iljacc/telegram-file-downloader
 
 - 上游：https://github.com/iljacc/telegram-file-downloader
+- Fork：https://github.com/KazeLiu/telegram-file-downloader
 - 版本：1.1.0。
 - 基线提交：b720e03，提交日期 2026-10-08。
 - 许可证：MIT，原 LICENSE 保留。
@@ -30,6 +31,7 @@ Windows 客户端的自动媒体缓存不应直接等同于“指定群附件自
 4. 新增 compose.local.yaml，使用可写配置目录供登录向导保存群 ID；原 Compose 和默认 .env 入口保留。
 5. 增加 ZIP / RAR 专用模板与中文操作说明；原来的可自定义扩展名用法仍保留。
 6. 登录向导沿用已配置的数据目录，避免原生运行登录后找不到同一会话；群选择编号只接受显示范围内的正整数。
+7. 增加 GitHub Actions 镜像发布和 compose.ghcr.yaml，服务器直接拉取 GHCR 镜像，不必自行构建。
 
 未加入自动解压、密码列表、云上传、网页管理面板或开机自启。本轮重点是把已有的新文件下载能力接上实际代理并给出可尝试的部署入口。
 
