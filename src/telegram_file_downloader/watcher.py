@@ -6,7 +6,7 @@ import threading
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 
-from telethon import TelegramClient, utils
+from telethon import TelegramClient, errors, utils
 
 from .config import AppConfig
 from .downloader import DownloadQueue
@@ -19,13 +19,15 @@ LOGGER = logging.getLogger(__name__)
 
 
 class TelegramWatcher:
-    def __init__(self, config: AppConfig, state: AppState):
+    def __init__(self, config: AppConfig, state: AppState, processor_factory=None, on_login_required=None):
         self.config = config
         self.state = state
         self.client: TelegramClient | None = None
         self.shutdown = asyncio.Event()
         self.reconnect_requested = asyncio.Event()
         self.started_at = datetime.now(timezone.utc)
+        self.processor_factory = processor_factory
+        self.on_login_required = on_login_required
 
     async def run(self) -> None:
         self.config.data_dir.mkdir(parents=True, exist_ok=True)
@@ -40,6 +42,7 @@ class TelegramWatcher:
             auto_reconnect=True,
             catch_up=False,
             sequential_updates=True,
+            flood_sleep_threshold=0 if self.processor_factory else 60,
         )
 
         try:
@@ -50,9 +53,13 @@ class TelegramWatcher:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    LOGGER.exception("Telegram connection failed")
-                    self.state.set_error(str(exc))
-                    self.state.set_status(ConnectionStatus.DISCONNECTED)
+                    if self.on_login_required and isinstance(exc, (errors.UnauthorizedError, errors.AuthKeyError)):
+                        self.on_login_required()
+                        self.request_shutdown()
+                    else:
+                        LOGGER.exception("Telegram connection failed")
+                        self.state.set_error(str(exc))
+                        self.state.set_status(ConnectionStatus.DISCONNECTED)
 
                 if not self.shutdown.is_set():
                     try:
@@ -75,6 +82,10 @@ class TelegramWatcher:
         try:
             await self.client.connect()
             if not await self.client.is_user_authorized():
+                if self.on_login_required:
+                    self.on_login_required()
+                    self.request_shutdown()
+                    return
                 raise RuntimeError("Telegram login is required. Run the configure command from the project folder.")
 
             target = await self.client.get_entity(self.config.chat)
@@ -87,6 +98,8 @@ class TelegramWatcher:
             recorder = LinkRecorder(self.config.wanted_links_file)
             download_queue = DownloadQueue(self.client, self.config.download_dir, self.state.set_error, history=history)
             processor = MessageProcessor(recorder, download_queue, self.config.allowed_extensions)
+            if self.processor_factory:
+                processor = self.processor_factory(self.client, history, recorder)
             LOGGER.info(
                 "Watching Telegram chat %s; tracking since %s; resume after message %s (%s); last complete scan %s",
                 getattr(target, "title", self.config.chat), history.since.isoformat(), history.message_id,

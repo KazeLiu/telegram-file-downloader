@@ -12,11 +12,17 @@ dependencies = [
     "cryptg==0.6.0",
     "python-dotenv==1.2.2",
     "python-socks[asyncio]>=2.4,<3",
+    "fastapi==0.162.0",
+    "uvicorn==0.54.0",
 ]
 
 [project.scripts]
 telegram-file-downloader-configure = "telegram_file_downloader.configure:main"
 telegram-file-downloader-service = "telegram_file_downloader.service:main"
+telegram-file-downloader-web = "telegram_file_downloader.web:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+telegram_file_downloader = ["static/**/*", "static/*"]

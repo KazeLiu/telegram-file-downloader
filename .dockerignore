@@ -12,3 +12,8 @@ app-data/
 *.log
 *.part
 .git/
+web/node_modules/
+src/telegram_file_downloader/static/
+.preview/
+web-data/
+build/

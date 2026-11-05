@@ -1,0 +1,20 @@
+name: tg-collector
+services:
+  watcher:
+    image: ghcr.io/kazeliu/telegram-file-downloader:latest
+    command: telegram-file-downloader-web
+    environment:
+      DATA_DIR: /data
+      DOWNLOAD_DIR: /downloads
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "8080"
+    ports:
+      - "18880:8080"
+    volumes:
+      # 只改这里的左侧，指定宿主机下载目录。
+      - ./downloads:/downloads
+      # 登录会话、设置和历史记录自动保存在这个命名卷中。
+      - collector-state:/data
+    restart: unless-stopped
+volumes:
+  collector-state:

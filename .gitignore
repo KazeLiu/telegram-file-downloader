@@ -13,3 +13,8 @@ app-data/
 *.part
 
 *.egg-info/
+web/node_modules/
+src/telegram_file_downloader/static/
+.preview/
+web-data/
+build/

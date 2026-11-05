@@ -13,12 +13,13 @@ LOGGER = logging.getLogger(__name__)
 
 class DownloadQueue:
     def __init__(self, client: object, directory: Path, on_error, max_attempts: int = 3,
-                 history: DownloadHistory | None = None):
+                 history: DownloadHistory | None = None, progress=None):
         self.client = client
         self.directory = directory
         self.on_error = on_error
         self.max_attempts = max_attempts
         self.history = history
+        self.progress = progress
         self.queue: asyncio.Queue[object | None] = asyncio.Queue()
 
     async def enqueue(self, message: object) -> None:
@@ -58,7 +59,8 @@ class DownloadQueue:
         for attempt in range(1, self.max_attempts + 1):
             try:
                 LOGGER.info("Downloading message %s to %s", getattr(message, "id", "?"), destination)
-                downloaded = await self.client.download_media(message, file=str(partial))
+                options = {"progress_callback": self.progress} if self.progress else {}
+                downloaded = await self.client.download_media(message, file=str(partial), **options)
                 if not downloaded:
                     raise RuntimeError("Telegram returned no downloaded file")
 
