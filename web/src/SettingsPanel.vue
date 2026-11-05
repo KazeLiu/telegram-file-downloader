@@ -21,7 +21,9 @@ function resetForm() {
   settingsModel.replace_passwords = false; settingsModel.dirty = false
   settingsModel.clear_proxy_password = false
 }
-watch(() => props.settings, () => { if (!settingsModel.dirty) resetForm() }, { immediate: true })
+watch(() => JSON.stringify(props.settings), () => {
+  if (!settingsModel.dirty && !settingsModel.replace_passwords) resetForm()
+}, { immediate: true })
 async function action(key: string, run: () => Promise<unknown>, message = '') {
   settingsModel.busy = key; settingsModel.error = ''
   try { await run(); if (message) emit('message', message) }
