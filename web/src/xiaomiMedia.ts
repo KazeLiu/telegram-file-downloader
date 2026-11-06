@@ -12,6 +12,11 @@ export function photoDay(value: number | null) {
   return value ? new Date(value).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '时间未知'
 }
 
+export function nextWallPage(page: number, removed: number) {
+  // Xiaomi's 20-item pages shift after recycling; overlap the boundary page to avoid skipping photos.
+  return Math.max(0, page + 1 - Math.ceil(removed / 20))
+}
+
 export function formatNames(names: string[]) {
   return names.map(name => /[,，"\r\n]|^\s|\s$/.test(name) ? '"' + name.replaceAll('"', '""') + '"' : name).join(', ')
 }

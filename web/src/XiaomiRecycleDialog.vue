@@ -7,8 +7,8 @@ import type { CloudMedia } from './xiaomiMedia'
 type LocalPreview = { id: string; name: string; root: string; path: string; status: string; detail: string }
 type Preview = LocalPreview & { token: string }
 type Result = { id: string; name: string; token: string; cloud_done: boolean; local_done: boolean; local: LocalPreview; error: string }
-const props = defineProps<{ connection: string; album: string }>()
-const emit = defineEmits<{ recycled: [ids: string[]]; message: [text: string] }>()
+const props = defineProps<{ connection: string; album: string; disabled: boolean }>()
+const emit = defineEmits<{ recycled: [ids: string[]]; message: [text: string]; active: [value: boolean] }>()
 const dialog = ref<HTMLDialogElement>()
 const model = reactive({ items: [] as Preview[], pending: [] as Result[], loading: false, running: false, stopping: false,
   done: 0, localDone: 0, error: '', result: '', retrying: '', pendingError: '' })
@@ -22,6 +22,7 @@ async function loadPending() {
 
 async function open(items: CloudMedia[]) {
   if (model.running || model.retrying) return
+  emit('active', true)
   Object.assign(model, { items: [], loading: true, done: 0, localDone: 0, error: '', result: '', stopping: false })
   await nextTick(); dialog.value?.showModal()
   try {
@@ -37,7 +38,7 @@ async function open(items: CloudMedia[]) {
 }
 
 async function recycle() {
-  if (model.loading || model.running || !model.items.length || model.result) return
+  if (props.disabled || model.loading || model.running || !model.items.length || model.result) return
   model.running = true; model.error = ''; model.stopping = false
   const moved: string[] = []
   try {
@@ -53,6 +54,7 @@ async function recycle() {
     model.running = false
     model.result = `云端已确认回收 ${model.done} / ${model.items.length} 项，本地已回收 ${model.localDone} 项。`
     if (moved.length) { emit('recycled', moved); emit('message', model.result) }
+    if (!disposed && !model.error && model.done === model.items.length) dialog.value?.close()
     if (!disposed) await loadPending()
   }
 }
@@ -86,7 +88,7 @@ onUnmounted(() => { disposed = true })
       </li>
     </ul>
   </section>
-  <dialog ref="dialog" class="task-dialog linked-recycle" aria-labelledby="linked-recycle-title" @cancel="(model.loading || model.running) && $event.preventDefault()">
+  <dialog ref="dialog" class="task-dialog linked-recycle" aria-labelledby="linked-recycle-title" @close="emit('active', false)" @cancel="(model.loading || model.running) && $event.preventDefault()">
     <div class="section-heading"><h2 id="linked-recycle-title">回收云端及对应本地文件</h2><button class="icon-button" aria-label="关闭回收确认" :disabled="model.loading || model.running" @click="dialog?.close()"><Icon name="close" /></button></div>
     <p class="mt-3">云端成功后，唯一的同名同大小本地文件才会移入项目回收站。重名或不匹配的本地文件保留。</p>
     <p class="muted mt-2">云端删除会同步到开启相册同步的设备。本地文件在项目回收站保留 15 天后，由容器自动永久删除，不进入系统回收站。</p>
@@ -103,7 +105,7 @@ onUnmounted(() => { disposed = true })
     <p v-else-if="model.running" role="status">云端已确认 {{ model.done }} / {{ model.items.length }} 项，本地已回收 {{ model.localDone }} 项</p>
     <div class="dialog-actions">
       <button v-if="model.running" class="secondary" :disabled="model.stopping" @click="model.stopping = true">{{ model.stopping ? '等待当前项目结束…' : '停止后续回收' }}</button>
-      <template v-else><button class="secondary" :disabled="model.loading" @click="dialog?.close()">{{ model.result ? '关闭' : '保留' }}</button><button v-if="!model.result" class="danger" :disabled="model.loading || !model.items.length" @click="recycle">确认回收 · {{ model.items.length }} 项</button></template>
+      <template v-else><button class="secondary" :disabled="model.loading" @click="dialog?.close()">{{ model.result ? '关闭' : '保留' }}</button><button v-if="!model.result" class="danger" :disabled="props.disabled || model.loading || !model.items.length" @click="recycle">确认回收 · {{ model.items.length }} 项</button></template>
     </div>
   </dialog>
 </template>

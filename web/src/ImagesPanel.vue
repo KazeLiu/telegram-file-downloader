@@ -110,7 +110,7 @@ async function load({ poll = false, append = false } = {}) {
         const loaded = new Set(imageModel.items.map(item => item.id))
         imageModel.items.push(...result.items.filter(item => !loaded.has(item.id)))
         imageModel.total = result.total; imageModel.nextCursor = result.next_cursor
-      } else if (!poll || !result.scan.running || (!selectedCount.value && !pictureDialog.value?.open && !confirmDialog.value?.open)) {
+      } else if (!poll || (!imageModel.organizing && activeReview === null && !pictureDialog.value?.open && !confirmDialog.value?.open)) {
         imageModel.items = result.items; imageModel.total = result.total; imageModel.nextCursor = result.next_cursor; imageModel.broken = {}
       }
     }
@@ -198,6 +198,7 @@ async function confirm(items?: Picture[]) {
 }
 async function recycle() {
   if (toolbarBlocked.value) return
+  ++loadRevision
   imageModel.busy = true; imageModel.error = ''
   const moved = new Set<number>()
   const failures: string[] = []
