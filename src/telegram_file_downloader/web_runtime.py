@@ -14,7 +14,7 @@ from .console_store import ConsoleStore, now
 from .media_pipeline import ConsoleProcessor
 from .state import AppState
 from .watcher import TelegramWatcher
-from .organizer import inside, make_plan, execute_plan
+from .organizer import inside, make_plan, execute_plan, cleanup_lists
 
 LOGGER = logging.getLogger(__name__)
 
@@ -319,10 +319,11 @@ class WebRuntime:
         plan = await asyncio.to_thread(make_plan, self.download_dir, folder, prefix, delete_psd)
         token = uuid.uuid4().hex
         self.store.put(f"manual_preview:{token}", plan)
+        cleanup, _ = cleanup_lists(plan)
         return dict(token=token, total=len(plan["moves"]), items=[
             dict(source=str(Path(move["source"]).relative_to(self.download_dir)), target=Path(move["target"]).name)
-            for move in plan["moves"][:200]], delete_total=len(plan["psds"]),
-            delete_items=[str(Path(name).relative_to(self.download_dir)) for name in plan["psds"][:200]])
+            for move in plan["moves"][:200]], delete_total=len(cleanup),
+            delete_items=[str(Path(name).relative_to(self.download_dir)) for name in cleanup[:200]])
 
     async def organize_folder(self, token):
         if self.manual_task and not self.manual_task.done():

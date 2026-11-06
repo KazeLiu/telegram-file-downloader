@@ -174,6 +174,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           <div><dt>最近进度更新</dt><dd>{{ date(historyModel.selected.last_progress_at || null) }}</dd></div>
           <div v-if="historyModel.selected.result_files"><dt>整理文件</dt><dd>{{ historyModel.selected.result_files }} 个</dd></div>
           <div v-if="historyModel.selected.deleted_psds"><dt>删除 PSD</dt><dd>{{ historyModel.selected.deleted_psds }} 个</dd></div>
+          <div v-if="historyModel.selected.deleted_txts"><dt>删除 TXT</dt><dd>{{ historyModel.selected.deleted_txts }} 个</dd></div>
           <div v-if="historyModel.selected.deleted_pdfs"><dt>旧版已删除 PDF</dt><dd>{{ historyModel.selected.deleted_pdfs }} 个</dd></div>
           <div v-if="historyModel.selected.status === 'downloading'"><dt>预计剩余</dt><dd>{{ duration(historyModel.selected.eta) }}</dd></div>
           <div v-if="historyModel.selected.parallelism"><dt>分片并发上限</dt><dd>{{ historyModel.selected.parallelism }} 路</dd></div>

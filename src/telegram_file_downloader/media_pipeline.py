@@ -14,7 +14,7 @@ from .archives import (ARCHIVE_EXTENSIONS, ExtractionError, VolumesPending, extr
 from .console_store import now
 from .downloader import DownloadQueue
 from .files import message_filename
-from .organizer import make_plan, execute_plan, migrate_pdf_plan
+from .organizer import make_plan, execute_plan, upgrade_cleanup_plan
 from .transfers import TransferThrottle
 
 LOGGER = logging.getLogger(__name__)
@@ -423,27 +423,27 @@ class ConsoleProcessor:
                     plan["moves"] = []
                 plan["flatten"] = self.settings["flatten"]
                 self.store.put(plan_key, plan)
-            if plan.get("cleanup") != "psd":
-                plan = await asyncio.to_thread(migrate_pdf_plan, self.directory, plan, resource_name(leader["filename"]), self.settings["delete_psd"])
+            if plan.get("cleanup") != "psd_txt":
+                plan = await asyncio.to_thread(upgrade_cleanup_plan, self.directory, plan, resource_name(leader["filename"]), self.settings["delete_psd"])
                 self.store.put(plan_key, plan)
             if plan.get("legacy_deleted_pdfs"):
                 for member in members:
                     self.store.update_task(member["id"], deleted_pdfs=plan["legacy_deleted_pdfs"],
                         warning="旧版曾删除此资源的 PDF；本次已停止 PDF 清理，已删除文件需从原包恢复")
             if not self.settings["delete_psd"]:
-                plan["psds"] = plan["deleted_psds"][:]
+                plan["cleanup_files"] = plan["deleted_files"][:]
                 self.store.put(plan_key, plan)
             def phase(value):
-                current_steps = {**steps, "extract": "done", "organize": "done" if value == "psd" else "active"}
-                if value == "psd":
-                    current_steps["psd"] = "active" if self.settings["delete_psd"] else "skipped"
+                current_steps = {**steps, "extract": "done", "organize": "done" if value == "cleanup" else "active"}
+                if value == "cleanup":
+                    current_steps["cleanup"] = "active" if self.settings["delete_psd"] else "skipped"
                 for member in members:
                     self.store.update_task(member["id"], stage=value, steps=current_steps)
             result = await execute_plan(self.directory, plan, lambda value: self.store.put(plan_key, value), phase)
             flattened = plan.get("flatten", self.settings["flatten"])
             final = "organized" if flattened else "extracted"
             steps.update(extract="done", organize="done" if flattened else "skipped",
-                         psd="done" if self.settings["delete_psd"] else "skipped", cloud="pending")
+                         cleanup="done" if self.settings["delete_psd"] else "skipped", cloud="pending")
             if self.settings["delete_archive"]:
                 for task in members:
                     Path(task["path"]).unlink(missing_ok=True)
@@ -451,13 +451,13 @@ class ConsoleProcessor:
             for task in members:
                 self.store.update_task(task["id"], status=final, stage="complete", error="", completed_at=now(),
                     output=str(self.directory if flattened else output), steps=steps,
-                    result_files=result["moved"], deleted_psds=result["deleted_psds"])
+                    result_files=result["moved"], deleted_psds=result["deleted_psds"], deleted_txts=result["deleted_txts"])
                 self.final_receipts.add(task["id"])
-            LOGGER.info("group=%s workflow complete moved=%s deleted_psds=%s", group, result["moved"], result["deleted_psds"])
+            LOGGER.info("group=%s workflow complete moved=%s deleted_psds=%s deleted_txts=%s", group, result["moved"], result["deleted_psds"], result["deleted_txts"])
         except (ExtractionError, OSError, ValueError) as exc:
             failure_stage = self.store.task(task_id).get("stage", "extract")
             status = "waiting_volumes" if isinstance(exc, VolumesPending) else (
-                "processing_failed" if failure_stage in {"organize", "psd"} else "extraction_failed")
+                "processing_failed" if failure_stage in {"organize", "cleanup"} else "extraction_failed")
             failure_steps = dict(self.store.task(task_id).get("steps") or steps)
             if status == "waiting_volumes":
                 failure_stage = "volumes"

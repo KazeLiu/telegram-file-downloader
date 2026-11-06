@@ -9,6 +9,26 @@ from pathlib import Path
 from .files import safe_filename
 
 LOGGER = logging.getLogger(__name__)
+CLEANUP_EXTENSIONS = frozenset({".psd", ".txt"})
+
+
+def is_cleanup_file(name):
+    return Path(name).suffix.lower() in CLEANUP_EXTENSIONS
+
+
+def cleanup_lists(plan):
+    # Old manual confirmations keep their exact PSD-only lists.
+    return (plan.get("cleanup_files", plan.get("psds", [])),
+            plan.get("deleted_files", plan.get("deleted_psds", [])))
+
+
+def cleanup_counts(plan):
+    planned, deleted = cleanup_lists(plan)
+    return dict(cleanup_total=len(planned), cleanup_done=len(deleted),
+                psd_total=sum(Path(name).suffix.lower() == ".psd" for name in planned),
+                txt_total=sum(Path(name).suffix.lower() == ".txt" for name in planned),
+                deleted_psds=sum(Path(name).suffix.lower() == ".psd" for name in deleted),
+                deleted_txts=sum(Path(name).suffix.lower() == ".txt" for name in deleted))
 
 
 def inside(root: Path, value: str = "") -> Path:
@@ -77,23 +97,23 @@ def flatten_target(root, source, file, prefix, reserved):
 
 
 def make_plan(root: Path, source: Path, prefix: str, delete_psd=False, protect_partials=True):
-    moves, psds, reserved = [], [], set()
+    moves, cleanup, reserved = [], [], set()
     for file in entries(root, source):
         if protect_partials and file.name.endswith((".part", ".part-journal")):
             raise ValueError("目录中有尚未完成的下载，请等待完成后再整理")
-        if delete_psd and file.suffix.lower() == ".psd":
-            psds.append(str(file))
+        if delete_psd and is_cleanup_file(file):
+            cleanup.append(str(file))
             continue
         target = flatten_target(root, source, file, prefix, reserved)
         if target is None:
             continue
         moves.append(dict(source=str(file), target=str(target), done=False))
-    return dict(source=str(source), moves=moves, cleanup="psd", psds=psds, deleted_psds=[], complete=False)
+    return dict(source=str(source), moves=moves, cleanup="psd_txt", cleanup_files=cleanup, deleted_files=[], complete=False)
 
 
-def migrate_pdf_plan(root, plan, prefix, delete_psd):
-    """Retire the old deletion list without relabelling already deleted PDFs."""
-    if plan.get("cleanup") == "psd":
+def upgrade_cleanup_plan(root, plan, prefix, delete_psd):
+    """Upgrade automatic plans only; manual confirmations must not grow."""
+    if plan.get("cleanup") == "psd_txt":
         return plan
     source = Path(plan["source"])
     reserved = {Path(move["target"]).name.casefold() for move in plan["moves"]}
@@ -105,14 +125,18 @@ def migrate_pdf_plan(root, plan, prefix, delete_psd):
                 if target:
                     plan["moves"].append(dict(source=str(file), target=str(target), done=False))
     moved_sources = {move["source"] for move in plan["moves"]}
-    psds = [move["target"] for move in plan["moves"] if Path(move["source"]).suffix.lower() == ".psd"]
+    pending, deleted = cleanup_lists(plan)
+    cleanup = [*pending, *(move["target"] for move in plan["moves"] if is_cleanup_file(move["source"]))]
     if source.is_dir():
-        psds.extend(str(file) for file in entries(root, source) if file.suffix.lower() == ".psd" and str(file) not in moved_sources)
-    plan.update(cleanup="psd", psds=list(dict.fromkeys(psds)) if delete_psd else [], deleted_psds=[],
-                legacy_deleted_pdfs=len(plan.get("deleted", [])), complete=False)
+        cleanup.extend(str(file) for file in entries(root, source) if is_cleanup_file(file) and str(file) not in moved_sources)
+    plan.setdefault("legacy_deleted_pdfs", len(plan.get("deleted", [])))
+    plan.update(cleanup="psd_txt", cleanup_files=list(dict.fromkeys(cleanup)) if delete_psd else list(deleted),
+                deleted_files=list(deleted), complete=False)
     plan.pop("pdfs", None)
     plan.pop("deleted", None)
-    LOGGER.info("organize migrated cleanup to PSD; remaining PDFs preserved")
+    plan.pop("psds", None)
+    plan.pop("deleted_psds", None)
+    LOGGER.info("organize upgraded automatic cleanup to PSD/TXT; remaining PDFs preserved")
     return plan
 
 
@@ -140,17 +164,18 @@ async def execute_plan(root: Path, plan, save, on_phase=None):
         LOGGER.info("organize moved source=%s target=%s", source, target)
         await asyncio.sleep(0)
     if on_phase:
-        on_phase("psd")
-    for name in plan.get("psds", []):
-        if name in plan["deleted_psds"]:
+        on_phase("cleanup")
+    planned, deleted = cleanup_lists(plan)
+    for name in planned:
+        if name in deleted:
             continue
         file = inside(root, str(Path(name).relative_to(root)))
-        if file.suffix.lower() != ".psd":
-            raise ValueError("清理清单中包含非 PSD 文件，已停止清理")
+        if not is_cleanup_file(file):
+            raise ValueError("清理清单中包含非 PSD/TXT 文件，已停止清理")
         file.unlink(missing_ok=True)
-        plan["deleted_psds"].append(name)
+        deleted.append(name)
         save(plan)
-        LOGGER.info("organize deleted PSD path=%s", file)
+        LOGGER.info("organize deleted cleanup file type=%s path=%s", file.suffix.lower(), file)
         await asyncio.sleep(0)
     source = Path(plan["source"])
     for directory, _, _ in os.walk(source, topdown=False, followlinks=False):
@@ -159,4 +184,4 @@ async def execute_plan(root: Path, plan, save, on_phase=None):
             folder.rmdir()
     plan["complete"] = True
     save(plan)
-    return dict(moved=len(plan["moves"]), deleted_psds=len(plan.get("deleted_psds", [])), output=str(root))
+    return dict(moved=len(plan["moves"]), output=str(root), **cleanup_counts(plan))
