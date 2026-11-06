@@ -27,7 +27,7 @@ async def notify(callback, *args):
 
 
 class TransferThrottle:
-    def __init__(self, parallelism=1, saved=None, persist=None):
+    def __init__(self, parallelism=1, saved=None, persist=None, parent=None):
         saved = saved or {}
         self.until = float(saved.get("until", 0))
         remaining = max(0, self.until - time.time())
@@ -38,9 +38,19 @@ class TransferThrottle:
         self.condition = asyncio.Condition()
         self.waiters = deque()
         self.persist = persist
+        self.parent = parent
 
     @asynccontextmanager
     async def request(self, on_wait=None):
+        async with self._slot(on_wait):
+            if self.parent:
+                async with self.parent.request(on_wait):
+                    yield
+            else:
+                yield
+
+    @asynccontextmanager
+    async def _slot(self, on_wait=None):
         async with self.condition:
             ticket = object()
             self.waiters.append(ticket)
@@ -81,8 +91,8 @@ class TransferThrottle:
             if self.persist:
                 self.persist(dict(until=self.until, parallelism=self.parallelism, reason=self.reason))
             self.condition.notify_all()
-        LOGGER.warning("Telegram requested a transfer pause for %s seconds; concurrency reduced to %s",
-                       error.seconds, self.parallelism)
+        LOGGER.warning("Telegram requested a transfer pause for %s seconds; %s concurrency reduced to %s",
+                       error.seconds, "file" if self.parent else "account", self.parallelism)
 
 
 async def download_document(client, message, destination: Path, parallelism, throttle, progress, on_wait, history=None):

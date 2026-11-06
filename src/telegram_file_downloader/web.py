@@ -52,7 +52,7 @@ class SettingsPatch(BaseModel):
     download_parallelism: Literal[1, 2, 4] | None = None
     parallel_files: int | None = Field(default=None, ge=1, le=5)
     flatten: bool | None = None
-    delete_pdf: bool | None = None
+    delete_psd: bool | None = None
 
     @field_validator("proxy_host", "proxy_port", mode="before")
     @classmethod

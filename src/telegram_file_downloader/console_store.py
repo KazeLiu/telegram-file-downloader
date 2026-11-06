@@ -24,7 +24,7 @@ DEFAULT_SETTINGS = {
     "extract": True, "delete_archive": False, "archive_passwords": [],
     "receipts": True, "mark_read": True, "enabled": False,
     "download_parallelism": 4,
-    "parallel_files": 5, "flatten": True, "delete_pdf": True,
+    "parallel_files": 5, "flatten": True, "delete_psd": True,
 }
 SECRET_KEYS = {"api_hash", "proxy_password", "archive_passwords"}
 
@@ -48,6 +48,10 @@ class ConsoleStore:
             CREATE INDEX IF NOT EXISTS task_status_scope ON tasks(status,scope);
         """)
         self.db.commit()
+        settings = self.get("settings", {})
+        if "delete_pdf" in settings:
+            settings.pop("delete_pdf")
+            self.put("settings", settings)
         manual = self.get("manual_job", {})
         if manual.get("status") == "running":
             manual["status"] = "interrupted"
@@ -59,6 +63,12 @@ class ConsoleStore:
                 data.update(status="interrupted", speed=0, eta=None, wait_until=None)
                 self.db.execute("UPDATE tasks SET status = 'interrupted', data = ? WHERE id = ?",
                                 (json.dumps(data), row["id"]))
+            rows = self.db.execute("SELECT id,data FROM tasks WHERE json_extract(data,'$.stage')='pdf' AND status NOT IN ('completed','extracted','organized')").fetchall()
+            for row in rows:
+                data = json.loads(row["data"])
+                data["stage"] = "psd"
+                data.setdefault("steps", {}).pop("pdf", None)
+                self.db.execute("UPDATE tasks SET data=? WHERE id=?", (json.dumps(data), row["id"]))
 
     def get(self, key, default=None):
         row = self.db.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
@@ -131,7 +141,7 @@ class ConsoleStore:
                     receipt_id=None)
         data.update(wait_until=None, wait_reason="", parallelism=None)
         data.update(group_id="", volume=None, stage="download", steps={}, last_progress_at=None,
-                    attempts=0, result_files=0, deleted_pdfs=0)
+                    attempts=0, result_files=0, deleted_psds=0)
         with self.db:
             cursor = self.db.execute("INSERT INTO tasks(scope,message_id,status,filename,data) VALUES (?,?,?,?,?)",
                                      (scope, message_id, "queued", filename, "{}"))

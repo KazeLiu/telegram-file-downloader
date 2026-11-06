@@ -58,31 +58,62 @@ def browse(root, value="", page=1, search=""):
                 total=len(items), page=page)
 
 
-def make_plan(root: Path, source: Path, prefix: str, delete_pdf=False, protect_partials=True):
-    moves, pdfs, reserved = [], [], set()
+def flatten_target(root, source, file, prefix, reserved):
+    parts = list(file.relative_to(source).parts)
+    if prefix and parts[0] != prefix:
+        parts.insert(0, prefix)
+    name = safe_filename("-".join(parts))
+    if len(name.encode("utf-8")) > 240:
+        raise ValueError(f"整理后的文件名过长，请先缩短目录名：{file.name}")
+    target = root / name
+    if file == target:
+        return None
+    serial = 2
+    while target.exists() or target.name.casefold() in reserved:
+        target = root / f"{Path(name).stem} ({serial}){Path(name).suffix}"
+        serial += 1
+    reserved.add(target.name.casefold())
+    return target
+
+
+def make_plan(root: Path, source: Path, prefix: str, delete_psd=False, protect_partials=True):
+    moves, psds, reserved = [], [], set()
     for file in entries(root, source):
         if protect_partials and file.name.endswith((".part", ".part-journal")):
             raise ValueError("目录中有尚未完成的下载，请等待完成后再整理")
-        if delete_pdf and file.suffix.lower() == ".pdf":
-            pdfs.append(str(file))
+        if delete_psd and file.suffix.lower() == ".psd":
+            psds.append(str(file))
             continue
-        parts = list(file.relative_to(source).parts)
-        # An archive often already contains a folder named after the resource.
-        if prefix and parts[0] != prefix:
-            parts.insert(0, prefix)
-        name = safe_filename("-".join(parts))
-        if len(name.encode("utf-8")) > 240:
-            raise ValueError(f"整理后的文件名过长，请先缩短目录名：{file.name}")
-        target = root / name
-        if file == target:
+        target = flatten_target(root, source, file, prefix, reserved)
+        if target is None:
             continue
-        serial = 2
-        while target.exists() or target.name.casefold() in reserved:
-            target = root / f"{Path(name).stem} ({serial}){Path(name).suffix}"
-            serial += 1
-        reserved.add(target.name.casefold())
         moves.append(dict(source=str(file), target=str(target), done=False))
-    return dict(source=str(source), moves=moves, pdfs=pdfs, deleted=[], complete=False)
+    return dict(source=str(source), moves=moves, cleanup="psd", psds=psds, deleted_psds=[], complete=False)
+
+
+def migrate_pdf_plan(root, plan, prefix, delete_psd):
+    """Retire the old deletion list without relabelling already deleted PDFs."""
+    if plan.get("cleanup") == "psd":
+        return plan
+    source = Path(plan["source"])
+    reserved = {Path(move["target"]).name.casefold() for move in plan["moves"]}
+    if plan.get("flatten", True):
+        for name in plan.get("pdfs", []):
+            file = inside(root, str(Path(name).relative_to(root)))
+            if file.is_file() and name not in plan.get("deleted", []):
+                target = flatten_target(root, source, file, prefix, reserved)
+                if target:
+                    plan["moves"].append(dict(source=str(file), target=str(target), done=False))
+    moved_sources = {move["source"] for move in plan["moves"]}
+    psds = [move["target"] for move in plan["moves"] if Path(move["source"]).suffix.lower() == ".psd"]
+    if source.is_dir():
+        psds.extend(str(file) for file in entries(root, source) if file.suffix.lower() == ".psd" and str(file) not in moved_sources)
+    plan.update(cleanup="psd", psds=list(dict.fromkeys(psds)) if delete_psd else [], deleted_psds=[],
+                legacy_deleted_pdfs=len(plan.get("deleted", [])), complete=False)
+    plan.pop("pdfs", None)
+    plan.pop("deleted", None)
+    LOGGER.info("organize migrated cleanup to PSD; remaining PDFs preserved")
+    return plan
 
 
 async def execute_plan(root: Path, plan, save, on_phase=None):
@@ -109,15 +140,17 @@ async def execute_plan(root: Path, plan, save, on_phase=None):
         LOGGER.info("organize moved source=%s target=%s", source, target)
         await asyncio.sleep(0)
     if on_phase:
-        on_phase("pdf")
-    for name in plan["pdfs"]:
-        if name in plan["deleted"]:
+        on_phase("psd")
+    for name in plan.get("psds", []):
+        if name in plan["deleted_psds"]:
             continue
         file = inside(root, str(Path(name).relative_to(root)))
+        if file.suffix.lower() != ".psd":
+            raise ValueError("清理清单中包含非 PSD 文件，已停止清理")
         file.unlink(missing_ok=True)
-        plan["deleted"].append(name)
+        plan["deleted_psds"].append(name)
         save(plan)
-        LOGGER.info("organize deleted PDF path=%s", file)
+        LOGGER.info("organize deleted PSD path=%s", file)
         await asyncio.sleep(0)
     source = Path(plan["source"])
     for directory, _, _ in os.walk(source, topdown=False, followlinks=False):
@@ -126,4 +159,4 @@ async def execute_plan(root: Path, plan, save, on_phase=None):
             folder.rmdir()
     plan["complete"] = True
     save(plan)
-    return dict(moved=len(plan["moves"]), deleted_pdfs=len(plan["deleted"]), output=str(root))
+    return dict(moved=len(plan["moves"]), deleted_psds=len(plan.get("deleted_psds", [])), output=str(root))

@@ -101,7 +101,7 @@ class TelegramWatcher:
             processor = MessageProcessor(recorder, download_queue, self.config.allowed_extensions)
             if self.processor_factory:
                 processor = self.processor_factory(self.client, history, recorder)
-                processor.start()
+                await processor.start()
             LOGGER.info(
                 "Watching Telegram chat %s; tracking since %s; resume after message %s (%s); last complete scan %s",
                 getattr(target, "title", self.config.chat), history.since.isoformat(), history.message_id,

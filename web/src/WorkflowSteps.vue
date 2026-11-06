@@ -4,14 +4,15 @@ import { bytes, percent, taskLabels, type Settings, type Task } from './api'
 import Icon from './Icon.vue'
 const props = defineProps<{ task?: Task | null; settings?: Settings }>()
 const workflowModel = reactive({ selected: 'download' })
+const legacyPdf = computed(() => !!props.task?.steps?.pdf && !props.task?.steps?.psd && ['organized', 'extracted', 'completed'].includes(props.task?.status || ''))
 watch(() => props.task?.id, () => { workflowModel.selected = props.task?.stage === 'complete' ? 'organize' : props.task?.stage || 'download' }, { immediate: true })
 const nodes = computed(() => [
   { id: 'receive', title: '接收转发', icon: 'telegram', detail: props.task ? `任务 #${props.task.id} 已记录` : '群里的新附件会记录到下载队列。' },
-  { id: 'download', title: '下载文件', icon: 'down', detail: props.task ? `${bytes(props.task.downloaded)} / ${bytes(props.task.size)} · ${percent(props.task).toFixed(1)}%` : `最多 ${props.settings?.parallel_files || 5} 个文件，共享 ${props.settings?.download_parallelism || 4} 路分片请求。` },
+  { id: 'download', title: '下载文件', icon: 'down', detail: props.task ? `${bytes(props.task.downloaded)} / ${bytes(props.task.size)} · ${percent(props.task).toFixed(1)}%` : `最多 ${props.settings?.parallel_files || 5} 个文件，每个文件最多 ${props.settings?.download_parallelism || 4} 路；实际文件数遵守 Telegram 队列上限。` },
   { id: 'volumes', title: '分卷收齐', icon: 'archive', detail: '同组分卷下载齐全并通过完整性检查后，才会继续。' },
   { id: 'extract', title: '完整解压', icon: 'folder', detail: props.settings?.extract === false ? '自动解压已关闭。' : '先无密码，再尝试保存的密码；失败保留原包。' },
   { id: 'organize', title: '平铺到根目录', icon: 'workflow', detail: props.task?.result_files ? `已整理 ${props.task.result_files} 个文件到下载根目录。` : '资源A/第一套/001.jpg → 资源A-第一套-001.jpg' },
-  { id: 'pdf', title: '清理 PDF', icon: 'trash', detail: props.task?.deleted_pdfs ? `已删除本次资源的 ${props.task.deleted_pdfs} 个 PDF。` : '仅清理本次解压内容中的 PDF。' },
+  { id: legacyPdf.value ? 'pdf' : 'psd', title: legacyPdf.value ? '旧版 PDF 清理' : '清理 PSD', icon: 'trash', detail: legacyPdf.value ? `旧版记录：删除 ${props.task?.deleted_pdfs || 0} 个 PDF。本版本只清理 PSD，保留 PDF。` : props.task?.deleted_psds ? `已删除本次资源的 ${props.task.deleted_psds} 个 PSD。` : '仅清理本次资源的 .psd Photoshop 源文件，PDF 保留。' },
   { id: 'cloud', title: '小米云相册', icon: 'cloud', detail: '待接入' },
 ])
 function state(id: string) {

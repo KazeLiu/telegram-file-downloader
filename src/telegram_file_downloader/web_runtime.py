@@ -68,7 +68,8 @@ class WebRuntime:
         return dict(phase=self.phase, account=self.account, error=self.error or self.state.latest_error,
                     connection=self.state.status.value, pending=self.pending,
                     download_dir=str(self.download_dir), data_dir=str(self.data_dir),
-                    extractor_available=bool(seven_zip()), **self.store.summary())
+                    extractor_available=bool(seven_zip()),
+                    server_download_limits=self.processor.server_limits if self.processor else {}, **self.store.summary())
 
     async def start(self):
         self.download_dir.mkdir(parents=True, exist_ok=True)

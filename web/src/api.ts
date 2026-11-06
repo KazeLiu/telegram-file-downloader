@@ -17,7 +17,7 @@ export interface Settings {
   videos: boolean; photos: boolean; archives: boolean; extract: boolean; delete_archive: boolean
   archive_passwords_count: number; receipts: boolean; mark_read: boolean; enabled: boolean
   download_parallelism: 1 | 2 | 4
-  parallel_files: number; flatten: boolean; delete_pdf: boolean
+  parallel_files: number; flatten: boolean; delete_psd: boolean
 }
 export interface Task {
   id: number; filename: string; status: string; kind: string; size: number; downloaded: number
@@ -27,7 +27,7 @@ export interface Task {
   wait_until?: number | null; wait_reason?: string; parallelism?: number | null
   stage?: string; steps?: Record<string, string>; group_id?: string
   volume?: { base: string; scheme: string; index: number; split: boolean } | null
-  last_progress_at?: string | null; result_files?: number; deleted_pdfs?: number; attempts?: number
+  last_progress_at?: string | null; result_files?: number; deleted_psds?: number; deleted_pdfs?: number; attempts?: number
   group_members?: { id: number; filename: string; status: string; downloaded: number; size: number }[]
 }
 export interface Status {
@@ -35,6 +35,7 @@ export interface Status {
   error: string | null; pending: boolean; download_dir: string; data_dir: string
   extractor_available: boolean; counts: Record<string, number>; total_bytes: number; active: Task | null
   active_tasks: Task[]; queue_paused: boolean
+  server_download_limits: { small?: number; large?: number }
 }
 export const taskLabels: Record<string, string> = {
   queued: '等待下载', downloading: '下载中', downloaded: '下载完成', extracting: '解压中', completed: '已下载',

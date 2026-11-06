@@ -7,14 +7,14 @@ import time
 import uuid
 from pathlib import Path
 
-from telethon import errors, types, utils
+from telethon import errors, types, utils, functions
 
 from .archives import (ARCHIVE_EXTENSIONS, ExtractionError, VolumesPending, extract_archive,
                        multipart, volume_info, resource_name)
 from .console_store import now
 from .downloader import DownloadQueue
 from .files import message_filename
-from .organizer import make_plan, execute_plan
+from .organizer import make_plan, execute_plan, migrate_pdf_plan
 from .transfers import TransferThrottle
 
 LOGGER = logging.getLogger(__name__)
@@ -79,9 +79,29 @@ class ConsoleProcessor:
         self.receipt_sender = None
         account = history.scope.split(":", 1)[0] if history else ""
         key = f"transfer_backoff:{account}"
-        self.throttle = TransferThrottle(settings["download_parallelism"], store.get(key), lambda value: store.put(key, value))
+        self.throttle = TransferThrottle(settings["download_parallelism"] * settings["parallel_files"],
+            store.get(key), lambda value: store.put(key, value))
+        self.server_limits = {}
 
-    def start(self):
+    async def start(self):
+        # This request uses the same account, proxy and persistent flood deadline as downloads.
+        while True:
+            try:
+                async with self.throttle.request():
+                    response = await asyncio.wait_for(self.client(functions.help.GetAppConfigRequest(hash=0)), 45)
+                break
+            except (errors.FloodWaitError, errors.FloodPremiumWaitError):
+                continue
+        config = getattr(response, "config", None)
+        values = {item.key: item.value.value for item in config.value if isinstance(item.value, types.JsonNumber)} if isinstance(config, types.JsonObject) else {}
+        for category in ("small", "large"):
+            value = values.get(f"{category}_queue_max_active_operations_count")
+            if value is not None and value >= 1 and value == int(value):
+                self.server_limits[category] = int(value)
+            else:
+                LOGGER.warning("Telegram did not provide the %s download queue limit; configured file limit remains %s",
+                               category, self.settings["parallel_files"])
+        LOGGER.info("Telegram parallel file limits per DC: %s; per-file parts=%s", self.server_limits, self.settings["download_parallelism"])
         for task in self.store.tasks(self.history.scope, {"queued", "interrupted", "extraction_failed", "downloaded", "waiting_volumes"}):
             if not task.get("group_id"):
                 stage = "extract" if task["path"] and task["kind"] == "archive" and task["status"] in {"interrupted", "extraction_failed", "downloaded"} else "download"
@@ -139,7 +159,8 @@ class ConsoleProcessor:
         origin = str(utils.get_peer_id(source)) if source else "unknown"
         signature = f"{volume['base'].casefold()}:{volume['scheme']}:{origin}" if volume else ""
         self.store.update_task(task["id"], group_id=group_id, volume=volume, volume_signature=signature,
-                               album_id=str(getattr(message, "grouped_id", None) or ""))
+                               album_id=str(getattr(message, "grouped_id", None) or ""),
+                               dc_id=getattr(selected.document or selected.photo, "dc_id", None))
         LOGGER.info("task=%s received message=%s group=%s name=%s size=%s", task["id"], message.id, group_id, task["filename"], task["size"])
         return True
 
@@ -152,12 +173,22 @@ class ConsoleProcessor:
                             break
                         if task["id"] in self.running or task["status"] not in DOWNLOAD_STATES or task.get("stage", "download") != "download":
                             continue
+                        if not self._file_slot_available(task):
+                            continue
                         self.running[task["id"]] = asyncio.create_task(self._run_download(task), name=f"download-{task['id']}")
                 for group in list(self.pending_groups):
                     if group not in self.post_tasks:
                         self.pending_groups.discard(group)
                         self.post_tasks[group] = asyncio.create_task(self._postprocess(group), name="resource-workflow")
             await asyncio.sleep(.5)
+
+    def _file_slot_available(self, task):
+        category = "small" if task["size"] < 20 * 1024 * 1024 else "large"
+        limit = self.server_limits.get(category, self.settings["parallel_files"])
+        active = [self.store.task(task_id) for task_id in self.running]
+        count = sum(1 for item in active if ("small" if item["size"] < 20 * 1024 * 1024 else "large") == category
+                    and (not task.get("dc_id") or not item.get("dc_id") or task["dc_id"] == item["dc_id"]))
+        return count < limit
 
     async def _send_final_receipts(self):
         while not self.closed:
@@ -218,11 +249,14 @@ class ConsoleProcessor:
         last_bytes = task["downloaded"]
         last_time = start
         last_log = start
+        file_throttle = TransferThrottle(self.settings["download_parallelism"], parent=self.throttle)
+        def effective_parallelism():
+            return min(file_throttle.parallelism, self.throttle.parallelism)
         try:
             chat = int(task["scope"].split(":", 1)[1])
             async def initial_wait(until, reason, parallelism):
                 self.store.update_task(task_id, status="waiting", wait_until=until, wait_reason=reason,
-                                       parallelism=parallelism, speed=0, eta=None)
+                                       parallelism=effective_parallelism(), speed=0, eta=None)
             while True:
                 try:
                     async with self.throttle.request(initial_wait):
@@ -237,7 +271,8 @@ class ConsoleProcessor:
                 raise ValueError("原消息已没有可下载的附件")
             selected = selection[0]
             self.store.update_task(task_id, status="downloading", started_at=task["started_at"] or now(),
-                error="", completed_at=None, wait_until=None, wait_reason="", parallelism=self.throttle.parallelism,
+                error="", completed_at=None, wait_until=None, wait_reason="", parallelism=effective_parallelism(),
+                dc_id=getattr(selected.document or selected.photo, "dc_id", None),
                 steps={"receive": "done", "download": "active"})
             if self.settings["mark_read"]:
                 try:
@@ -251,13 +286,14 @@ class ConsoleProcessor:
                 if moment - last_time < 1 and current != total:
                     return
                 speed = max(0, current - last_bytes) / max(moment - last_time, .001)
-                waiting = self.throttle.until > time.time()
+                wait_until = max(self.throttle.until, file_throttle.until)
+                waiting = wait_until > time.time()
                 elapsed = prior_elapsed + moment - start
                 self.store.update_task(task_id, downloaded=current, size=total or 0, speed=0 if waiting else speed,
                     eta=(total - current) / speed if not waiting and speed and total else None,
                     elapsed=elapsed, average_speed=current / max(elapsed, .001), last_progress_at=now(),
-                    status="waiting" if waiting else "downloading", parallelism=self.throttle.parallelism,
-                    wait_until=self.throttle.until if waiting else None)
+                    status="waiting" if waiting else "downloading", parallelism=effective_parallelism(),
+                    wait_until=wait_until if waiting else None)
                 if moment - last_log >= 30 or current == total:
                     LOGGER.info("task=%s progress=%s/%s speed=%.0f elapsed=%.1f", task_id, current, total, speed, elapsed)
                     last_log = moment
@@ -265,7 +301,7 @@ class ConsoleProcessor:
 
             async def waiting(until, reason, parallelism):
                 self.store.update_task(task_id, status="waiting", wait_until=until, wait_reason=reason,
-                                       parallelism=parallelism, speed=0, eta=None)
+                                       parallelism=effective_parallelism(), speed=0, eta=None)
 
             def retry(attempt, reason):
                 self.store.update_task(task_id, status="retrying", attempts=attempt, speed=0,
@@ -281,7 +317,7 @@ class ConsoleProcessor:
             if task.get("volume") and self.settings["extract"]:
                 directory = self.directory / ".tg-work" / task["group_id"].split(":")[-1]
             queue = DownloadQueue(self.client, directory, lambda error: None, history=self.history,
-                progress=progress, parallelism=self.settings["download_parallelism"], throttle=self.throttle,
+                progress=progress, parallelism=self.settings["download_parallelism"], throttle=file_throttle,
                 on_wait=waiting, on_notice=lambda text: self.store.update_task(task_id, warning=text), on_retry=retry)
             path = await queue.download(selected)
             if not path:
@@ -382,25 +418,32 @@ class ConsoleProcessor:
                 self.store.update_task(task["id"], output=str(output), status="organizing", stage="organize",
                                        steps={**steps, "extract": "done", "organize": "active"})
             if not plan:
-                plan = await asyncio.to_thread(make_plan, self.directory, output, resource_name(leader["filename"]), self.settings["delete_pdf"], False)
+                plan = await asyncio.to_thread(make_plan, self.directory, output, resource_name(leader["filename"]), self.settings["delete_psd"], False)
                 if not self.settings["flatten"]:
                     plan["moves"] = []
                 plan["flatten"] = self.settings["flatten"]
                 self.store.put(plan_key, plan)
-            if not self.settings["delete_pdf"]:
-                plan["pdfs"] = plan["deleted"][:]
+            if plan.get("cleanup") != "psd":
+                plan = await asyncio.to_thread(migrate_pdf_plan, self.directory, plan, resource_name(leader["filename"]), self.settings["delete_psd"])
+                self.store.put(plan_key, plan)
+            if plan.get("legacy_deleted_pdfs"):
+                for member in members:
+                    self.store.update_task(member["id"], deleted_pdfs=plan["legacy_deleted_pdfs"],
+                        warning="旧版曾删除此资源的 PDF；本次已停止 PDF 清理，已删除文件需从原包恢复")
+            if not self.settings["delete_psd"]:
+                plan["psds"] = plan["deleted_psds"][:]
                 self.store.put(plan_key, plan)
             def phase(value):
-                current_steps = {**steps, "extract": "done", "organize": "done" if value == "pdf" else "active"}
-                if value == "pdf":
-                    current_steps["pdf"] = "active" if self.settings["delete_pdf"] else "skipped"
+                current_steps = {**steps, "extract": "done", "organize": "done" if value == "psd" else "active"}
+                if value == "psd":
+                    current_steps["psd"] = "active" if self.settings["delete_psd"] else "skipped"
                 for member in members:
                     self.store.update_task(member["id"], stage=value, steps=current_steps)
             result = await execute_plan(self.directory, plan, lambda value: self.store.put(plan_key, value), phase)
             flattened = plan.get("flatten", self.settings["flatten"])
             final = "organized" if flattened else "extracted"
             steps.update(extract="done", organize="done" if flattened else "skipped",
-                         pdf="done" if self.settings["delete_pdf"] else "skipped", cloud="pending")
+                         psd="done" if self.settings["delete_psd"] else "skipped", cloud="pending")
             if self.settings["delete_archive"]:
                 for task in members:
                     Path(task["path"]).unlink(missing_ok=True)
@@ -408,13 +451,13 @@ class ConsoleProcessor:
             for task in members:
                 self.store.update_task(task["id"], status=final, stage="complete", error="", completed_at=now(),
                     output=str(self.directory if flattened else output), steps=steps,
-                    result_files=result["moved"], deleted_pdfs=result["deleted_pdfs"])
+                    result_files=result["moved"], deleted_psds=result["deleted_psds"])
                 self.final_receipts.add(task["id"])
-            LOGGER.info("group=%s workflow complete moved=%s deleted_pdfs=%s", group, result["moved"], result["deleted_pdfs"])
+            LOGGER.info("group=%s workflow complete moved=%s deleted_psds=%s", group, result["moved"], result["deleted_psds"])
         except (ExtractionError, OSError, ValueError) as exc:
             failure_stage = self.store.task(task_id).get("stage", "extract")
             status = "waiting_volumes" if isinstance(exc, VolumesPending) else (
-                "processing_failed" if failure_stage in {"organize", "pdf"} else "extraction_failed")
+                "processing_failed" if failure_stage in {"organize", "psd"} else "extraction_failed")
             failure_steps = dict(self.store.task(task_id).get("steps") or steps)
             if status == "waiting_volumes":
                 failure_stage = "volumes"
