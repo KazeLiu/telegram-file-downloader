@@ -266,7 +266,7 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
 </script>
 
 <template>
-  <section class="image-library" :class="{ 'has-selection': imageModel.organizing && selectedCount }">
+  <section class="image-library" :class="{ 'has-floating-actions': imageModel.view !== 'recycle' }">
     <div class="image-library-toolbar">
       <div class="image-tabs" role="tablist" aria-label="图片视图">
         <button role="tab" :aria-selected="imageModel.view === 'all'" :disabled="toolbarBlocked" @click="view('all')">全部图片 <span>{{ imageModel.counts.total || 0 }}</span></button>
@@ -276,7 +276,7 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
       <div class="image-toolbar-actions">
         <template v-if="imageModel.view !== 'recycle'">
           <button class="secondary" :disabled="toolbarBlocked || imageModel.scan.running" @click="scan"><Icon :name="imageModel.scan.running ? 'loader' : 'refresh'" :class="{ 'loading-icon': imageModel.scan.running }" :size="16" />{{ imageModel.scan.running ? '正在扫描' : '刷新图片' }}</button>
-          <button :class="imageModel.organizing ? 'primary' : 'secondary'" :disabled="blocked" @click="toggleOrganizing">{{ imageModel.organizing ? '完成' : '整理' }}</button>
+          <button class="floating-manage" :class="imageModel.organizing ? 'primary' : 'secondary'" :aria-pressed="imageModel.organizing" :disabled="blocked" @click="toggleOrganizing">{{ imageModel.organizing ? '完成' : '整理' }}</button>
         </template>
         <button v-else class="secondary" :disabled="blocked" @click="load()"><Icon name="refresh" :size="16" />刷新</button>
         <button v-if="lastLocalRecycle.length" class="text-button" @click="namesDialog?.showModal()">最近回收清单</button>

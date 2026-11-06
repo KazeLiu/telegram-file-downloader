@@ -276,9 +276,12 @@
 }
 .image-scan { margin: 0 0 24px; color: var(--color-muted); font-size: 14px; span { display: flex; gap: 9px; align-items: center; } progress { margin-top: 12px; height: 4px; } }
 .image-actions { gap: 12px; .search-box { max-width: 290px; } > .text-button { margin-left: auto; } }
-.image-library.has-selection { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
-.recycle-selection {
+.has-floating-actions { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+.recycle-selection, .floating-manage {
   position: fixed; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 15; box-shadow: 0 4px 18px #0003;
+}
+.floating-manage { right: max(16px, env(safe-area-inset-right)); min-width: 76px; min-height: 44px; }
+.recycle-selection {
   left: calc(var(--sidebar-width) + var(--page-gutter) + max(0px, (100% - var(--sidebar-width) - var(--page-max-width)) / 2));
 }
 .image-grid {
@@ -311,7 +314,7 @@
   .image-grid { --image-gap: 2px; }
   .image-tabs { width: 100%; button { flex: 1; justify-content: center; padding: 8px; font-size: 13px; } }
   .image-actions .search-box { width: 100%; max-width: none; }
-  .recycle-selection { left: max(16px, env(safe-area-inset-left)); }
+  .recycle-selection { left: max(16px, env(safe-area-inset-left)); max-width: calc(100% - 124px - env(safe-area-inset-left) - env(safe-area-inset-right)); white-space: normal; > svg { flex-shrink: 0; } }
   .recycle-list { padding: 0 14px; article { flex-wrap: wrap; .file-icon { display: none; } .secondary { padding: 8px 12px; } } }
   .main-nav { overflow-x: auto; button { flex: 1 0 auto; font-size: 12px; gap: 5px; padding: 0 8px; } }
   .workflow-panel { padding: 20px 18px 0; .section-heading { flex-wrap: wrap; gap: 7px; h2 { font-size: 19px; } } }

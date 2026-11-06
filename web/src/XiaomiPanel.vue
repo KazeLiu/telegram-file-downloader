@@ -253,7 +253,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
 </script>
 
 <template>
-  <div class="xiaomi-panel" :class="{ 'has-selection': cloud.organizing && selectedCount }">
+  <div class="xiaomi-panel" :class="{ 'has-floating-actions': cloud.account && cloud.album }">
     <p v-if="cloud.error" class="notice error" role="alert">{{ cloud.error }}
       <button v-if="!cloud.account" class="text-button" :disabled="!!cloud.busy" @click="run('正在刷新…', loadAccount)">刷新连接</button>
     </p>
@@ -301,7 +301,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
           <div class="cloud-actions">
             <label class="wall-toggle"><input type="checkbox" role="switch" :checked="cloud.wall" :disabled="!!cloud.busy" @change="toggleWall" />图片墙</label>
             <button class="secondary" :disabled="!!cloud.busy" @click="run('正在刷新相册内容…', () => loadMedia(cloud.wall ? 0 : cloud.page))"><Icon name="refresh" :size="17" />刷新</button>
-            <button :class="cloud.organizing ? 'primary' : 'secondary'" :disabled="!!cloud.busy || !cloud.ready" @click="toggleOrganizing">{{ cloud.organizing ? '完成' : '管理' }}</button>
+            <button class="floating-manage" :class="cloud.organizing ? 'primary' : 'secondary'" :aria-pressed="cloud.organizing" :disabled="!!cloud.busy || !cloud.ready" @click="toggleOrganizing">{{ cloud.organizing ? '完成' : '管理' }}</button>
             <XiaomiNameRecycle :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :album-name="albumName"
               :last-local-recycle="props.lastLocalRecycle" :disabled="!!cloud.busy || cloud.organizing" @confirm="recycleDialog?.open($event)" />
             <button class="secondary" :disabled="!!cloud.busy || cloud.organizing || !albumName || cloud.album === '1000'" @click="openUpload">从此设备上传</button>
@@ -392,7 +392,6 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
 .album-label strong { @apply min-w-0; overflow-wrap: anywhere; }
 .album-label svg { @apply text-muted; }
 .cloud-library { @apply px-6 py-5; }
-.xiaomi-panel.has-selection { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
 .cloud-selection-actions { @apply mb-4 flex flex-wrap items-center gap-4 text-sm; }
 .cloud-toolbar { @apply pb-4; }
 .cloud-detail-heading { @apply flex min-w-0 flex-wrap items-center gap-x-4; }
