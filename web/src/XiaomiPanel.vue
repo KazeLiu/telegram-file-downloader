@@ -5,14 +5,17 @@ import Icon from './Icon.vue'
 import XiaomiBatchUpload from './XiaomiBatchUpload.vue'
 import XiaomiNameRecycle from './XiaomiNameRecycle.vue'
 import XiaomiThumbnail from './XiaomiThumbnail.vue'
-import { takenAt, type CloudMedia as Media } from './xiaomiMedia'
+import XiaomiLocalBinding from './XiaomiLocalBinding.vue'
+import XiaomiLocalIndicator from './XiaomiLocalIndicator.vue'
+import { takenAt, type CloudMedia as Media, type LocalFileState } from './xiaomiMedia'
 
 type Account = { connection: string; label: string }
-type Album = { id: string; name: string }
+type Album = { id: string; name: string; cover?: string }
 const props = defineProps<{ lastLocalRecycle: string[] }>()
 const emit = defineEmits<{ message: [text: string] }>()
 const cloud = reactive({ account: null as Account | null, albums: [] as Album[], album: '', items: [] as Media[],
-  wall: false, page: 0, last: true, ready: false, busy: '', error: '', initialized: false, qr: '', verifying: false })
+  wall: false, page: 0, last: true, ready: false, busy: '', error: '', initialized: false, qr: '', verifying: false,
+  coverErrors: new Set<string>(), bound: false, localStates: {} as Record<string, LocalFileState> })
 const upload = reactive({ file: null as File | null, name: '', error: '' })
 const selected = ref<Media>()
 const recycleDialog = ref<HTMLDialogElement>()
@@ -48,6 +51,11 @@ async function loadMedia(page = 0, append = false) {
 
 function resetMedia() {
   cloud.items = []; cloud.page = 0; cloud.last = true; cloud.ready = false
+  cloud.localStates = {}
+}
+
+function localStatus(states: Record<string, LocalFileState>, bound: boolean) {
+  cloud.localStates = states; cloud.bound = bound
 }
 
 function loadMore() {
@@ -69,6 +77,7 @@ async function loadAccount() {
   }
   if (!cloud.account) return
   cloud.albums = (await api<{ items: Album[] }>(`/xiaomi/albums?${params({})}`)).items
+  cloud.coverErrors.clear()
 }
 
 async function pollQr(id: string) {
@@ -118,7 +127,7 @@ function disconnect() {
 }
 
 async function openAlbum(album: string) {
-  cloud.album = album; cloud.wall = false; resetMedia()
+  cloud.album = album; cloud.wall = false; cloud.bound = false; resetMedia()
   void run('正在读取相册内容…', () => loadMedia())
   await nextTick(); albumHeading.value?.focus()
 }
@@ -238,7 +247,10 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
       <template v-if="!cloud.album">
         <section v-if="cloud.albums.length" class="cloud-albums" aria-label="相册列表">
           <button v-for="album in cloud.albums" :id="`xiaomi-album-${album.id}`" :key="album.id" type="button" class="cloud-album" :disabled="!!cloud.busy" @click="openAlbum(album.id)">
-            <span class="album-cover" :class="{ 'album-private': album.id === '1000' }"><Icon :name="album.id === '1000' ? 'lock' : 'folder'" :size="22" /></span>
+            <span class="album-cover" :class="{ 'album-private': album.id === '1000' }">
+              <img v-if="album.cover && !cloud.coverErrors.has(album.id)" :src="album.cover" alt="" loading="lazy" decoding="async" @error="cloud.coverErrors.add(album.id)" />
+              <Icon v-else :name="album.id === '1000' ? 'lock' : 'folder'" :size="22" />
+            </span>
             <span class="album-label"><strong>{{ album.name }}</strong><Icon name="chevron" :size="15" /></span>
           </button>
         </section>
@@ -260,19 +272,22 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
               @message="emit('message', $event)" @finished="batchFinished" />
           </div>
         </div>
+        <XiaomiLocalBinding :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :items="cloud.items" @status="localStatus" />
         <p v-if="cloud.album === '1000'" class="cloud-status muted">隐私相册请在小米云网页版上传。</p>
         <ul v-if="cloud.wall && cloud.items.length" class="cloud-wall">
           <li v-for="item in cloud.items" :key="item.id" class="relative min-w-0">
-            <XiaomiThumbnail :item="item" />
+            <div class="relative"><XiaomiThumbnail :item="item" /><XiaomiLocalIndicator v-if="cloud.bound" :state="cloud.localStates[item.id] || 'unknown'" dot /></div>
             <button class="wall-recycle" :aria-label="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="15" /></button>
             <p class="truncate text-xs text-muted" :title="item.name">{{ item.name }}</p>
           </li>
         </ul>
         <ul v-else-if="cloud.items.length" class="cloud-files">
           <li v-for="item in cloud.items" :key="item.id">
-            <span class="file-icon"><Icon :name="item.kind === 'video' ? 'video' : 'photo'" /></span>
-            <div class="cloud-file"><strong>{{ item.name }}</strong><p class="muted"><span class="sr-only">{{ item.kind === 'video' ? '视频' : '图片' }}，</span>{{ takenAt(item.taken_at) }}<template v-if="item.size"> · {{ bytes(item.size) }}</template></p></div>
-            <button class="text-button danger-text" :aria-label="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="16" />移入回收站</button>
+            <div class="cloud-file">
+              <strong class="cloud-file-name" :title="item.name"><Icon :name="item.kind === 'video' ? 'video' : 'photo'" :size="15" /><span class="truncate">{{ item.name }}</span></strong>
+              <p class="cloud-file-meta"><time class="min-w-0 flex-1 truncate" :title="takenAt(item.taken_at)">{{ takenAt(item.taken_at) }}</time><span class="shrink-0">{{ item.size === null ? '大小未知' : bytes(item.size) }}</span><XiaomiLocalIndicator v-if="cloud.bound" :state="cloud.localStates[item.id] || 'unknown'" /></p>
+            </div>
+            <button class="cloud-file-delete" :aria-label="'移入回收站：' + item.name" :title="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="15" /></button>
           </li>
         </ul>
         <div v-else-if="!cloud.busy && !cloud.error && cloud.last" class="empty-list">
@@ -328,7 +343,8 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
 .cloud-account svg { @apply text-blue; }
 .cloud-albums { @apply grid grid-cols-2 gap-2 min-[760px]:grid-cols-3 xl:grid-cols-5; }
 .cloud-album { @apply flex min-h-16 min-w-0 items-center gap-2 rounded-lg border border-solid border-hairline bg-canvas px-3 py-2 text-left; }
-.album-cover { @apply grid size-9 shrink-0 place-items-center rounded-lg bg-blue/10 text-blue; }
+.album-cover { @apply grid size-9 shrink-0 place-items-center overflow-hidden rounded-lg bg-blue/10 text-blue; }
+.album-cover img { @apply size-full object-cover; }
 .album-cover.album-private { @apply bg-soft text-muted; }
 .album-label { @apply flex min-w-0 flex-1 items-center justify-between gap-2; }
 .album-label strong { @apply min-w-0; overflow-wrap: anywhere; }
@@ -340,19 +356,29 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
 .cloud-status { @apply mb-2.5; }
 .wall-toggle { @apply flex flex-row items-center gap-2; }
 .wall-end { @apply grid min-h-14 place-items-center text-sm text-muted; }
-.cloud-files { @apply m-0 list-none p-0; }
+.cloud-files {
+  --file-gap: 10px;
+  @apply m-0 grid list-none p-0;
+  gap: var(--file-gap);
+  grid-template-columns: repeat(auto-fill, minmax(clamp(calc((100% - 11 * var(--file-gap)) / 12), 260px, calc((100% - 2 * var(--file-gap)) / 3)), 1fr));
+}
 .cloud-wall { @apply m-0 grid list-none grid-cols-3 gap-2 p-0 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
 .wall-recycle { @apply absolute top-1 right-1 grid size-8 min-h-0 place-items-center rounded-full bg-canvas p-0 text-danger; }
-.cloud-files li { @apply flex items-center gap-3 py-3; border-top: 1px solid var(--color-soft); }
-.cloud-file { @apply min-w-0 flex-1; overflow-wrap: anywhere; }
-.cloud-file p { @apply mt-1 text-[13px]; }
+.cloud-files li { @apply relative min-w-0 rounded-lg border border-solid border-hairline py-2 pr-1 pl-2; }
+.cloud-file { @apply min-w-0; }
+.cloud-file-name { @apply mr-7 flex min-w-0 items-center gap-1.5 text-sm font-normal; }
+.cloud-file-name svg { @apply text-muted; }
+.cloud-file-meta { @apply mt-2 flex items-center gap-1.5 text-xs text-muted; }
+.cloud-file-delete { @apply absolute top-0.5 right-0.5 grid min-h-8 w-7 place-items-center rounded-md p-0 text-danger; }
 .cloud-upload { width: min(560px, calc(100% - 32px)); }
 .cloud-upload form { @apply mt-4 grid gap-4; }
 .recycle-dialog p { overflow-wrap: anywhere; }
 @media (max-width: 560px) {
   .cloud-connect, .cloud-library { @apply p-4; }
   .cloud-connect .welcome-icon { @apply hidden; }
-  .cloud-files .file-icon { @apply size-8; }
+  .cloud-files { --file-gap: 5px; }
+  .cloud-file-name svg, .cloud-file-meta time { @apply hidden; }
+  .cloud-file-meta { @apply flex-wrap; }
   .cloud-toolbar { @apply items-stretch; }
 }
 </style>

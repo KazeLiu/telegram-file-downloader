@@ -1,4 +1,8 @@
 export type CloudMedia = { id: string; name: string; kind: 'image' | 'video'; size: number | null; taken_at: number | null; thumbnail?: string }
+export type LocalFileState = 'same' | 'different' | 'missing' | 'unknown'
+export const localStateLabels: Record<LocalFileState, string> = {
+  same: '本地有同名同大小文件', different: '本地同名文件大小不同', missing: '本地没有同名文件', unknown: '本地索引尚不可用',
+}
 
 export function takenAt(value: number | null) {
   return value ? new Date(value).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }) : '时间未知'

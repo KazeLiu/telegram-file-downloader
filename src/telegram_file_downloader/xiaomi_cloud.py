@@ -26,6 +26,7 @@ ACCOUNT = "https://account.xiaomi.com"
 ACCOUNT_HOSTS = ("account.xiaomi.com",)
 CLOUD_HOSTS = ("i.mi.com",)
 STORAGE_HOSTS = ("i.mi.com", "mi-fds.com", "fds.api.xiaomi.com", "mi-img.com", "ksyuncs.com", "ks-cdn.com", "ksyun.com")
+THUMBNAIL_HOSTS = (*STORAGE_HOSTS, "xmssdn.micloud.mi.com")
 ID_PATTERN = r"^[0-9]{1,32}$"
 CONNECTION_PATTERN = r"^[a-f0-9]{32}$"
 BLOCK_SIZE = 4 * 1024 * 1024
@@ -136,6 +137,12 @@ class XiaomiCloud:
         if not account:
             return None
         return {"connection": account["connection"], "label": "尾号 " + account["userId"][-4:]}
+
+    def local_owner(self, connection):
+        account = self.store.get("xiaomi_account")
+        if not account or account["connection"] != connection:
+            raise XiaomiError("小米账号连接已变化，请刷新页面", 409)
+        return account["userId"]
 
     def disconnect(self, connection):
         if self.write_lock.locked():
@@ -338,7 +345,13 @@ class XiaomiCloud:
             entries, last = await self.album_page(account, service, page)
             for entry in entries:
                 album_id = remote_id(entry.get("albumId"))
-                items.append({"id": album_id, "name": ALBUM_NAMES.get(album_id) or entry.get("name") or album_id})
+                album = {"id": album_id, "name": ALBUM_NAMES.get(album_id) or entry.get("name") or album_id}
+                thumbnails = entry.get("thumbnails")
+                if isinstance(thumbnails, list) and thumbnails and isinstance(thumbnails[0], dict):
+                    cover = thumbnails[0]
+                    if not cover.get("encryptInfo") and self.cache_thumbnail(connection, "album:" + album_id, cover.get("url")):
+                        album["cover"] = f"/api/xiaomi/album-cover/{album_id}?connection={connection}"
+                items.append(album)
             if last:
                 return items
             if not entries:
@@ -352,32 +365,37 @@ class XiaomiCloud:
         })
         return page_data(data, "galleries")
 
-    def public_media(self, item, connection=None):
-        media_id = remote_id(item.get("id"))
-        result = {"id": media_id, "name": item.get("fileName") or "未命名", "kind": item["type"],
-                  "size": item.get("size"), "taken_at": item.get("dateTaken")}
-        info = item.get("thumbnailInfo")
-        source = info.get("data") if isinstance(info, dict) and not info.get("encryptInfo") else None
-        # The thumbnail's own encryption metadata applies; the original can be encrypted independently.
-        if connection and isinstance(source, str):
+    def cache_thumbnail(self, connection, key, source):
+        if isinstance(source, str):
             if source.startswith("data:"):
                 header, _, encoded = source.partition(",")
                 if not (header.removeprefix("data:").removesuffix(";base64") in THUMBNAIL_TYPES
                         and header.endswith(";base64") and len(encoded) <= THUMBNAIL_LIMIT):
-                    return result
+                    return False
             elif len(source) <= 4096 and source.startswith(("https://", "/")):
                 try:
-                    source = xiaomi_url(urljoin(CLOUD, source), STORAGE_HOSTS)
+                    source = xiaomi_url(urljoin(CLOUD, source), THUMBNAIL_HOSTS)
                 except XiaomiError:
-                    return result
+                    return False
             else:
-                return result
-            key = (connection, media_id)
+                return False
+            key = (connection, key)
             self.thumbnail_source_size += len(source) - len(self.thumbnail_sources.pop(key, ""))
             self.thumbnail_sources[key] = source
             while len(self.thumbnail_sources) > 4096 or self.thumbnail_source_size > 32 * 1024**2:
                 _, expired = self.thumbnail_sources.popitem(last=False)
                 self.thumbnail_source_size -= len(expired)
+            return True
+        return False
+
+    def public_media(self, item, connection=None):
+        media_id = remote_id(item.get("id"))
+        result = {"id": media_id, "name": item.get("fileName") or "未命名", "kind": item["type"],
+                  "size": item.get("size"), "taken_at": item.get("dateTaken")}
+        info = item.get("thumbnailInfo")
+        # Thumbnail encryption is independent of the original file's encryption.
+        if (connection and isinstance(info, dict) and not info.get("encryptInfo")
+                and self.cache_thumbnail(connection, media_id, info.get("data"))):
             result["thumbnail"] = f"/api/xiaomi/thumbnail/{media_id}?connection={connection}"
         return result
 
@@ -406,7 +424,7 @@ class XiaomiCloud:
                                               headers={"Referer": CLOUD + "/gallery/h5", "Accept-Encoding": "identity"})
                 try:
                     if response.is_redirect and response.headers.get("location"):
-                        url = xiaomi_url(urljoin(url, response.headers["location"]), STORAGE_HOSTS)
+                        url = xiaomi_url(urljoin(url, response.headers["location"]), THUMBNAIL_HOSTS)
                         continue
                     if response.status_code == 429:
                         retry = response.headers.get("retry-after", "")

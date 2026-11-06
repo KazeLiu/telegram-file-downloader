@@ -153,7 +153,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
       <div class="sidebar-bottom"><div v-if="appModel.status?.download_dir" class="storage-label" :title="appModel.status.download_dir"><Icon name="folder" :size="16" /><span class="truncate">{{ appModel.status.download_dir }}</span></div><button class="account-menu" aria-label="退出管理页面" @click="logout"><Icon name="logout" :size="18" /><span>退出工作台</span></button></div>
     </aside>
     <div class="min-w-0">
-      <main class="page-content" :class="{ 'image-page': appModel.page === 'images' }">
+      <main class="page-content" :class="{ 'image-page': ['images', 'xiaomi'].includes(appModel.page) }">
         <header class="page-heading"><h1>{{ title }}</h1><div v-if="appModel.page === 'overview'" class="flex flex-wrap items-center justify-end gap-2 sm:gap-4"><span class="connection"><span class="status-dot" :class="{ online: running }"></span>{{ phase }}</span><button v-if="appModel.status?.account && appModel.settings?.chat" :class="appModel.settings.enabled ? 'secondary' : 'primary'" :disabled="appModel.busy || appModel.status.pending" @click="toggleWatcher"><Icon :name="appModel.settings.enabled ? 'pause' : 'play'" :size="17" />{{ appModel.settings.enabled ? '暂停收集' : '开始收集' }}</button></div></header>
         <p v-if="appModel.error && appModel.page !== 'xiaomi'" class="notice error" role="alert">{{ appModel.error }}<button class="text-button" @click="refresh">重试</button></p>
         <p v-if="appModel.status?.error && !['history', 'xiaomi'].includes(appModel.page)" class="notice error" role="alert">{{ appModel.status.error }}</p>

@@ -29,6 +29,7 @@ from .organizer import browse, plan_counts
 from .image_library import ImageLibrary
 from .storage import RecycleBin, inside
 from .xiaomi_batch import XiaomiBatch, local_media
+from .xiaomi_local import XiaomiLocalIndex
 from .xiaomi_cloud import CONNECTION_PATTERN, ID_PATTERN, UPLOAD_LIMIT, XiaomiCloud, XiaomiError, upload_media
 
 
@@ -132,6 +133,24 @@ class XiaomiNameMatch(XiaomiConnection):
     names: list[Annotated[str, Field(min_length=1, max_length=255)]] = Field(min_length=1, max_length=2000)
 
 
+class XiaomiAlbumSelection(XiaomiConnection):
+    album: str = Field(pattern=ID_PATTERN)
+
+
+class XiaomiFolderBinding(XiaomiAlbumSelection):
+    path: str = Field(max_length=4096)
+
+
+class XiaomiLocalFile(BaseModel):
+    id: str = Field(pattern=ID_PATTERN)
+    name: str = Field(min_length=1, max_length=255)
+    size: int | None = Field(default=None, ge=0)
+
+
+class XiaomiLocalStatus(XiaomiAlbumSelection):
+    items: list[XiaomiLocalFile] = Field(default_factory=list, max_length=2000)
+
+
 class LocalMediaSelection(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     version: str = Field(min_length=1, max_length=128)
@@ -159,14 +178,20 @@ def create_app():
     library = ImageLibrary(download_dir, data_dir)
     xiaomi = XiaomiCloud(store)
     batch = XiaomiBatch(xiaomi, download_dir)
+    local_index = XiaomiLocalIndex(data_dir, lambda: (
+        runtime.operation_lock.locked() or library.state["running"] or xiaomi.write_lock.locked()
+        or bool(runtime.local_jobs) or bool(runtime.processor and runtime.processor.running)
+        or bool(runtime.manual_task and not runtime.manual_task.done())))
     failures: dict[str, list[float]] = {}
 
     @asynccontextmanager
     async def lifespan(app):
         await runtime.start()
+        local_index.start()
         try:
             yield
         finally:
+            await local_index.close()
             await batch.close()
             await xiaomi.close()
             await library.close()
@@ -394,6 +419,25 @@ def create_app():
                            album: str = Query(pattern=ID_PATTERN), page: int = Query(default=0, ge=0), wall: bool = False):
         return await xiaomi.media(connection, album, page, wall)
 
+    @app.post("/api/xiaomi/local/status")
+    async def xiaomi_local_status(body: XiaomiLocalStatus):
+        owner = xiaomi.local_owner(body.connection)
+        return await asyncio.to_thread(local_index.compare, owner, body.album, [item.model_dump() for item in body.items])
+
+    @app.post("/api/xiaomi/local/bind")
+    async def xiaomi_local_bind(body: XiaomiFolderBinding):
+        owner = xiaomi.local_owner(body.connection)
+        try:
+            local_index.bind(owner, body.album, body.path.strip())
+        except OSError:
+            raise ValueError("无法读取此目录，请检查路径、挂载和读取权限") from None
+        return {"ok": True}
+
+    @app.post("/api/xiaomi/local/refresh")
+    async def xiaomi_local_refresh(body: XiaomiAlbumSelection):
+        local_index.refresh(xiaomi.local_owner(body.connection), body.album)
+        return {"ok": True}
+
     @app.post("/api/xiaomi/media/match")
     async def xiaomi_match(body: XiaomiNameMatch):
         return await xiaomi.match_media(body.connection, body.album, body.page, set(body.names))
@@ -402,6 +446,12 @@ def create_app():
     async def xiaomi_thumbnail(media_id: Annotated[str, FastAPIPath(pattern=ID_PATTERN)],
                                connection: str = Query(pattern=CONNECTION_PATTERN)):
         data, media_type = await xiaomi.thumbnail(connection, media_id)
+        return Response(data, media_type=media_type)
+
+    @app.get("/api/xiaomi/album-cover/{album_id}")
+    async def xiaomi_album_cover(album_id: Annotated[str, FastAPIPath(pattern=ID_PATTERN)],
+                                  connection: str = Query(pattern=CONNECTION_PATTERN)):
+        data, media_type = await xiaomi.thumbnail(connection, "album:" + album_id)
         return Response(data, media_type=media_type)
 
     @app.post("/api/xiaomi/recycle")

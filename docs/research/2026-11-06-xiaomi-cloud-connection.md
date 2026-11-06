@@ -9,6 +9,14 @@ reference_commit: 340de4a231c65fa9780c2577ad30954effb5cf07
 
 ## 接入时补充的证据
 
+2026-11-06，经用户授权在已登录的官方网页只读查看“酷安”相册：
+
+- `/gallery/user/album/list` 的相册记录提供 `thumbnails[0].url` 作为封面。
+- `/gallery/user/galleries` 的媒体记录提供 `thumbnailInfo.data`，该次响应中带 `isUrl`，未包含缩略图加密元信息。
+- 页面实际成功加载的小图域名包括 `tos.xmssdn.micloud.mi.com`、`ali.xmssdn.micloud.mi.com`、`kssh3f.xmssdn.micloud.mi.com` 和 `kssh2thumb.xmssdn.micloud.mi.com`；响应为 JPEG。仅为缩略图代理加入 `xmssdn.micloud.mi.com` 子域白名单，上传存储白名单不变。
+
+这里只记录字段和域名，不保存带签名的图片地址、媒体名称、账号凭据或原始响应。加密缩略图仍需对应的解密能力，不用原图下载代替缩略图。
+
 独立页面的连接和读取沿用下文的固定快照。写入参考[小米官方云相册前端](https://cdn.web-global.fds.api.mi-img.com/mcfe--micloud-web-gallery/static/static/js/main.f7a44e87.chunk.js)和[分块 Worker](https://cdn.web-global.fds.api.mi-img.com/mcfe--fds-static-files/worker/cryptojs-upload.0cfed567.js)：
 
 - 回收使用 `POST /gallery/info/delete`，提交单个媒体 `id`；不调用清空或永久删除接口。小米的[删除手册](https://i.mi.com/guide/zh-CN/gallery/delete)说明删除会同步到已开启相册同步的设备。
