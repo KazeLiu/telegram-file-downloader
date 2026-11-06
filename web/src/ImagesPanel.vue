@@ -4,27 +4,26 @@ import { useRoute, useRouter } from '#imports'
 import { queryText, queryPage } from './routeState'
 import { api, bytes, imageThumbnail as thumbnail, type LibraryPicture as Picture } from './api'
 import ImageReviewDialog from './ImageReviewDialog.vue'
+import VirtualPhotoWall from './VirtualPhotoWall.vue'
 import Icon from './Icon.vue'
-import { formatNames, photoDay, takenAt } from './xiaomiMedia'
+import { formatNames, photoDay } from './xiaomiMedia'
 
 interface Recycled { id: string; original: string; size: number; created: number; reason: string; state: string }
 type View = 'all' | 'candidates' | 'recycle'
 const route = useRoute()
 const router = useRouter()
-const timeSources = { taken: '拍摄时间', digitized: '数字化时间', image: '图片日期', created: '文件创建时间', modified: '修改时间' }
 const imageModel = reactive({ view: 'all' as View, organizing: false, items: [] as Picture[], trash: [] as Recycled[], page: 1,
   total: 0, pageSize: 50, nextCursor: null as number | null, recycleRoot: 'downloads', roots: [] as { id: string; path: string }[],
   cleanup: { running: false, checked: 0, removed: 0, failed: 0 },
   counts: { total: 0, candidates: 0, errors: 0 }, scan: { running: false, done: 0, total: 0, error: '' },
-  search: '', appliedSearch: '', loading: false, loadingMore: false, busy: false, error: '', selected: new Map<number, Picture>(),
-  confirmation: [] as Picture[], picture: null as Picture | null, broken: {} as Record<number, boolean> })
+  search: '', appliedSearch: '', loading: false, loadingMore: false, busy: false, error: '', selected: new Map<number, Picture>(), selectedDays: new Set<string>(),
+  confirmation: [] as Picture[], broken: {} as Record<number, boolean> })
 const props = defineProps<{ lastLocalRecycle: string[] }>()
 const emit = defineEmits<{ message: [value: string]; recycled: [names: string[]] }>()
 const confirmDialog = ref<HTMLDialogElement>()
 const namesDialog = ref<HTMLDialogElement>()
 const namesField = ref<HTMLTextAreaElement>()
 const canCopy = typeof navigator !== 'undefined' && !!navigator.clipboard
-const pictureDialog = ref<HTMLDialogElement>()
 const reviewDialog = ref<InstanceType<typeof ImageReviewDialog>>()
 const moreButton = ref<HTMLButtonElement>()
 const selectedCount = computed(() => imageModel.selected.size)
@@ -58,7 +57,7 @@ async function readRoute() {
     loadedScope = scope; ++loadRevision
     imageModel.loading = imageModel.loadingMore = false
     Object.assign(imageModel, { view, page, search, appliedSearch: search, recycleRoot: root, items: [], trash: [], total: 0, nextCursor: null })
-    clearSelection(); pictureDialog.value?.close(); reviewDialog.value?.close(); activeReview = null
+    clearSelection(); reviewDialog.value?.close(); activeReview = null
     if (view === 'recycle') imageModel.organizing = false
     await load()
   }
@@ -80,7 +79,7 @@ function reviewChanged(id: number) {
 }
 
 function isSelected(item: Picture) { return imageModel.selected.get(item.id)?.version === item.version }
-function clearSelection() { imageModel.selected.clear() }
+function clearSelection() { imageModel.selected.clear(); imageModel.selectedDays.clear() }
 function listImages(after?: number | null) {
   const query = new URLSearchParams({ candidate: String(imageModel.view === 'candidates'), search: imageModel.appliedSearch })
   if (after != null) query.set('after', String(after))
@@ -108,9 +107,11 @@ async function load({ poll = false, append = false } = {}) {
       imageModel.scan = result.scan; imageModel.counts = result.counts
       if (append) {
         const loaded = new Set(imageModel.items.map(item => item.id))
-        imageModel.items.push(...result.items.filter(item => !loaded.has(item.id)))
+        const added = result.items.filter(item => !loaded.has(item.id))
+        imageModel.items.push(...added)
+        for (const item of added) if (imageModel.selectedDays.has(photoDay(item.sort_time))) imageModel.selected.set(item.id, item)
         imageModel.total = result.total; imageModel.nextCursor = result.next_cursor
-      } else if (!poll || (!imageModel.organizing && activeReview === null && !pictureDialog.value?.open && !confirmDialog.value?.open)) {
+      } else if (!poll || (!imageModel.organizing && activeReview === null && !confirmDialog.value?.open)) {
         imageModel.items = result.items; imageModel.total = result.total; imageModel.nextCursor = result.next_cursor; imageModel.broken = {}
       }
     }
@@ -142,6 +143,7 @@ function toggleOrganizing() {
   if (!imageModel.organizing) clearSelection()
 }
 function selectLoaded() {
+  imageModel.selectedDays.clear()
   const selecting = !allSelected.value
   for (const item of imageModel.items) {
     if (selecting) imageModel.selected.set(item.id, item)
@@ -150,9 +152,19 @@ function selectLoaded() {
 }
 function select(item: Picture, checked: boolean) {
   if (checked) imageModel.selected.set(item.id, item)
-  else imageModel.selected.delete(item.id)
+  else { imageModel.selected.delete(item.id); imageModel.selectedDays.delete(photoDay(item.sort_time)) }
 }
-async function preview(item: Picture) { imageModel.picture = item; await nextTick(); pictureDialog.value?.showModal() }
+function selectDay(day: string, items: Picture[]) {
+  if (blocked.value) return
+  imageModel.organizing = true
+  const selecting = !items.every(isSelected)
+  if (selecting) imageModel.selectedDays.add(day)
+  else imageModel.selectedDays.delete(day)
+  for (const item of items) {
+    if (selecting) imageModel.selected.set(item.id, item)
+    else imageModel.selected.delete(item.id)
+  }
+}
 function stopPress(event?: PointerEvent) {
   if (!press || (event && press.pointerId !== event.pointerId)) return
   clearTimeout(press.timer)
@@ -167,7 +179,7 @@ function startPress(event: PointerEvent, item: Picture) {
     press = undefined
     if (!button.isConnected || button.disabled) return
     held = true
-    void preview(item)
+    review(item)
   }, 450)
   press = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timer }
 }
@@ -216,7 +228,7 @@ async function recycle() {
   } catch (error) { failures.push((error as Error).message) }
   finally {
     if (moved.size) {
-      confirmDialog.value?.close(); pictureDialog.value?.close()
+      confirmDialog.value?.close()
       const removed = targets.filter(item => moved.has(item.id))
       emit('recycled', removed.map(item => item.name))
       moved.forEach(id => imageModel.selected.delete(id))
@@ -293,13 +305,12 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
         <span class="muted" title="拍摄时间优先，其次图片日期、文件创建时间、修改时间">{{ imageModel.total }} 张 · 按照片时间从新到旧</span>
         <button v-if="imageModel.organizing" class="text-button" :disabled="blocked || !imageModel.items.length" @click="selectLoaded">{{ allSelected ? '取消已加载选择' : '全选已加载' }}</button>
       </div>
-      <div class="image-grid" :aria-busy="imageModel.loading || imageModel.loadingMore">
-        <template v-for="(item, index) in imageModel.items" :key="item.id + ':' + item.version">
-        <h3 v-if="index === 0 || photoDay(item.sort_time) !== photoDay(imageModel.items[index - 1]!.sort_time)" class="col-span-full pt-3 pb-1 text-sm font-medium">{{ photoDay(item.sort_time) }}</h3>
+      <VirtualPhotoWall class="image-grid" :items="imageModel.items" :disabled="blocked" :is-selected="isSelected" :aria-busy="imageModel.loading || imageModel.loadingMore" @toggle-day="selectDay">
+        <template #default="{ item }">
         <article class="image-card">
           <button type="button" class="image-preview" :title="item.name" :disabled="blocked"
             :aria-label="(imageModel.organizing ? '选择 ' : '快速审阅 ') + item.name" :aria-pressed="imageModel.organizing ? isSelected(item) : undefined"
-            aria-keyshortcuts="Shift+Enter" @click="activateImage($event, item)" @keydown.shift.enter.prevent="!$event.repeat && preview(item)"
+            aria-keyshortcuts="Shift+Enter" @click="activateImage($event, item)" @keydown.shift.enter.prevent="!$event.repeat && review(item)"
             @pointerdown="startPress($event, item)" @pointermove="movePress" @pointerup="stopPress" @pointerleave="stopPress" @pointercancel="stopPress" @contextmenu.prevent>
             <span class="image-thumb">
               <img v-if="item.width && !item.error && !imageModel.broken[item.id]" :src="thumbnail(item)" alt="" draggable="false" loading="lazy" decoding="async" @error="imageModel.broken[item.id] = true" />
@@ -308,7 +319,7 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
           </button>
         </article>
         </template>
-      </div>
+      </VirtualPhotoWall>
       <div v-if="canLoadMore" class="image-more"><button ref="moreButton" class="text-button" :disabled="toolbarBlocked" @click="loadMore">{{ imageModel.loadingMore ? '正在加载…' : '加载更多' }}</button></div>
       <div v-if="!imageModel.items.length && !canLoadMore && !imageModel.loading && !imageModel.error" class="empty-list tall">
         <Icon name="photo" :size="38" />
@@ -333,17 +344,6 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
       <div class="section-heading"><h2 id="local-recycle-names">最近回收 · {{ lastLocalRecycle.length }} 张</h2><button class="icon-button" aria-label="关闭清单" @click="namesDialog?.close()"><Icon name="close" /></button></div>
       <textarea ref="namesField" class="my-4" readonly rows="6" aria-label="实际回收的文件名" :value="formatNames(lastLocalRecycle)" />
       <div class="dialog-actions"><button class="secondary" @click="copyRecycledNames">{{ canCopy ? '复制文件名' : '选中文件名' }}</button></div>
-    </dialog>
-    <dialog ref="pictureDialog" class="task-dialog image-dialog">
-      <template v-if="imageModel.picture">
-        <div class="section-heading"><h2>图片详情</h2><button class="icon-button" aria-label="关闭图片详情" @click="pictureDialog?.close()"><Icon name="close" /></button></div>
-        <img v-if="imageModel.picture.width && !imageModel.picture.error && !imageModel.broken[imageModel.picture.id]" :src="thumbnail(imageModel.picture)" :alt="imageModel.picture.name" />
-        <div v-else class="empty-list"><Icon name="photo" :size="38" /><p>{{ imageModel.picture.error || (imageModel.broken[imageModel.picture.id] ? '缩略图加载失败，请刷新图片' : '缩略图尚未生成，请稍后刷新') }}</p></div>
-        <p class="image-dialog-name">{{ imageModel.picture.name }}</p>
-        <p class="muted"><template v-if="imageModel.picture.width">{{ imageModel.picture.width }} × {{ imageModel.picture.height }} · </template>{{ bytes(imageModel.picture.size) }}<span v-if="imageModel.picture.monochrome"> · 黑白候选</span></p>
-        <p class="muted mt-2">{{ imageModel.picture.time_source ? timeSources[imageModel.picture.time_source] : '索引时间' }} · {{ takenAt(imageModel.picture.sort_time) }}</p>
-        <div v-if="imageModel.organizing" class="dialog-actions"><button class="secondary" @click="pictureDialog?.close()">关闭</button><button class="danger" :disabled="blocked" @click="confirm([imageModel.picture!])"><Icon name="trash" :size="16" />移入回收站</button></div>
-      </template>
     </dialog>
     <dialog ref="confirmDialog" class="task-dialog recycle-dialog" @cancel="imageModel.busy && $event.preventDefault()">
       <div class="section-heading"><h2>移入回收站？</h2><button class="icon-button" :disabled="imageModel.busy" aria-label="取消回收" @click="confirmDialog?.close()"><Icon name="close" /></button></div>

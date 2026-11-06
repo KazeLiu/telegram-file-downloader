@@ -2,6 +2,7 @@
 import { animate, AnimatePresence, MotionConfig, motion, useMotionValue, useReducedMotion } from 'motion-v'
 import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { bytes, imageThumbnail, type LibraryPicture as Picture } from './api'
+import { takenAt } from './xiaomiMedia'
 import Icon from './Icon.vue'
 
 type Decision = 'keep' | 'recycle'
@@ -28,6 +29,7 @@ const decisions = reactive(new Map<number, Decision>())
 const history = reactive<{ index: number; previous?: Decision }[]>([])
 const broken = reactive(new Set<number>())
 const current = computed<Picture | undefined>(() => queue.value[index.value])
+const timeSources = { taken: '拍摄时间', digitized: '数字化时间', image: '图片日期', created: '文件创建时间', modified: '修改时间' }
 watch(current, item => { if (item && dialog.value?.open) emit('change', item.id) })
 const pending = computed(() => queue.value.filter((_, i) => needsRecycle(i)))
 const canAdvance = computed(() => index.value + 1 < queue.value.length || cursor.value !== null)
@@ -205,7 +207,7 @@ function needsRecycle(i: number) { return decisions.get(i) === 'recycle' }
 
       <div class="review-caption" aria-live="polite">
         <template v-if="current">
-          <strong :title="current.name">{{ current.name }}</strong>
+          <div class="min-w-0 flex-1"><strong :title="current.name">{{ current.name }}</strong><small class="block text-xs text-muted">{{ current.time_source ? timeSources[current.time_source] : '索引时间' }} · {{ takenAt(current.sort_time) }}</small></div>
           <span v-if="needsRecycle(index)" class="text-danger">待回收</span>
           <span class="muted">{{ bytes(current.size) }}</span>
         </template>
@@ -259,7 +261,7 @@ function needsRecycle(i: number) { return decisions.get(i) === 'recycle' }
 .review-previous svg { rotate: 180deg; }
 .review-next { @apply right-1.5; }
 .review-caption { @apply flex min-h-[22px] items-center gap-3; }
-.review-caption strong { @apply min-w-0 truncate; }
+.review-caption strong { @apply block min-w-0 truncate; }
 .review-caption span { @apply flex-none; }
 .review-caption .muted { @apply ml-auto; }
 .review-actions .recycle { @apply text-danger; }

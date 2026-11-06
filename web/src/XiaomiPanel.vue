@@ -8,6 +8,7 @@ import XiaomiBatchUpload from './XiaomiBatchUpload.vue'
 import XiaomiNameRecycle from './XiaomiNameRecycle.vue'
 import XiaomiRecycleDialog from './XiaomiRecycleDialog.vue'
 import XiaomiThumbnail from './XiaomiThumbnail.vue'
+import VirtualPhotoWall from './VirtualPhotoWall.vue'
 import XiaomiLocalBinding from './XiaomiLocalBinding.vue'
 import XiaomiLocalIndicator from './XiaomiLocalIndicator.vue'
 import { nextWallPage, photoDay, takenAt, type CloudMedia as Media, type LocalFileState } from './xiaomiMedia'
@@ -21,7 +22,7 @@ const emit = defineEmits<{ message: [text: string] }>()
 const cloud = reactive({ account: null as Account | null, albums: [] as Album[], album: '', items: [] as Media[],
   wall: false, page: 0, last: true, ready: false, busy: '', error: '', initialized: false, qr: '', verifying: false,
   coverErrors: new Set<string>(), bound: false, localStates: {} as Record<string, LocalFileState>,
-  organizing: false, recycleActive: false, selected: new Map<string, Media>() })
+  organizing: false, recycleActive: false, selected: new Map<string, Media>(), selectedDays: new Set<string>(), thumbnailErrors: new Set<string>() })
 const upload = reactive({ file: null as File | null, name: '', error: '' })
 const recycleDialog = ref<InstanceType<typeof XiaomiRecycleDialog>>()
 const uploadDialog = ref<HTMLDialogElement>()
@@ -67,8 +68,10 @@ async function loadMedia(page = 0, append = false) {
   const result = await api<{ items: Media[]; last: boolean }>(`/xiaomi/media?${params({ album: cloud.album, page: String(page), wall: String(cloud.wall) })}`)
   if (append) {
     const existing = new Set(cloud.items.map(item => item.id))
-    cloud.items.push(...result.items.filter(item => !existing.has(item.id)))
-  } else { cloud.items = result.items; cloud.selected.clear(); wallRemoved = 0 }
+    const added = result.items.filter(item => !existing.has(item.id))
+    cloud.items.push(...added)
+    for (const item of added) if (cloud.selectedDays.has(photoDay(item.sort_time))) cloud.selected.set(item.id, item)
+  } else { cloud.items = result.items; clearSelection(); cloud.thumbnailErrors.clear(); wallRemoved = 0 }
   cloud.last = result.last; cloud.page = page; cloud.ready = true
 }
 
@@ -76,15 +79,18 @@ function resetMedia() {
   wallRemoved = 0
   cloud.items = []; cloud.page = 0; cloud.last = true; cloud.ready = false
   cloud.localStates = {}
-  cloud.selected.clear()
+  clearSelection(); cloud.thumbnailErrors.clear()
 }
 
+function clearSelection() { cloud.selected.clear(); cloud.selectedDays.clear() }
+function isSelected(item: Media) { return cloud.selected.has(item.id) }
 function select(item: Media) {
-  if (cloud.selected.has(item.id)) cloud.selected.delete(item.id)
+  if (cloud.selected.has(item.id)) { cloud.selected.delete(item.id); cloud.selectedDays.delete(photoDay(item.sort_time)) }
   else cloud.selected.set(item.id, item)
 }
 
 function selectLoaded() {
+  cloud.selectedDays.clear()
   const selecting = !allSelected.value
   for (const item of cloud.items) {
     if (selecting) cloud.selected.set(item.id, item)
@@ -92,9 +98,21 @@ function selectLoaded() {
   }
 }
 
+function selectDay(day: string, items: Media[]) {
+  if (cloud.busy || cloud.recycleActive) return
+  cloud.organizing = true
+  const selecting = !items.every(isSelected)
+  if (selecting) cloud.selectedDays.add(day)
+  else cloud.selectedDays.delete(day)
+  for (const item of items) {
+    if (selecting) cloud.selected.set(item.id, item)
+    else cloud.selected.delete(item.id)
+  }
+}
+
 function toggleOrganizing() {
   cloud.organizing = !cloud.organizing
-  cloud.selected.clear()
+  clearSelection()
   if (cloud.organizing && !cloud.wall) {
     return albumRoute(cloud.album, true)
   }
@@ -322,20 +340,19 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
           <span role="status">已选 {{ selectedCount }} 项</span>
           <button class="text-button" :disabled="!!cloud.busy || !cloud.items.length" @click="selectLoaded">{{ allSelected ? '取消已加载选择' : '全选已加载' }}</button>
         </div>
-        <ul v-if="cloud.wall && cloud.items.length" class="cloud-wall">
-          <template v-for="(item, index) in cloud.items" :key="item.id">
-          <li v-if="index === 0 || photoDay(item.sort_time) !== photoDay(cloud.items[index - 1]!.sort_time)" class="col-span-full pt-3 pb-1"><h3 class="text-sm font-medium">{{ photoDay(item.sort_time) }}</h3></li>
-          <li class="relative min-w-0">
+        <VirtualPhotoWall v-if="cloud.wall && cloud.items.length" class="cloud-wall" :items="cloud.items" caption :disabled="!!cloud.busy || cloud.recycleActive" :is-selected="isSelected" @toggle-day="selectDay">
+          <template #default="{ item }">
+          <article class="relative min-w-0">
             <div class="relative">
-              <button v-if="cloud.organizing" type="button" class="image-preview rounded-lg" :aria-label="'选择 ' + item.name" :aria-pressed="cloud.selected.has(item.id)" :disabled="!!cloud.busy" @click="select(item)"><span class="image-thumb"><XiaomiThumbnail :item="item" /></span></button>
-              <XiaomiThumbnail v-else :item="item" />
+              <button v-if="cloud.organizing" type="button" class="image-preview rounded-lg" :aria-label="'选择 ' + item.name" :aria-pressed="cloud.selected.has(item.id)" :disabled="!!cloud.busy" @click="select(item)"><span class="image-thumb"><XiaomiThumbnail :item="item" :broken="cloud.thumbnailErrors.has(item.id)" @error="cloud.thumbnailErrors.add(item.id)" /></span></button>
+              <XiaomiThumbnail v-else :item="item" :broken="cloud.thumbnailErrors.has(item.id)" @error="cloud.thumbnailErrors.add(item.id)" />
               <XiaomiLocalIndicator v-if="cloud.bound" :state="cloud.localStates[item.id] || 'unknown'" dot />
             </div>
             <button v-if="!cloud.organizing" class="wall-recycle" :aria-label="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="15" /></button>
-            <p class="truncate text-xs text-muted" :title="item.name">{{ item.name }}</p>
-          </li>
+            <p class="h-[20px] truncate text-xs leading-[20px] text-muted" :title="item.name">{{ item.name }}</p>
+          </article>
           </template>
-        </ul>
+        </VirtualPhotoWall>
         <ul v-else-if="cloud.items.length" class="cloud-files">
           <li v-for="item in cloud.items" :key="item.id" :class="{ 'is-selected': cloud.organizing && cloud.selected.has(item.id) }">
             <component :is="cloud.organizing ? 'button' : 'div'" class="cloud-file" :class="{ 'cloud-file-select': cloud.organizing }" :type="cloud.organizing ? 'button' : undefined"

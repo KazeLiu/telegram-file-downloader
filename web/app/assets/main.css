@@ -303,8 +303,6 @@
   img { @apply absolute inset-0 size-full object-cover; }
 }
 .image-more { text-align: center; margin-top: 12px; }
-.image-dialog { width: min(780px, calc(100% - 32px)); > img { display: block; width: 100%; height: min(50vh, calc(90vh - 280px), 560px); object-fit: contain; margin: 20px 0; background: #f5f5f7; border-radius: 8px; } .dialog-actions { margin-top: 24px; } }
-.image-dialog-name { overflow-wrap: anywhere; margin-bottom: 8px; }
 .recycle-dialog { width: min(560px, calc(100% - 32px)); > p { margin: 20px 0; } }
 .recycle-confirm-list { max-height: 35vh; overflow-y: auto; margin-bottom: 24px; p { padding: 10px 0; border-bottom: 1px solid var(--color-soft); font-size: 14px; overflow-wrap: anywhere; } }
 .recycle-help { margin: 0 0 24px; }
