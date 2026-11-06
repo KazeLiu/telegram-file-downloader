@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import asyncio
 import os
+import time
+from heapq import nsmallest
 from pathlib import Path
 
 from .files import safe_filename
@@ -31,6 +33,20 @@ def cleanup_counts(plan):
                 deleted_txts=sum(Path(name).suffix.lower() == ".txt" for name in deleted))
 
 
+def plan_counts(plan):
+    return dict(move_total=len(plan.get("moves", [])),
+                moved_files=sum(bool(move["done"]) for move in plan.get("moves", [])), **cleanup_counts(plan))
+
+
+def restore_progress(plan, progress):
+    for move in plan["moves"][:progress.get("move_cursor", 0)]:
+        move["done"] = True
+    planned, deleted = cleanup_lists(plan)
+    known = set(deleted)
+    deleted.extend(name for name in planned[:progress.get("cleanup_cursor", 0)] if name not in known)
+    return plan
+
+
 def inside(root: Path, value: str = "") -> Path:
     relative = Path(value)
     if relative.is_absolute() or ".." in relative.parts:
@@ -45,37 +61,63 @@ def inside(root: Path, value: str = "") -> Path:
     return current
 
 
-def entries(root: Path, source: Path):
+def is_link(entry):
+    return entry.is_symlink() or (os.name == "nt" and entry.stat(follow_symlinks=False).st_file_attributes & 0x400)
+
+
+def entries(root: Path, source: Path, directories=None, skip_root_files=False):
     if not source.is_dir():
         raise ValueError("选择的文件夹不存在")
-    for directory, folders, files in os.walk(source, followlinks=False):
-        folders[:] = sorted(name for name in folders if Path(directory) != root or (
-            name != ".tg-work" and not name.startswith(".tg-extract-")))
-        for name in [*folders, *sorted(files)]:
-            item = Path(directory) / name
-            inside(root, str(item.relative_to(root)))
-            if item.is_file():
-                yield item
+    pending = [source]
+    while pending:
+        folder = pending.pop()
+        # Validate ancestors once per directory; execution revalidates every affected path.
+        inside(root, str(folder.relative_to(root)))
+        if directories is not None and folder != root:
+            directories.append(str(folder))
+        folders, files = [], []
+        with os.scandir(folder) as scan:
+            for entry in scan:
+                if folder == root and (entry.name == ".tg-work" or entry.name.startswith(".tg-extract-")):
+                    continue
+                directory = entry.is_dir(follow_symlinks=False)
+                if folder == root and skip_root_files and not directory and not (
+                    is_cleanup_file(entry.name) or entry.name.endswith((".part", ".part-journal"))
+                ):
+                    continue
+                if is_link(entry):
+                    raise ValueError("不允许操作链接目录或文件")
+                if directory:
+                    folders.append(entry.name)
+                elif entry.is_file(follow_symlinks=False):
+                    files.append(entry.name)
+        yield from (folder / name for name in sorted(files))
+        pending.extend(folder / name for name in sorted(folders, reverse=True))
 
 
 def browse(root, value="", page=1, search=""):
     folder = inside(root, value)
     if not folder.is_dir() or (Path(value).parts and Path(value).parts[0] == ".tg-work"):
         raise ValueError("文件夹不存在或属于工作流内部目录")
+    total = 0
+    needle = search.casefold()
+    def candidates():
+        nonlocal total
+        with os.scandir(folder) as scan:
+            for entry in scan:
+                if folder == root and (entry.name == ".tg-work" or entry.name.startswith(".tg-extract-")):
+                    continue
+                if needle not in entry.name.casefold() or is_link(entry):
+                    continue
+                total += 1
+                yield entry, entry.is_dir(follow_symlinks=False)
+    selected = nsmallest(page * 100, candidates(), key=lambda item: (not item[1], item[0].name.casefold(), item[0].name))
     items = []
-    for entry in folder.iterdir():
-        if (folder == root and (entry.name == ".tg-work" or entry.name.startswith(".tg-extract-"))) or entry.is_symlink():
-            continue
-        if search.casefold() not in entry.name.casefold():
-            continue
-        stat = entry.stat()
-        if getattr(stat, "st_file_attributes", 0) & 0x400:
-            continue
-        items.append(dict(name=entry.name, path=entry.relative_to(root).as_posix(), directory=entry.is_dir(),
-                          size=stat.st_size if entry.is_file() else None, modified=stat.st_mtime))
-    items.sort(key=lambda item: (not item["directory"], item["name"].casefold()))
-    return dict(path=folder.relative_to(root).as_posix(), root=str(root), items=items[(page - 1) * 100:page * 100],
-                total=len(items), page=page)
+    for entry, directory in selected[(page - 1) * 100:]:
+        stat = entry.stat(follow_symlinks=False)
+        items.append(dict(name=entry.name, path=(folder / entry.name).relative_to(root).as_posix(), directory=directory,
+                          size=stat.st_size if entry.is_file(follow_symlinks=False) else None, modified=stat.st_mtime))
+    return dict(path=folder.relative_to(root).as_posix(), root=str(root), items=items, total=total, page=page)
 
 
 def flatten_target(root, source, file, prefix, reserved):
@@ -89,7 +131,7 @@ def flatten_target(root, source, file, prefix, reserved):
     if file == target:
         return None
     serial = 2
-    while target.exists() or target.name.casefold() in reserved:
+    while target.name.casefold() in reserved:
         target = root / f"{Path(name).stem} ({serial}){Path(name).suffix}"
         serial += 1
     reserved.add(target.name.casefold())
@@ -97,18 +139,27 @@ def flatten_target(root, source, file, prefix, reserved):
 
 
 def make_plan(root: Path, source: Path, prefix: str, delete_psd=False, protect_partials=True):
-    moves, cleanup, reserved = [], [], set()
-    for file in entries(root, source):
+    started = time.monotonic()
+    LOGGER.info("organize plan scanning source=%s", source)
+    moves, cleanup, directories = [], [], []
+    with os.scandir(root) as scan:
+        reserved = {entry.name.casefold() for entry in scan}
+    for file in entries(root, source, directories, skip_root_files=True):
         if protect_partials and file.name.endswith((".part", ".part-journal")):
             raise ValueError("目录中有尚未完成的下载，请等待完成后再整理")
         if delete_psd and is_cleanup_file(file):
             cleanup.append(str(file))
             continue
+        if file.parent == root:
+            continue
         target = flatten_target(root, source, file, prefix, reserved)
         if target is None:
             continue
         moves.append(dict(source=str(file), target=str(target), done=False))
-    return dict(source=str(source), moves=moves, cleanup="psd_txt", cleanup_files=cleanup, deleted_files=[], complete=False)
+    LOGGER.info("organize plan ready source=%s moves=%s cleanup=%s directories=%s elapsed=%.3fs",
+                source, len(moves), len(cleanup), len(directories), time.monotonic() - started)
+    return dict(source=str(source), directories=directories, moves=moves, cleanup="psd_txt",
+                cleanup_files=cleanup, deleted_files=[], complete=False)
 
 
 def upgrade_cleanup_plan(root, plan, prefix, delete_psd):
@@ -116,7 +167,9 @@ def upgrade_cleanup_plan(root, plan, prefix, delete_psd):
     if plan.get("cleanup") == "psd_txt":
         return plan
     source = Path(plan["source"])
-    reserved = {Path(move["target"]).name.casefold() for move in plan["moves"]}
+    with os.scandir(root) as scan:
+        reserved = {entry.name.casefold() for entry in scan}
+    reserved.update(Path(move["target"]).name.casefold() for move in plan["moves"])
     if plan.get("flatten", True):
         for name in plan.get("pdfs", []):
             file = inside(root, str(Path(name).relative_to(root)))
@@ -140,10 +193,17 @@ def upgrade_cleanup_plan(root, plan, prefix, delete_psd):
     return plan
 
 
-async def execute_plan(root: Path, plan, save, on_phase=None):
+async def execute_plan(root: Path, plan, save, on_phase=None, save_progress=None):
+    planned, deleted = cleanup_lists(plan)
+    deleted_set = set(deleted)
+    # Retain both cursors when a resumed job is already in the cleanup phase.
+    progress = dict(
+        move_cursor=next((i for i, move in enumerate(plan["moves"]) if not move["done"]), len(plan["moves"])),
+        cleanup_cursor=next((i for i, name in enumerate(planned) if name not in deleted_set), len(planned)),
+        **plan_counts(plan))
     if on_phase:
         on_phase("organize")
-    for move in plan["moves"]:
+    for index, move in enumerate(plan["moves"]):
         if move["done"]:
             continue
         source, target = Path(move["source"]), Path(move["target"])
@@ -160,26 +220,39 @@ async def execute_plan(root: Path, plan, save, on_phase=None):
         elif not target.is_file():
             raise ValueError("整理中断后找不到源文件和目标文件，请检查挂载")
         move["done"] = True
-        save(plan)
+        progress.update(move_cursor=index + 1, moved_files=progress["moved_files"] + 1)
+        if save_progress:
+            save_progress(progress)
+        else:
+            save(plan)
         LOGGER.info("organize moved source=%s target=%s", source, target)
         await asyncio.sleep(0)
     if on_phase:
         on_phase("cleanup")
-    planned, deleted = cleanup_lists(plan)
-    for name in planned:
-        if name in deleted:
+    for index, name in enumerate(planned):
+        if name in deleted_set:
             continue
         file = inside(root, str(Path(name).relative_to(root)))
         if not is_cleanup_file(file):
             raise ValueError("清理清单中包含非 PSD/TXT 文件，已停止清理")
         file.unlink(missing_ok=True)
         deleted.append(name)
-        save(plan)
+        deleted_set.add(name)
+        counter = "deleted_psds" if file.suffix.lower() == ".psd" else "deleted_txts"
+        progress.update(cleanup_cursor=index + 1, cleanup_done=progress["cleanup_done"] + 1)
+        progress[counter] += 1
+        if save_progress:
+            save_progress(progress)
+        else:
+            save(plan)
         LOGGER.info("organize deleted cleanup file type=%s path=%s", file.suffix.lower(), file)
         await asyncio.sleep(0)
     source = Path(plan["source"])
-    for directory, _, _ in os.walk(source, topdown=False, followlinks=False):
+    directories = reversed(plan["directories"]) if "directories" in plan else (
+        directory for directory, _, _ in os.walk(source, topdown=False, followlinks=False))
+    for directory in directories:
         folder = Path(directory)
+        inside(root, str(folder.relative_to(root)))
         if folder != root and folder.exists() and not any(folder.iterdir()):
             folder.rmdir()
     plan["complete"] = True

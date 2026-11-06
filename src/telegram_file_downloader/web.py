@@ -20,7 +20,7 @@ from .console_store import ConsoleStore
 from .config import compact_connection_input
 from .web_runtime import WebRuntime, telegram_proxy
 from .diagnostics import configure_logs, read_log
-from .organizer import browse, cleanup_counts
+from .organizer import browse, plan_counts
 
 
 class Credentials(BaseModel):
@@ -347,12 +347,10 @@ def create_app():
     @app.get("/api/files/job")
     async def organize_job():
         job = store.get("manual_job", {})
-        plan = job.get("plan", {})
-        moved = sum(bool(move["done"]) for move in plan.get("moves", []))
-        counts = cleanup_counts(plan)
+        counts = store.get(f"progress:{job['plan_key']}", job["summary"]) if "plan_key" in job else plan_counts(job.get("plan", {}))
         return dict(status=job.get("status", ""), error=job.get("error", ""),
-                    total=len(plan.get("moves", [])) + counts["cleanup_total"], done=moved + counts["cleanup_done"],
-                    moved_files=moved, result=job.get("result"), **counts)
+                    total=counts["move_total"] + counts["cleanup_total"], done=counts["moved_files"] + counts["cleanup_done"],
+                    result=job.get("result"), **counts)
 
     @app.get("/api/logs")
     async def logs(name: str = "collector.log"):

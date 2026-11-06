@@ -411,7 +411,7 @@ class ConsoleProcessor:
             # Output intent survives interruption of the later move/delete workflow.
             output = Path(leader["output"]) if leader["output"] else None
             plan_key = f"organize:{group}"
-            plan = self.store.get(plan_key)
+            plan = self.store.get_plan(plan_key)
             if not plan and (not output or not output.is_dir()):
                 output = await extract_archive(Path(leader["path"]), self.settings["archive_passwords"], leader["filename"], allow_volumes=split or bool(leader.get("volume")))
             for task in members:
@@ -422,24 +422,25 @@ class ConsoleProcessor:
                 if not self.settings["flatten"]:
                     plan["moves"] = []
                 plan["flatten"] = self.settings["flatten"]
-                self.store.put(plan_key, plan)
+                self.store.put_plan(plan_key, plan)
             if plan.get("cleanup") != "psd_txt":
                 plan = await asyncio.to_thread(upgrade_cleanup_plan, self.directory, plan, resource_name(leader["filename"]), self.settings["delete_psd"])
-                self.store.put(plan_key, plan)
+                self.store.put_plan(plan_key, plan)
             if plan.get("legacy_deleted_pdfs"):
                 for member in members:
                     self.store.update_task(member["id"], deleted_pdfs=plan["legacy_deleted_pdfs"],
                         warning="旧版曾删除此资源的 PDF；本次已停止 PDF 清理，已删除文件需从原包恢复")
             if not self.settings["delete_psd"]:
                 plan["cleanup_files"] = plan["deleted_files"][:]
-                self.store.put(plan_key, plan)
+                self.store.put_plan(plan_key, plan)
             def phase(value):
                 current_steps = {**steps, "extract": "done", "organize": "done" if value == "cleanup" else "active"}
                 if value == "cleanup":
                     current_steps["cleanup"] = "active" if self.settings["delete_psd"] else "skipped"
                 for member in members:
                     self.store.update_task(member["id"], stage=value, steps=current_steps)
-            result = await execute_plan(self.directory, plan, lambda value: self.store.put(plan_key, value), phase)
+            result = await execute_plan(self.directory, plan, lambda value: self.store.put_plan(plan_key, value), phase,
+                                        lambda value: self.store.put(f"progress:{plan_key}", value))
             flattened = plan.get("flatten", self.settings["flatten"])
             final = "organized" if flattened else "extracted"
             steps.update(extract="done", organize="done" if flattened else "skipped",

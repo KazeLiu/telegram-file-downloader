@@ -11,6 +11,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .organizer import restore_progress, plan_counts
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -54,8 +56,13 @@ class ConsoleStore:
             settings.pop("delete_pdf")
             self.put("settings", settings)
         manual = self.get("manual_job", {})
+        if "plan" in manual:
+            plan = manual.pop("plan")
+            manual.update(plan_key=f"manual_preview:{manual['token']}", summary=plan_counts(plan))
+            self.put_plan(manual["plan_key"], plan)
         if manual.get("status") == "running":
             manual["status"] = "interrupted"
+        if manual:
             self.put("manual_job", manual)
         with self.db:
             rows = self.db.execute("SELECT id, data FROM tasks WHERE status IN ('queued','downloading','waiting','retrying','downloaded','extracting','organizing')").fetchall()
@@ -79,6 +86,16 @@ class ConsoleStore:
     def put(self, key, value):
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", (key, json.dumps(value)))
+
+    def get_plan(self, key):
+        plan = self.get(key)
+        return restore_progress(plan, self.get(f"progress:{key}", {})) if plan else None
+
+    def put_plan(self, key, plan):
+        # Snapshot and cursor reset are atomic; each intervening file commits only a small cursor.
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", (key, json.dumps(plan)))
+            self.db.execute("DELETE FROM kv WHERE key = ?", (f"progress:{key}",))
 
     def settings(self):
         return {**DEFAULT_SETTINGS, **self.get("settings", {})}

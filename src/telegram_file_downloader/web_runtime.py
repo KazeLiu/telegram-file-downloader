@@ -14,7 +14,7 @@ from .console_store import ConsoleStore, now
 from .media_pipeline import ConsoleProcessor
 from .state import AppState
 from .watcher import TelegramWatcher
-from .organizer import inside, make_plan, execute_plan, cleanup_lists
+from .organizer import inside, make_plan, execute_plan, cleanup_lists, plan_counts
 
 LOGGER = logging.getLogger(__name__)
 
@@ -318,7 +318,7 @@ class WebRuntime:
         prefix = "-".join(folder.relative_to(self.download_dir).parts)
         plan = await asyncio.to_thread(make_plan, self.download_dir, folder, prefix, delete_psd)
         token = uuid.uuid4().hex
-        self.store.put(f"manual_preview:{token}", plan)
+        self.store.put_plan(f"manual_preview:{token}", plan)
         cleanup, _ = cleanup_lists(plan)
         return dict(token=token, total=len(plan["moves"]), items=[
             dict(source=str(Path(move["source"]).relative_to(self.download_dir)), target=Path(move["target"]).name)
@@ -333,12 +333,17 @@ class WebRuntime:
         if token:
             if job.get("status") in {"running", "interrupted", "failed"}:
                 raise ValueError("请先继续上次整理")
-            plan = self.store.get(f"manual_preview:{token}")
+            plan_key = f"manual_preview:{token}"
+            plan = self.store.get_plan(plan_key)
             if not plan or plan["complete"]:
                 raise ValueError("预览已失效，请重新预览")
-            job = dict(status="running", token=token, plan=plan, error="", created_at=now())
+            job = dict(status="running", token=token, plan_key=plan_key, error="", created_at=now())
         elif job.get("status") not in {"failed", "interrupted", "running"}:
             raise ValueError("没有需要继续的整理任务")
+        else:
+            plan_key = job["plan_key"]
+            plan = self.store.get_plan(plan_key)
+        job["summary"] = plan_counts(plan)
         job["status"], job["error"] = "running", ""
         self.store.put("queue_paused", True)
         self.store.put("manual_job", job)
@@ -346,9 +351,11 @@ class WebRuntime:
             try:
                 async with self.operation_lock:
                     def save(plan):
-                        job["plan"] = plan
+                        job["summary"] = plan_counts(plan)
                         self.store.put("manual_job", job)
-                    job["result"] = await execute_plan(self.download_dir, job["plan"], save)
+                        self.store.put_plan(plan_key, plan)
+                    job["result"] = await execute_plan(self.download_dir, plan, save,
+                        save_progress=lambda value: self.store.put(f"progress:{plan_key}", value))
                     job["status"] = "completed"
             except asyncio.CancelledError:
                 job["status"] = "interrupted"

@@ -255,6 +255,9 @@ input[type=checkbox] { appearance: none; flex-shrink: 0; width: 42px; height: 26
 .volume-list { border-top: 1px solid var(--soft); padding: 18px 0; h3 { font-size: 15px; margin-bottom: 12px; } p { display: flex; gap: 12px; justify-content: space-between; font-size: 13px; padding: 8px 0; span:first-child { overflow-wrap: anywhere; } } }
 .file-manager, .logs-panel { min-width: 0; }
 .files-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; p { margin-top: 8px; overflow-wrap: anywhere; } }
+.preview-button { min-width: 220px; &[aria-busy=true] { opacity: 1; } }
+.loading-icon { animation: icon-spin .8s linear infinite; }
+@keyframes icon-spin { to { transform: rotate(360deg); } }
 .files-help { margin: 18px 0 24px; }
 .organize-option { flex-direction: row; align-items: center; gap: 10px; margin: -8px 0 22px; min-height: 44px;
   input[type=checkbox] { appearance: auto; accent-color: var(--blue); width: 18px; height: 18px; border-radius: 4px; background: transparent; &::after { display: none; } }
