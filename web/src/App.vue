@@ -7,6 +7,7 @@ import SettingsPanel from './SettingsPanel.vue'
 import WorkflowSteps from './WorkflowSteps.vue'
 import TaskActions from './TaskActions.vue'
 import FilesPanel from './FilesPanel.vue'
+import ImagesPanel from './ImagesPanel.vue'
 import LogsPanel from './LogsPanel.vue'
 
 const appModel = reactive({ booting: true, page: 'overview', status: null as Status | null,
@@ -16,14 +17,14 @@ const historyModel = reactive({ items: [] as Task[], total: 0, page: 1, status: 
 const dialog = ref<HTMLDialogElement>()
 let timer: ReturnType<typeof setInterval>
 let toastTimer: ReturnType<typeof setTimeout>
-const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '文件管理', icon: 'folder' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
+const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '文件管理', icon: 'folder' }, { id: 'images', title: '图片管理', icon: 'photo' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
 const title = computed(() => navigation.find(n => n.id === appModel.page)?.title)
 const running = computed(() => appModel.status?.phase === 'watching' && appModel.status?.connection === 'Connected')
 const completed = computed(() => (appModel.status?.counts.completed || 0) + (appModel.status?.counts.extracted || 0) + (appModel.status?.counts.organized || 0))
 const phase = computed(() => appModel.status?.pending ? '正在应用设置' : appModel.status?.phase === 'watching' && !running.value ? '正在连接' : phaseLabels[appModel.status?.phase || 'unconfigured'])
 const recent = computed(() => historyModel.items.slice(0, 5))
 const workflowTask = computed(() => appModel.status?.active_tasks.find(t => t.id === appModel.workflowTask) || appModel.status?.active)
-const pageDescriptions: Record<string, string> = { overview: '从接收、下载到整理，每一步都看得见。', history: '每一次下载，都有迹可循。', files: '把文件夹整理成一个平铺的资源库。', logs: '查看任务进展、连接恢复与失败原因。', settings: '按你的习惯，安排每一份资源。' }
+const pageDescriptions: Record<string, string> = { overview: '从接收、下载到整理，每一步都看得见。', history: '每一次下载，都有迹可循。', files: '把文件夹整理成一个平铺的资源库。', images: '只看根目录，留下你真正需要的图片。', logs: '查看任务进展、连接恢复与失败原因。', settings: '按你的习惯，安排每一份资源。' }
 
 function message(value: string) {
   appModel.toast = value; clearTimeout(toastTimer)
@@ -149,6 +150,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
             <div v-if="historyModel.total > 25" class="pagination"><span>第 {{ historyModel.page }} / {{ Math.ceil(historyModel.total / 25) }} 页</span><button class="secondary" :disabled="historyModel.page === 1" @click="pageHistory(-1)">上一页</button><button class="secondary" :disabled="historyModel.page * 25 >= historyModel.total" @click="pageHistory(1)">下一页</button></div>
           </template>
           <FilesPanel v-else-if="appModel.page === 'files'" @message="message" />
+          <ImagesPanel v-else-if="appModel.page === 'images'" @message="message" />
           <LogsPanel v-else-if="appModel.page === 'logs'" />
           <SettingsPanel v-else :settings="appModel.settings" :status="appModel.status" @refresh="refresh" @message="message" />
         </template>
@@ -173,8 +175,10 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           <div><dt>平均速度</dt><dd>{{ bytes(historyModel.selected.average_speed) }}/s</dd></div>
           <div><dt>最近进度更新</dt><dd>{{ date(historyModel.selected.last_progress_at || null) }}</dd></div>
           <div v-if="historyModel.selected.result_files"><dt>整理文件</dt><dd>{{ historyModel.selected.result_files }} 个</dd></div>
-          <div v-if="historyModel.selected.deleted_psds"><dt>删除 PSD</dt><dd>{{ historyModel.selected.deleted_psds }} 个</dd></div>
-          <div v-if="historyModel.selected.deleted_txts"><dt>删除 TXT</dt><dd>{{ historyModel.selected.deleted_txts }} 个</dd></div>
+          <div v-if="historyModel.selected.recycled_psds"><dt>回收 PSD</dt><dd>{{ historyModel.selected.recycled_psds }} 个</dd></div>
+          <div v-if="historyModel.selected.recycled_txts"><dt>回收 TXT</dt><dd>{{ historyModel.selected.recycled_txts }} 个</dd></div>
+          <div v-if="(historyModel.selected.deleted_psds || 0) > (historyModel.selected.recycled_psds || 0)"><dt>旧版已删除 PSD</dt><dd>{{ (historyModel.selected.deleted_psds || 0) - (historyModel.selected.recycled_psds || 0) }} 个</dd></div>
+          <div v-if="(historyModel.selected.deleted_txts || 0) > (historyModel.selected.recycled_txts || 0)"><dt>旧版已删除 TXT</dt><dd>{{ (historyModel.selected.deleted_txts || 0) - (historyModel.selected.recycled_txts || 0) }} 个</dd></div>
           <div v-if="historyModel.selected.deleted_pdfs"><dt>旧版已删除 PDF</dt><dd>{{ historyModel.selected.deleted_pdfs }} 个</dd></div>
           <div v-if="historyModel.selected.status === 'downloading'"><dt>预计剩余</dt><dd>{{ duration(historyModel.selected.eta) }}</dd></div>
           <div v-if="historyModel.selected.parallelism"><dt>分片并发上限</dt><dd>{{ historyModel.selected.parallelism }} 路</dd></div>

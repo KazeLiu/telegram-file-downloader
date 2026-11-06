@@ -23,6 +23,8 @@ const paths: Record<string, string> = {
   chevron: 'M9 5l7 7-7 7',
   refresh: 'M20 7a9 9 0 1 0 1 9 M20 2v6h-6',
   loader: 'M21 12a9 9 0 1 1-9-9',
+  sketch: 'M4 20l4-1 12-12-3-3L5 16z M14 7l3 3 M3 22h18',
+  restore: 'M4 10a8 8 0 1 1 1 9 M4 4v6h6 M12 8v5l3 2',
   workflow: 'M3 4h6v6H3z M15 14h6v6h-6z M9 7h6a3 3 0 0 1 3 3v4 M6 10v7h9',
   cloud: 'M6 18h12a4 4 0 0 0 0-8 6 6 0 0 0-11-2 5 5 0 0 0-1 10',
   trash: 'M4 6h16 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',

@@ -4,6 +4,7 @@ import os
 import asyncio
 import re
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -21,6 +22,8 @@ from .config import compact_connection_input
 from .web_runtime import WebRuntime, telegram_proxy
 from .diagnostics import configure_logs, read_log
 from .organizer import browse, plan_counts
+from .image_library import ImageLibrary
+from .storage import RecycleBin
 
 
 class Credentials(BaseModel):
@@ -99,12 +102,22 @@ class OrganizeSelection(BaseModel):
     token: str = Field(default="", max_length=32, pattern=r"^[a-f0-9]*$")
 
 
+class ImageSelection(BaseModel):
+    id: int = Field(gt=0)
+    version: str = Field(max_length=80)
+
+
+class ImagesSelection(BaseModel):
+    items: list[ImageSelection] = Field(min_length=1, max_length=200)
+
+
 def create_app():
     data_dir = Path(os.environ.get("DATA_DIR", str(Path.cwd() / "data"))).resolve()
     download_dir = Path(os.environ.get("DOWNLOAD_DIR", str(Path.cwd() / "downloads"))).resolve()
     log_dir = configure_logs(data_dir)
     store = ConsoleStore(data_dir)
     runtime = WebRuntime(store, data_dir, download_dir)
+    library = ImageLibrary(download_dir, data_dir)
     failures: dict[str, list[float]] = {}
 
     @asynccontextmanager
@@ -113,6 +126,7 @@ def create_app():
         try:
             yield
         finally:
+            await library.close()
             await runtime.close()
             store.close()
 
@@ -351,6 +365,64 @@ def create_app():
         return dict(status=job.get("status", ""), error=job.get("error", ""),
                     total=counts["move_total"] + counts["cleanup_total"], done=counts["moved_files"] + counts["cleanup_done"],
                     result=job.get("result"), **counts)
+
+    @app.post("/api/images/scan")
+    async def scan_images():
+        return library.start_scan()
+
+    @app.get("/api/images")
+    async def images(page: int = 1, candidate: bool = False, threshold: int = 80, search: str = ""):
+        if page < 1 or len(search) > 255 or threshold not in {65, 80}:
+            raise ValueError("无效的图片查询")
+        return library.listing(page, candidate, threshold, search)
+
+    @app.get("/api/images/{image_id}/thumbnail")
+    async def image_thumbnail(image_id: int, version: str):
+        record, _ = library.selected(image_id, version)
+        target = library.cache / f"{image_id}.jpg"
+        if record["error"] or not target.is_file():
+            raise HTTPException(404, "缩略图尚未生成或图片读取失败")
+        return FileResponse(target, media_type="image/jpeg")
+
+    def ensure_library_idle():
+        if runtime.operation_lock.locked() or store.get("manual_job", {}).get("status") in {"running", "failed", "interrupted"}:
+            raise ValueError("请先完成正在执行或尚未完成的文件整理，再回收或还原文件")
+
+    @app.post("/api/images/recycle")
+    async def recycle_images(body: ImagesSelection):
+        ensure_library_idle()
+        moved, failures = [], []
+        async with runtime.operation_lock:
+            with RecycleBin(download_dir) as recycle:
+                for item in body.items:
+                    try:
+                        record, file = library.selected(item.id, item.version)
+                        recycle.move(file, uuid.uuid4().hex, "image")
+                        library.remove(item.id)
+                        moved.append(item.id)
+                    except (OSError, ValueError) as exc:
+                        failures.append(dict(id=item.id, error=str(exc)))
+                    await asyncio.sleep(0)
+        return dict(moved=moved, failures=failures)
+
+    @app.get("/api/recycle")
+    async def recycle_items(page: int = 1):
+        if page < 1:
+            raise ValueError("无效的回收站页码")
+        if runtime.operation_lock.locked():
+            raise ValueError("文件整理正在进行，请结束后再查看回收站")
+        async with runtime.operation_lock:
+            with RecycleBin(download_dir) as recycle:
+                return recycle.listing(page)
+
+    @app.post("/api/recycle/{record_id}/restore")
+    async def restore_item(record_id: str):
+        ensure_library_idle()
+        async with runtime.operation_lock:
+            with RecycleBin(download_dir) as recycle:
+                original = recycle.restore(record_id)
+        library.start_scan()
+        return dict(original=original)
 
     @app.get("/api/logs")
     async def logs(name: str = "collector.log"):

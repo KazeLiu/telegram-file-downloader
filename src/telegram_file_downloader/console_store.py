@@ -160,7 +160,7 @@ class ConsoleStore:
                     receipt_id=None)
         data.update(wait_until=None, wait_reason="", parallelism=None)
         data.update(group_id="", volume=None, stage="download", steps={}, last_progress_at=None,
-                    attempts=0, result_files=0, deleted_psds=0, deleted_txts=0)
+                    attempts=0, result_files=0, deleted_psds=0, deleted_txts=0, recycled_psds=0, recycled_txts=0)
         with self.db:
             cursor = self.db.execute("INSERT INTO tasks(scope,message_id,status,filename,data) VALUES (?,?,?,?,?)",
                                      (scope, message_id, "queued", filename, "{}"))

@@ -27,7 +27,7 @@ export interface Task {
   wait_until?: number | null; wait_reason?: string; parallelism?: number | null
   stage?: string; steps?: Record<string, string>; group_id?: string
   volume?: { base: string; scheme: string; index: number; split: boolean } | null
-  last_progress_at?: string | null; result_files?: number; deleted_psds?: number; deleted_txts?: number; deleted_pdfs?: number; attempts?: number
+  last_progress_at?: string | null; result_files?: number; deleted_psds?: number; deleted_txts?: number; deleted_pdfs?: number; recycled_psds?: number; recycled_txts?: number; attempts?: number
   group_members?: { id: number; filename: string; status: string; downloaded: number; size: number }[]
 }
 export interface Status {

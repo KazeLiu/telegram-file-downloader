@@ -221,6 +221,8 @@ class ConsoleProcessor:
                 text += f"\n{size_text(task['downloaded'])} · 平均 {size_text(task['average_speed'])}/s"
             if task["archive_deleted"]:
                 text += "\n原压缩包已删除"
+            if task.get("recycled_psds") or task.get("recycled_txts"):
+                text += f"\n已移入回收站：PSD {task.get('recycled_psds', 0)} 个、TXT {task.get('recycled_txts', 0)} 个"
             if task["error"]:
                 text += "\n" + task["error"]
             chat = int(task["scope"].split(":", 1)[1])
@@ -452,9 +454,10 @@ class ConsoleProcessor:
             for task in members:
                 self.store.update_task(task["id"], status=final, stage="complete", error="", completed_at=now(),
                     output=str(self.directory if flattened else output), steps=steps,
-                    result_files=result["moved"], deleted_psds=result["deleted_psds"], deleted_txts=result["deleted_txts"])
+                    result_files=result["moved"], deleted_psds=result["deleted_psds"], deleted_txts=result["deleted_txts"],
+                    recycled_psds=result["recycled_psds"], recycled_txts=result["recycled_txts"])
                 self.final_receipts.add(task["id"])
-            LOGGER.info("group=%s workflow complete moved=%s deleted_psds=%s deleted_txts=%s", group, result["moved"], result["deleted_psds"], result["deleted_txts"])
+            LOGGER.info("group=%s workflow complete moved=%s recycled_psds=%s recycled_txts=%s", group, result["moved"], result["recycled_psds"], result["recycled_txts"])
         except (ExtractionError, OSError, ValueError) as exc:
             failure_stage = self.store.task(task_id).get("stage", "extract")
             status = "waiting_volumes" if isinstance(exc, VolumesPending) else (

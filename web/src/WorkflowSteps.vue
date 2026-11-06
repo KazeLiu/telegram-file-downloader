@@ -6,6 +6,14 @@ const props = defineProps<{ task?: Task | null; settings?: Settings }>()
 const workflowModel = reactive({ selected: 'download' })
 const legacyPdf = computed(() => !!props.task?.steps?.pdf && !props.task?.steps?.cleanup && !props.task?.steps?.psd && ['organized', 'extracted', 'completed'].includes(props.task?.status || ''))
 const legacyPsd = computed(() => !!props.task?.steps?.psd && !props.task?.steps?.cleanup && ['organized', 'extracted', 'completed'].includes(props.task?.status || ''))
+const cleanupDetail = computed(() => {
+  const task = props.task
+  if (legacyPdf.value) return `旧版记录：删除 ${task?.deleted_pdfs || 0} 个 PDF。当前保留 PDF。`
+  if (legacyPsd.value) return `旧版记录：直接删除 ${task?.deleted_psds || 0} 个 PSD。`
+  if (task?.recycled_psds || task?.recycled_txts) return `已将 ${task.recycled_psds || 0} 个 PSD、${task.recycled_txts || 0} 个 TXT 移入回收站，可在图片管理中还原。`
+  if (task?.deleted_psds || task?.deleted_txts) return `旧版记录：直接删除 ${task.deleted_psds || 0} 个 PSD、${task.deleted_txts || 0} 个 TXT。`
+  return '将本次资源的 PSD、TXT 移入持久回收站，可还原；PDF 保留。'
+})
 watch(() => props.task?.id, () => { workflowModel.selected = props.task?.stage === 'complete' ? 'organize' : props.task?.stage || 'download' }, { immediate: true })
 const nodes = computed(() => [
   { id: 'receive', title: '接收转发', icon: 'telegram', detail: props.task ? `任务 #${props.task.id} 已记录` : '群里的新附件会记录到下载队列。' },
@@ -13,7 +21,7 @@ const nodes = computed(() => [
   { id: 'volumes', title: '分卷收齐', icon: 'archive', detail: '同组分卷下载齐全并通过完整性检查后，才会继续。' },
   { id: 'extract', title: '完整解压', icon: 'folder', detail: props.settings?.extract === false ? '自动解压已关闭。' : '先无密码，再尝试保存的密码；失败保留原包。' },
   { id: 'organize', title: '平铺到根目录', icon: 'workflow', detail: props.task?.result_files ? `已整理 ${props.task.result_files} 个文件到下载根目录。` : '资源A/第一套/001.jpg → 资源A-第一套-001.jpg' },
-  { id: legacyPdf.value ? 'pdf' : legacyPsd.value ? 'psd' : 'cleanup', title: legacyPdf.value ? '旧版 PDF 清理' : legacyPsd.value ? '旧版 PSD 清理' : '清理 PSD / TXT', icon: 'trash', detail: legacyPdf.value ? `旧版记录：删除 ${props.task?.deleted_pdfs || 0} 个 PDF。本版本仅清理 PSD、TXT，保留 PDF。` : legacyPsd.value ? `旧版记录：删除 ${props.task?.deleted_psds || 0} 个 PSD。` : props.task?.deleted_psds || props.task?.deleted_txts ? `已删除本次资源的 ${props.task?.deleted_psds || 0} 个 PSD、${props.task?.deleted_txts || 0} 个 TXT。` : '同一规则清理本次资源的 .psd、.txt 文件，PDF 保留。' },
+  { id: legacyPdf.value ? 'pdf' : legacyPsd.value ? 'psd' : 'cleanup', title: legacyPdf.value ? '旧版 PDF 清理' : legacyPsd.value ? '旧版 PSD 清理' : '回收 PSD / TXT', icon: 'trash', detail: cleanupDetail.value },
   { id: 'cloud', title: '小米云相册', icon: 'cloud', detail: '待接入' },
 ])
 function state(id: string) {

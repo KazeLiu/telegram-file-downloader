@@ -5,10 +5,12 @@ import logging
 import asyncio
 import os
 import time
+import uuid
 from heapq import nsmallest
 from pathlib import Path
 
 from .files import safe_filename
+from .storage import inside, is_link, internal_directory, RecycleBin
 
 LOGGER = logging.getLogger(__name__)
 CLEANUP_EXTENSIONS = frozenset({".psd", ".txt"})
@@ -26,11 +28,14 @@ def cleanup_lists(plan):
 
 def cleanup_counts(plan):
     planned, deleted = cleanup_lists(plan)
+    recycled = plan.get("recycled_files", [])
     return dict(cleanup_total=len(planned), cleanup_done=len(deleted),
                 psd_total=sum(Path(name).suffix.lower() == ".psd" for name in planned),
                 txt_total=sum(Path(name).suffix.lower() == ".txt" for name in planned),
                 deleted_psds=sum(Path(name).suffix.lower() == ".psd" for name in deleted),
-                deleted_txts=sum(Path(name).suffix.lower() == ".txt" for name in deleted))
+                deleted_txts=sum(Path(name).suffix.lower() == ".txt" for name in deleted),
+                recycled_psds=sum(Path(name).suffix.lower() == ".psd" for name in recycled),
+                recycled_txts=sum(Path(name).suffix.lower() == ".txt" for name in recycled))
 
 
 def plan_counts(plan):
@@ -43,26 +48,11 @@ def restore_progress(plan, progress):
         move["done"] = True
     planned, deleted = cleanup_lists(plan)
     known = set(deleted)
-    deleted.extend(name for name in planned[:progress.get("cleanup_cursor", 0)] if name not in known)
+    completed = [name for name in planned[:progress.get("cleanup_cursor", 0)] if name not in known]
+    deleted.extend(completed)
+    if plan.get("recycle_id"):
+        plan.setdefault("recycled_files", []).extend(completed)
     return plan
-
-
-def inside(root: Path, value: str = "") -> Path:
-    relative = Path(value)
-    if relative.is_absolute() or ".." in relative.parts:
-        raise ValueError("请选择下载目录内的路径")
-    current = root
-    for part in relative.parts:
-        current = current / part
-        if current.is_symlink() or (current.exists() and getattr(current.lstat(), "st_file_attributes", 0) & 0x400):
-            raise ValueError("不允许操作链接目录或文件")
-    if not current.resolve().is_relative_to(root.resolve()):
-        raise ValueError("路径超出下载目录")
-    return current
-
-
-def is_link(entry):
-    return entry.is_symlink() or (os.name == "nt" and entry.stat(follow_symlinks=False).st_file_attributes & 0x400)
 
 
 def entries(root: Path, source: Path, directories=None, skip_root_files=False):
@@ -78,7 +68,7 @@ def entries(root: Path, source: Path, directories=None, skip_root_files=False):
         folders, files = [], []
         with os.scandir(folder) as scan:
             for entry in scan:
-                if folder == root and (entry.name == ".tg-work" or entry.name.startswith(".tg-extract-")):
+                if folder == root and internal_directory(entry.name):
                     continue
                 directory = entry.is_dir(follow_symlinks=False)
                 if folder == root and skip_root_files and not directory and not (
@@ -97,7 +87,7 @@ def entries(root: Path, source: Path, directories=None, skip_root_files=False):
 
 def browse(root, value="", page=1, search=""):
     folder = inside(root, value)
-    if not folder.is_dir() or (Path(value).parts and Path(value).parts[0] == ".tg-work"):
+    if not folder.is_dir() or (Path(value).parts and internal_directory(Path(value).parts[0])):
         raise ValueError("文件夹不存在或属于工作流内部目录")
     total = 0
     needle = search.casefold()
@@ -105,7 +95,7 @@ def browse(root, value="", page=1, search=""):
         nonlocal total
         with os.scandir(folder) as scan:
             for entry in scan:
-                if folder == root and (entry.name == ".tg-work" or entry.name.startswith(".tg-extract-")):
+                if folder == root and internal_directory(entry.name):
                     continue
                 if needle not in entry.name.casefold() or is_link(entry):
                     continue
@@ -159,7 +149,7 @@ def make_plan(root: Path, source: Path, prefix: str, delete_psd=False, protect_p
     LOGGER.info("organize plan ready source=%s moves=%s cleanup=%s directories=%s elapsed=%.3fs",
                 source, len(moves), len(cleanup), len(directories), time.monotonic() - started)
     return dict(source=str(source), directories=directories, moves=moves, cleanup="psd_txt",
-                cleanup_files=cleanup, deleted_files=[], complete=False)
+                cleanup_files=cleanup, deleted_files=[], recycle_id=uuid.uuid4().hex, recycled_files=[], complete=False)
 
 
 def upgrade_cleanup_plan(root, plan, prefix, delete_psd):
@@ -229,27 +219,41 @@ async def execute_plan(root: Path, plan, save, on_phase=None, save_progress=None
         await asyncio.sleep(0)
     if on_phase:
         on_phase("cleanup")
-    for index, name in enumerate(planned):
-        if name in deleted_set:
-            continue
-        file = inside(root, str(Path(name).relative_to(root)))
-        if not is_cleanup_file(file):
-            raise ValueError("清理清单中包含非 PSD/TXT 文件，已停止清理")
-        file.unlink(missing_ok=True)
-        deleted.append(name)
-        deleted_set.add(name)
-        counter = "deleted_psds" if file.suffix.lower() == ".psd" else "deleted_txts"
-        progress.update(cleanup_cursor=index + 1, cleanup_done=progress["cleanup_done"] + 1)
-        progress[counter] += 1
-        if save_progress:
-            save_progress(progress)
-        else:
-            save(plan)
-        LOGGER.info("organize deleted cleanup file type=%s path=%s", file.suffix.lower(), file)
-        await asyncio.sleep(0)
+    if any(name not in deleted_set for name in planned):
+        if not plan.get("recycle_id"):
+            plan["recycle_id"] = uuid.uuid4().hex
+            plan.setdefault("recycled_files", [])
+            save(plan)  # Persist stable recycle IDs before removing any source path.
+        with RecycleBin(root) as recycle:
+            for index, name in enumerate(planned):
+                if name in deleted_set:
+                    continue
+                file = inside(root, str(Path(name).relative_to(root)))
+                if not is_cleanup_file(file):
+                    raise ValueError("清理清单中包含非 PSD/TXT 文件，已停止清理")
+                recycle.move(file, f"{plan['recycle_id']}-{index}", "cleanup")
+                deleted.append(name)
+                plan["recycled_files"].append(name)
+                deleted_set.add(name)
+                suffix = "psds" if file.suffix.lower() == ".psd" else "txts"
+                progress.update(cleanup_cursor=index + 1, cleanup_done=progress["cleanup_done"] + 1)
+                progress[f"deleted_{suffix}"] += 1
+                progress[f"recycled_{suffix}"] += 1
+                if save_progress:
+                    save_progress(progress)
+                else:
+                    save(plan)
+                await asyncio.sleep(0)
     source = Path(plan["source"])
-    directories = reversed(plan["directories"]) if "directories" in plan else (
-        directory for directory, _, _ in os.walk(source, topdown=False, followlinks=False))
+    if "directories" in plan:
+        directories = reversed(plan["directories"])
+    else:
+        directories = []
+        for directory, folders, _ in os.walk(source, followlinks=False):
+            if Path(directory) == root:
+                folders[:] = [name for name in folders if not internal_directory(name)]
+            directories.append(directory)
+        directories.reverse()
     for directory in directories:
         folder = Path(directory)
         inside(root, str(folder.relative_to(root)))

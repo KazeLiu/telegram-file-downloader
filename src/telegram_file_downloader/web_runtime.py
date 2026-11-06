@@ -15,6 +15,7 @@ from .media_pipeline import ConsoleProcessor
 from .state import AppState
 from .watcher import TelegramWatcher
 from .organizer import inside, make_plan, execute_plan, cleanup_lists, plan_counts
+from .storage import internal_directory
 
 LOGGER = logging.getLogger(__name__)
 
@@ -294,7 +295,7 @@ class WebRuntime:
             self.store.put("queue_paused", paused)
 
     def selected_folder(self, value):
-        if Path(value).parts and Path(value).parts[0] == ".tg-work":
+        if Path(value).parts and internal_directory(Path(value).parts[0]):
             raise ValueError("工作流内部目录不能手动整理")
         folder = inside(self.download_dir, value)
         if not folder.is_dir():
