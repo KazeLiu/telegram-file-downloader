@@ -2,16 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import time
+import uuid
 from pathlib import Path
 
-from telethon import errors, types
+from telethon import errors, types, utils
 
-from .archives import ARCHIVE_EXTENSIONS, ExtractionError, extract_archive, multipart
+from .archives import (ARCHIVE_EXTENSIONS, ExtractionError, VolumesPending, extract_archive,
+                       multipart, volume_info, resource_name)
 from .console_store import now
 from .downloader import DownloadQueue
 from .files import message_filename
+from .organizer import make_plan, execute_plan
 from .transfers import TransferThrottle
+
+LOGGER = logging.getLogger(__name__)
+DOWNLOAD_STATES = {"queued", "interrupted"}
+FINISHED = {"completed", "extracted", "organized"}
+
 
 def select_media(message, settings):
     file = message.file
@@ -23,9 +32,8 @@ def select_media(message, settings):
     if message.video or (file.mime_type or "").startswith("video/"):
         if not settings["videos"]:
             return None
-        documents = [message.document, *(getattr(message.media, "alt_documents", None) or [])]
         candidates = []
-        for document in documents:
+        for document in [message.document, *(getattr(message.media, "alt_documents", None) or [])]:
             if not document or not (document.mime_type or "").startswith("video/"):
                 continue
             for attr in document.attributes:
@@ -54,174 +62,407 @@ def size_text(value):
 
 
 class ConsoleProcessor:
+    """Persist intake before advancing Telegram history; execute independently."""
     def __init__(self, client, directory, history, recorder, store, settings, operation_lock):
         self.client, self.directory, self.history = client, directory, history
         self.recorder, self.store, self.settings = recorder, store, settings
         self.operation_lock = operation_lock
         self.receipt_disabled_until = 0.0
         self.receipt_lock = asyncio.Lock()
+        self.running = {}
+        self.post_tasks = {}
+        self.ready = False
+        self.closed = False
+        self.dispatcher = None
+        self.pending_groups = set()
+        self.final_receipts = set()
+        self.receipt_sender = None
+        account = history.scope.split(":", 1)[0] if history else ""
+        key = f"transfer_backoff:{account}"
+        self.throttle = TransferThrottle(settings["download_parallelism"], store.get(key), lambda value: store.put(key, value))
 
-    async def receipt(self, task):
-        async with self.receipt_lock:
-            await self._receipt(task["id"])
+    def start(self):
+        for task in self.store.tasks(self.history.scope, {"queued", "interrupted", "extraction_failed", "downloaded", "waiting_volumes"}):
+            if not task.get("group_id"):
+                stage = "extract" if task["path"] and task["kind"] == "archive" and task["status"] in {"interrupted", "extraction_failed", "downloaded"} else "download"
+                self.store.update_task(task["id"], group_id=f"file:{task['scope']}:{task['message_id']}", stage=stage)
+        self.dispatcher = asyncio.create_task(self._dispatch(), name="download-scheduler")
+        self.receipt_sender = asyncio.create_task(self._send_final_receipts(), name="receipt-outbox")
 
-    async def _receipt(self, task_id):
-        task = self.store.task(task_id)
-        if not self.settings["receipts"] or time.monotonic() < self.receipt_disabled_until:
-            return
-        labels = {"queued": "已接收", "downloading": "下载中", "extracting": "下载完成，正在解压",
-                  "completed": "下载完成", "extracted": "下载、解压完成", "failed": "下载失败",
-                  "extraction_failed": "下载完成，解压未完成", "waiting": "Telegram 限流，等待恢复"}
-        text = f"{labels.get(task['status'], task['status'])}\n{task['filename']}"
-        if task["status"] == "downloading":
-            percent = task["downloaded"] * 100 / task["size"] if task["size"] else 0
-            eta = f"{int(task['eta'])} 秒" if task["eta"] is not None else "计算中"
-            text += f"\n{percent:.1f}% · {size_text(task['speed'])}/s · 剩余 {eta}"
-        elif task["status"] == "waiting":
-            remaining = max(0, int((task.get("wait_until") or 0) - time.time()))
-            text += f"\n{size_text(task['downloaded'])} / {size_text(task['size'])} · 约 {remaining} 秒后恢复"
-        else:
-            text += f"\n{size_text(task['downloaded'])} · 平均 {size_text(task['average_speed'])}/s"
-        if task["archive_deleted"]:
-            text += "\n原压缩包已删除"
-        if task["error"]:
-            text += "\n" + task["error"]
-        if task["warning"] and not task["warning"].startswith("群回执"):
-            text += "\n" + task["warning"]
-        chat = int(task["scope"].split(":", 1)[1])
-        try:
-            if task["receipt_id"]:
-                await asyncio.wait_for(self.client.edit_message(chat, task["receipt_id"], text, parse_mode=None), 10)
-            else:
-                sent = await asyncio.wait_for(self.client.send_message(chat, text, reply_to=task["message_id"], parse_mode=None), 10)
-                self.store.update_task(task["id"], receipt_id=sent.id)
-            if self.store.task(task["id"])["warning"].startswith("群回执"):
-                self.store.update_task(task["id"], warning="")
-        except errors.MessageNotModifiedError:
-            pass
-        except errors.FloodWaitError as exc:
-            self.receipt_disabled_until = time.monotonic() + exc.seconds
-            self.store.update_task(task["id"], warning=f"群回执暂时限流，{exc.seconds} 秒后恢复")
-        except (errors.RPCError, OSError, EOFError):
-            self.store.update_task(task["id"], warning="群回执发送失败，请检查网络或群发言权限；下载继续")
+    def begin_scan(self):
+        self.ready = False
+
+    def scan_complete(self):
+        self.ready = True
+        for task in self.store.tasks(self.history.scope, {"downloaded", "waiting_volumes", "interrupted"}):
+            if task["status"] in {"downloaded", "waiting_volumes"} or (
+                    task["status"] == "interrupted" and task.get("stage") != "download"):
+                self.pending_groups.add(task.get("group_id") or str(task["id"]))
+
+    async def close(self):
+        self.closed = True
+        tasks = [self.dispatcher, self.receipt_sender, *self.running.values(), *self.post_tasks.values()]
+        for task in tasks:
+            if task:
+                task.cancel()
+        await asyncio.gather(*(task for task in tasks if task), return_exceptions=True)
+
+    def _group_id(self, message, volume):
+        if not volume:
+            return f"file:{self.history.scope}:{message.id}"
+        forwarded = getattr(message, "fwd_from", None)
+        source = getattr(forwarded, "from_id", None)
+        origin = str(utils.get_peer_id(source)) if source else "unknown"
+        album = getattr(message, "grouped_id", None)
+        signature = f"{volume['base'].casefold()}:{volume['scheme']}:{origin}"
+        task = self.store.volume_candidate(self.history.scope, signature, str(album or ""))
+        if task:
+            members = self.store.group(task["group_id"])
+            if not any(item.get("volume", {}).get("index") == volume["index"] for item in members if item.get("volume")):
+                return task["group_id"]
+        return f"volumes:{uuid.uuid4().hex}"
 
     async def process(self, message):
-        async with self.operation_lock:
-            self.recorder.append_from_text(message.raw_text)
-            selection = select_media(message, self.settings)
+        self.recorder.append_from_text(message.raw_text)
+        selection = select_media(message, self.settings)
+        if not selection:
+            return True
+        selected, kind, quality = selection
+        existing = self.store.find(self.history.scope, message.id)
+        if existing:
+            return True
+        task = self.store.create_task(self.history.scope, message.id, message_filename(selected), kind, selected.file.size, quality)
+        volume = volume_info(task["filename"]) if kind == "archive" else None
+        group_id = self._group_id(message, volume)
+        forwarded = getattr(message, "fwd_from", None)
+        source = getattr(forwarded, "from_id", None)
+        origin = str(utils.get_peer_id(source)) if source else "unknown"
+        signature = f"{volume['base'].casefold()}:{volume['scheme']}:{origin}" if volume else ""
+        self.store.update_task(task["id"], group_id=group_id, volume=volume, volume_signature=signature,
+                               album_id=str(getattr(message, "grouped_id", None) or ""))
+        LOGGER.info("task=%s received message=%s group=%s name=%s size=%s", task["id"], message.id, group_id, task["filename"], task["size"])
+        return True
+
+    async def _dispatch(self):
+        while not self.closed:
+            if self.ready:
+                if not self.store.get("queue_paused", False):
+                    for task in self.store.tasks(self.history.scope, DOWNLOAD_STATES):
+                        if len(self.running) >= self.settings["parallel_files"]:
+                            break
+                        if task["id"] in self.running or task["status"] not in DOWNLOAD_STATES or task.get("stage", "download") != "download":
+                            continue
+                        self.running[task["id"]] = asyncio.create_task(self._run_download(task), name=f"download-{task['id']}")
+                for group in list(self.pending_groups):
+                    if group not in self.post_tasks:
+                        self.pending_groups.discard(group)
+                        self.post_tasks[group] = asyncio.create_task(self._postprocess(group), name="resource-workflow")
+            await asyncio.sleep(.5)
+
+    async def _send_final_receipts(self):
+        while not self.closed:
+            if self.final_receipts and time.monotonic() >= self.receipt_disabled_until:
+                task_id = min(self.final_receipts)
+                self.final_receipts.discard(task_id)
+                await self.receipt(self.store.task(task_id))
+            await asyncio.sleep(1)
+
+    async def receipt(self, task):
+        if not self.client or not self.settings["receipts"] or time.monotonic() < self.receipt_disabled_until:
+            return
+        async with self.receipt_lock:
+            if time.monotonic() < self.receipt_disabled_until:
+                return
+            task = self.store.task(task["id"])
+            labels = {"queued": "等待下载", "downloading": "下载中", "waiting": "Telegram 限流等待",
+                      "paused": "已暂停", "retrying": "连接恢复中", "failed": "下载失败，可在页面重试",
+                      "downloaded": "下载完成", "waiting_volumes": "等待分卷", "extracting": "正在解压",
+                      "organizing": "正在整理文件", "organized": "本地工作流完成", "extracted": "解压完成",
+                      "extraction_failed": "解压未完成", "processing_failed": "文件整理未完成", "completed": "下载完成"}
+            text = f"{labels.get(task['status'], task['status'])}\n{task['filename']}"
+            if task["status"] == "downloading":
+                percent = task["downloaded"] * 100 / task["size"] if task["size"] else 0
+                eta = f"{int(task['eta'])} 秒" if task["eta"] is not None else "计算中"
+                text += f"\n{percent:.1f}% · {size_text(task['speed'])}/s · 剩余 {eta}"
+            elif task["status"] == "waiting":
+                text += f"\n约 {max(0, int((task.get('wait_until') or 0) - time.time()))} 秒后恢复"
+            else:
+                text += f"\n{size_text(task['downloaded'])} · 平均 {size_text(task['average_speed'])}/s"
+            if task["archive_deleted"]:
+                text += "\n原压缩包已删除"
+            if task["error"]:
+                text += "\n" + task["error"]
+            chat = int(task["scope"].split(":", 1)[1])
+            try:
+                if task["receipt_id"]:
+                    await asyncio.wait_for(self.client.edit_message(chat, task["receipt_id"], text, parse_mode=None), 10)
+                else:
+                    sent = await asyncio.wait_for(self.client.send_message(chat, text, reply_to=task["message_id"], parse_mode=None), 10)
+                    self.store.update_task(task["id"], receipt_id=sent.id)
+                if self.store.task(task["id"])["warning"].startswith("群回执"):
+                    self.store.update_task(task["id"], warning="")
+            except errors.MessageNotModifiedError:
+                pass
+            except errors.FloodWaitError as exc:
+                self.receipt_disabled_until = time.monotonic() + exc.seconds
+                self.final_receipts.add(task["id"])
+            except (errors.RPCError, OSError, EOFError):
+                LOGGER.warning("task=%s receipt unavailable", task["id"], exc_info=True)
+                self.store.update_task(task["id"], warning="群回执发送失败；下载继续，请查看页面")
+
+    async def _run_download(self, task):
+        task_id = task["id"]
+        reporter = None
+        start = time.monotonic()
+        prior_elapsed = task.get("elapsed", 0)
+        last_bytes = task["downloaded"]
+        last_time = start
+        last_log = start
+        try:
+            chat = int(task["scope"].split(":", 1)[1])
+            async def initial_wait(until, reason, parallelism):
+                self.store.update_task(task_id, status="waiting", wait_until=until, wait_reason=reason,
+                                       parallelism=parallelism, speed=0, eta=None)
+            while True:
+                try:
+                    async with self.throttle.request(initial_wait):
+                        message = await asyncio.wait_for(self.client.get_messages(chat, ids=task["message_id"]), 45)
+                    break
+                except (errors.FloodWaitError, errors.FloodPremiumWaitError):
+                    continue
+            if not message:
+                raise ValueError("原消息已删除或当前账号无法访问")
+            selection = select_media(message, {**self.settings, "videos": True, "photos": True, "archives": True})
             if not selection:
-                return True
-            selected, kind, quality = selection
-            task = self.store.create_task(self.history.scope, message.id, message_filename(selected),
-                                          kind, selected.file.size, quality)
-            # A deleted archive is intentionally absent; the durable task journal is authoritative.
-            if task["status"] == "extracted":
-                if self.settings["delete_archive"] and not task["archive_deleted"]:
-                    await self.unpack(task["id"])
-                await self.receipt(self.store.task(task["id"]))
-                return True
-            if task["status"] in {"completed", "extraction_failed"}:
-                return True
+                raise ValueError("原消息已没有可下载的附件")
+            selected = selection[0]
+            self.store.update_task(task_id, status="downloading", started_at=task["started_at"] or now(),
+                error="", completed_at=None, wait_until=None, wait_reason="", parallelism=self.throttle.parallelism,
+                steps={"receive": "done", "download": "active"})
             if self.settings["mark_read"]:
                 try:
-                    await self.client.send_read_acknowledge(message.chat_id, max_id=message.id)
-                except (errors.RPCError, OSError, ConnectionError):
-                    self.store.update_task(task["id"], warning="已接收任务，但标记已读失败")
-            start = time.monotonic()
-            last_write = 0.0
-            last_bytes, last_time = 0, start
-            task_id = task["id"]
-            effective_workers = self.settings["download_parallelism"] if selected.document and selected.document.size else 1
-            cooldown_key = f"transfer_backoff:{self.history.scope.split(':', 1)[0]}"
-            throttle = TransferThrottle(effective_workers, self.store.get(cooldown_key),
-                                        lambda value: self.store.put(cooldown_key, value))
-            self.store.update_task(task_id, status="downloading", started_at=task["started_at"] or now(),
-                error="", completed_at=None, wait_until=None, wait_reason="", parallelism=throttle.parallelism)
+                    await asyncio.wait_for(self.client.send_read_acknowledge(chat, max_id=message.id), 10)
+                except (errors.RPCError, OSError):
+                    LOGGER.warning("task=%s mark read unavailable", task_id)
 
             async def progress(current, total):
-                nonlocal last_write, last_bytes, last_time
+                nonlocal last_bytes, last_time, last_log
                 moment = time.monotonic()
-                existing = self.store.task(task_id)
-                if moment - last_write < 1 and current != total and existing["status"] != "waiting":
+                if moment - last_time < 1 and current != total:
                     return
                 speed = max(0, current - last_bytes) / max(moment - last_time, .001)
-                waiting = (existing.get("wait_until") or 0) > time.time()
+                waiting = self.throttle.until > time.time()
+                elapsed = prior_elapsed + moment - start
                 self.store.update_task(task_id, downloaded=current, size=total or 0, speed=0 if waiting else speed,
-                    eta=max(0, (total - current) / speed) if not waiting and total and speed else None,
-                    elapsed=moment - start, average_speed=current / max(moment - start, .001),
-                    status="waiting" if waiting else "downloading", parallelism=min(effective_workers, throttle.parallelism),
-                    wait_until=existing.get("wait_until") if waiting else None,
-                    wait_reason=existing.get("wait_reason", "") if waiting else "")
-                last_write, last_bytes, last_time = moment, current, moment
+                    eta=(total - current) / speed if not waiting and speed and total else None,
+                    elapsed=elapsed, average_speed=current / max(elapsed, .001), last_progress_at=now(),
+                    status="waiting" if waiting else "downloading", parallelism=self.throttle.parallelism,
+                    wait_until=self.throttle.until if waiting else None)
+                if moment - last_log >= 30 or current == total:
+                    LOGGER.info("task=%s progress=%s/%s speed=%.0f elapsed=%.1f", task_id, current, total, speed, elapsed)
+                    last_log = moment
+                last_bytes, last_time = current, moment
 
             async def waiting(until, reason, parallelism):
-                current = self.store.task(task_id)
-                if current["status"] == "waiting" and (current.get("wait_until") or 0) >= until:
-                    return
                 self.store.update_task(task_id, status="waiting", wait_until=until, wait_reason=reason,
-                                       parallelism=min(effective_workers, parallelism), speed=0, eta=None)
+                                       parallelism=parallelism, speed=0, eta=None)
 
-            def notice(text):
-                nonlocal effective_workers
-                effective_workers = 1
-                self.store.update_task(task_id, warning=text, parallelism=1)
+            def retry(attempt, reason):
+                self.store.update_task(task_id, status="retrying", attempts=attempt, speed=0,
+                                       warning=f"下载请求失败（{reason}），保留分片并重试 {attempt}/3")
 
-            stop_receipts = asyncio.Event()
-
-            async def report_progress():
-                while not stop_receipts.is_set():
+            async def report():
+                while True:
                     await self.receipt(self.store.task(task_id))
-                    try:
-                        await asyncio.wait_for(stop_receipts.wait(), 10)
-                    except TimeoutError:
-                        pass
+                    await asyncio.sleep(10)
 
-            recovered = self.history.download(message.id)
-            recovered_complete = recovered and recovered["ready"] and Path(recovered["path"]).is_file()
-            queue = DownloadQueue(self.client, self.directory, lambda _: None, history=self.history, progress=progress,
-                parallelism=self.settings["download_parallelism"], throttle=throttle, on_wait=waiting, on_notice=notice)
-            reporter = asyncio.create_task(report_progress(), name="download-receipt")
-            try:
-                path = await queue.download(selected)
-                elapsed = time.monotonic() - start
-            finally:
-                stop_receipts.set()
-                await reporter
+            reporter = asyncio.create_task(report(), name="progress-receipt")
+            directory = self.directory
+            if task.get("volume") and self.settings["extract"]:
+                directory = self.directory / ".tg-work" / task["group_id"].split(":")[-1]
+            queue = DownloadQueue(self.client, directory, lambda error: None, history=self.history,
+                progress=progress, parallelism=self.settings["download_parallelism"], throttle=self.throttle,
+                on_wait=waiting, on_notice=lambda text: self.store.update_task(task_id, warning=text), on_retry=retry)
+            path = await queue.download(selected)
             if not path:
-                task = self.store.update_task(task_id, status="failed", completed_at=now(), speed=0,
-                                              eta=None, wait_until=None, error="下载失败；保留进度，稍后自动重试")
-                await self.receipt(task)
-                return False
-            should_extract = kind == "archive" and self.settings["extract"]
-            task = self.store.update_task(task_id, status="downloaded" if should_extract else "completed", path=str(path),
-                downloaded=path.stat().st_size,
-                average_speed=task["average_speed"] if recovered_complete else path.stat().st_size / max(elapsed, .001),
-                elapsed=task["elapsed"] if recovered_complete else elapsed, speed=0, eta=0, completed_at=now(),
-                wait_until=None, wait_reason="")
-            if should_extract:
-                await self.unpack(task_id)
-            await self.receipt(self.store.task(task_id))
-            return True
+                raise RuntimeError("三次下载尝试失败，已保留分片；请检查日志后重试")
+            elapsed = prior_elapsed + time.monotonic() - start
+            extract = task["kind"] == "archive" and self.settings["extract"]
+            self.store.update_task(task_id, status="downloaded" if extract else "completed", stage="extract" if extract else "complete",
+                path=str(path), downloaded=path.stat().st_size, elapsed=elapsed,
+                average_speed=path.stat().st_size / max(elapsed, .001), speed=0, eta=0, completed_at=now(),
+                wait_until=None, steps={"receive": "done", "download": "done"})
+            if self.store.task(task_id)["warning"].startswith("下载请求失败"):
+                self.store.update_task(task_id, warning="")
+            self.pending_groups.add(task.get("group_id") or str(task_id))
+            LOGGER.info("task=%s download complete path=%s", task_id, path)
+        except asyncio.CancelledError:
+            current = self.store.task(task_id)
+            if current["status"] not in {"paused", "queued"}:
+                self.store.update_task(task_id, status="interrupted", speed=0, eta=None)
+            LOGGER.info("task=%s stopped; partial checkpoint retained", task_id)
+            raise
+        except Exception as exc:
+            LOGGER.exception("task=%s download failed", task_id)
+            self.store.update_task(task_id, status="failed", error=str(exc), completed_at=now(), speed=0, eta=None,
+                                   steps={"receive": "done", "download": "failed"})
+        finally:
+            if reporter:
+                reporter.cancel()
+                await asyncio.gather(reporter, return_exceptions=True)
+            self.final_receipts.add(task_id)
+            self.running.pop(task_id, None)
+
+    async def _postprocess(self, group):
+        try:
+            async with self.operation_lock:
+                await self.unpack_group(group)
+        except asyncio.CancelledError:
+            for task in self.store.group(group):
+                if task["status"] in {"extracting", "organizing"}:
+                    self.store.update_task(task["id"], status="interrupted", speed=0)
+            raise
+        except Exception as exc:
+            LOGGER.exception("group=%s postprocess failed", group)
+            for task in self.store.group(group):
+                self.store.update_task(task["id"], status="processing_failed", error=str(exc), speed=0)
+        finally:
+            self.post_tasks.pop(group, None)
 
     async def unpack(self, task_id):
         task = self.store.task(task_id)
-        archive = Path(task["path"])
-        # Publish intent is saved before deletion; after a crash an already extracted output is reused.
-        output = Path(task["output"]) if task["output"] else None
-        if not output or not output.is_dir():
-            self.store.update_task(task_id, status="extracting", error="", completed_at=None)
-            await self.receipt(self.store.task(task_id))
-            try:
-                output = await extract_archive(archive, self.settings["archive_passwords"], source_name=task["filename"])
-            except (ExtractionError, OSError) as exc:
-                self.store.update_task(task_id, status="extraction_failed", error=str(exc), completed_at=now())
+        group = task.get("group_id") or str(task_id)
+        if not task.get("group_id"):
+            self.store.update_task(task_id, group_id=group)
+        self.pending_groups.add(group)
+
+    async def unpack_group(self, group):
+        members = self.store.group(group)
+        saved_plan = self.store.get(f"organize:{group}")
+        allowed = {"downloaded", "waiting_volumes", "interrupted", "extraction_failed", "processing_failed"}
+        if saved_plan:
+            allowed |= FINISHED
+        if not members or all(t["status"] in FINISHED for t in members) or any(t["status"] not in allowed for t in members):
+            return
+        if not saved_plan and any(not t["path"] or not Path(t["path"]).is_file() for t in members):
+            return
+        signature = [[t["id"], t["downloaded"]] for t in members]
+        if all(t["status"] == "waiting_volumes" for t in members) and self.store.get(f"volume_attempt:{group}") == signature:
+            return
+        self.store.put(f"volume_attempt:{group}", signature)
+        split = len(members) > 1 or any((t.get("volume") or {}).get("split") for t in members)
+        members.sort(key=lambda t: (t.get("volume") or {}).get("index", 0))
+        leader = members[0]
+        if split:
+            indices = {(t.get("volume") or {}).get("index", 0) for t in members}
+            scheme = (leader.get("volume") or {}).get("scheme")
+            required_start = 0 if scheme == "zip_old" else 1
+            missing = sorted(set(range(required_start, max(indices) + 1)) - indices)
+            if missing:
+                for task in members:
+                    self.store.update_task(task["id"], status="waiting_volumes", error="等待分卷编号：" + ", ".join(map(str, missing)), stage="volumes",
+                                           steps={"receive": "done", "download": "done", "volumes": "waiting"})
+                    self.final_receipts.add(task["id"])
                 return
-            self.store.update_task(task_id, output=str(output), status="extracted", completed_at=now())
-        else:
-            self.store.update_task(task_id, status="extracted", completed_at=now())
-        if self.settings["delete_archive"] and not task["archive_deleted"]:
-            try:
-                archive.unlink(missing_ok=True)
-                self.store.update_task(task_id, archive_deleted=True)
-            except OSError:
-                self.store.update_task(task_id, warning="解压完成，但原包删除失败；请检查目录权限")
+            if scheme == "zip_old":
+                leader = next((t for t in members if t["filename"].lower().endswith(".zip")), leader)
+        task_id = leader["id"]
+        steps = {"receive": "done", "download": "done", "volumes": "done" if split else "skipped"}
+        for task in members:
+            self.store.update_task(task["id"], status="extracting", stage="extract", error="", steps={**steps, "extract": "active"})
+        LOGGER.info("group=%s extraction starting volumes=%s", group, [t["filename"] for t in members])
+        try:
+            # Output intent survives interruption of the later move/delete workflow.
+            output = Path(leader["output"]) if leader["output"] else None
+            plan_key = f"organize:{group}"
+            plan = self.store.get(plan_key)
+            if not plan and (not output or not output.is_dir()):
+                output = await extract_archive(Path(leader["path"]), self.settings["archive_passwords"], leader["filename"], allow_volumes=split or bool(leader.get("volume")))
+            for task in members:
+                self.store.update_task(task["id"], output=str(output), status="organizing", stage="organize",
+                                       steps={**steps, "extract": "done", "organize": "active"})
+            if not plan:
+                plan = await asyncio.to_thread(make_plan, self.directory, output, resource_name(leader["filename"]), self.settings["delete_pdf"], False)
+                if not self.settings["flatten"]:
+                    plan["moves"] = []
+                plan["flatten"] = self.settings["flatten"]
+                self.store.put(plan_key, plan)
+            if not self.settings["delete_pdf"]:
+                plan["pdfs"] = plan["deleted"][:]
+                self.store.put(plan_key, plan)
+            def phase(value):
+                current_steps = {**steps, "extract": "done", "organize": "done" if value == "pdf" else "active"}
+                if value == "pdf":
+                    current_steps["pdf"] = "active" if self.settings["delete_pdf"] else "skipped"
+                for member in members:
+                    self.store.update_task(member["id"], stage=value, steps=current_steps)
+            result = await execute_plan(self.directory, plan, lambda value: self.store.put(plan_key, value), phase)
+            flattened = plan.get("flatten", self.settings["flatten"])
+            final = "organized" if flattened else "extracted"
+            steps.update(extract="done", organize="done" if flattened else "skipped",
+                         pdf="done" if self.settings["delete_pdf"] else "skipped", cloud="pending")
+            if self.settings["delete_archive"]:
+                for task in members:
+                    Path(task["path"]).unlink(missing_ok=True)
+                    self.store.update_task(task["id"], archive_deleted=True)
+            for task in members:
+                self.store.update_task(task["id"], status=final, stage="complete", error="", completed_at=now(),
+                    output=str(self.directory if flattened else output), steps=steps,
+                    result_files=result["moved"], deleted_pdfs=result["deleted_pdfs"])
+                self.final_receipts.add(task["id"])
+            LOGGER.info("group=%s workflow complete moved=%s deleted_pdfs=%s", group, result["moved"], result["deleted_pdfs"])
+        except (ExtractionError, OSError, ValueError) as exc:
+            failure_stage = self.store.task(task_id).get("stage", "extract")
+            status = "waiting_volumes" if isinstance(exc, VolumesPending) else (
+                "processing_failed" if failure_stage in {"organize", "pdf"} else "extraction_failed")
+            failure_steps = dict(self.store.task(task_id).get("steps") or steps)
+            if status == "waiting_volumes":
+                failure_stage = "volumes"
+                failure_steps.update(volumes="waiting", extract="idle")
+            else:
+                failure_steps[failure_stage] = "failed"
+            LOGGER.warning("group=%s workflow stopped status=%s reason=%s", group, status, exc, exc_info=True)
+            for task in members:
+                self.store.update_task(task["id"], status=status, error=str(exc), completed_at=now(),
+                    stage=failure_stage, steps=failure_steps)
+                self.final_receipts.add(task["id"])
+
+    async def control(self, task_id, action):
+        task = self.store.task(task_id)
+        if not task or task["scope"] != self.history.scope:
+            raise ValueError("任务不属于当前登录账号和收集群")
+        if action == "pause":
+            if task.get("stage", "download") != "download" or task["status"] not in {"queued", "interrupted", "downloading", "waiting", "retrying", "failed"}:
+                raise ValueError("只有下载阶段可以暂停；文件整理执行后会完成当前步骤")
+            self.store.update_task(task_id, status="paused", speed=0, eta=None)
+            worker = self.running.get(task_id)
+            if worker:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+        elif action in {"resume", "retry"}:
+            if task_id in self.running:
+                raise ValueError("任务仍在运行")
+            if task["status"] in FINISHED:
+                raise ValueError("任务已完成")
+            if task["status"] in {"extracting", "organizing", "downloaded"} or task.get("group_id") in self.post_tasks:
+                raise ValueError("任务仍在处理，请等待当前步骤结束")
+            if task.get("stage", "download") != "download" and task["path"]:
+                self.store.put(f"volume_attempt:{task.get('group_id') or str(task_id)}", None)
+                members = self.store.group(task.get("group_id") or str(task_id))
+                for item in members or [task]:
+                    self.store.update_task(item["id"], status="downloaded", error="")
+                await self.unpack(task_id)
+            else:
+                self.store.update_task(task_id, status="queued", stage="download", error="", warning="")
+        LOGGER.info("task=%s action=%s", task_id, action)
+
+    async def pause_queue(self, paused):
+        self.store.put("queue_paused", paused)
+        if paused:
+            workers = [(task_id, worker) for task_id, worker in self.running.items()
+                       if self.store.task(task_id).get("stage", "download") == "download"]
+            for task_id, worker in workers:
+                self.store.update_task(task_id, status="queued", speed=0, eta=None)
+                worker.cancel()
+            await asyncio.gather(*(worker for _, worker in workers), return_exceptions=True)
+        LOGGER.info("download queue paused=%s", paused)

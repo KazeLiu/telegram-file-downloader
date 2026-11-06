@@ -15,7 +15,7 @@ LOGGER = logging.getLogger(__name__)
 class DownloadQueue:
     def __init__(self, client: object, directory: Path, on_error, max_attempts: int = 3,
                  history: DownloadHistory | None = None, progress=None, parallelism=None,
-                 throttle=None, on_wait=None, on_notice=None):
+                 throttle=None, on_wait=None, on_notice=None, on_retry=None):
         self.client = client
         self.directory = directory
         self.on_error = on_error
@@ -26,6 +26,7 @@ class DownloadQueue:
         self.throttle = throttle or TransferThrottle(parallelism or 1)
         self.on_wait = on_wait
         self.on_notice = on_notice
+        self.on_retry = on_retry
         self.queue: asyncio.Queue[object | None] = asyncio.Queue()
 
     async def enqueue(self, message: object) -> None:
@@ -66,7 +67,8 @@ class DownloadQueue:
             try:
                 LOGGER.info("Downloading message %s to %s", getattr(message, "id", "?"), destination)
                 downloaded = await transfer_media(self.client, message, partial, self.parallelism,
-                    self.throttle, self.progress, self.on_wait, self.on_notice)
+                    self.throttle, self.progress, self.on_wait, self.on_notice,
+                    self.history if self.parallelism else None)
                 if not downloaded:
                     raise RuntimeError("Telegram returned no downloaded file")
 
@@ -88,6 +90,8 @@ class DownloadQueue:
                 if self.history:
                     self.history.ready(message_id)
                 actual_partial.rename(destination)
+                if self.history:
+                    self.history.clear_parts(message_id)
                 LOGGER.info("Downloaded %s", destination)
                 return destination
             except asyncio.CancelledError:
@@ -96,6 +100,8 @@ class DownloadQueue:
                 last_error = exc
                 LOGGER.exception("Download attempt %d/%d failed", attempt, self.max_attempts)
                 if attempt < self.max_attempts:
+                    if self.on_retry:
+                        self.on_retry(attempt, type(exc).__name__)
                     await asyncio.sleep(2 ** (attempt - 1))
 
         message_id = getattr(message, "id", "unknown")

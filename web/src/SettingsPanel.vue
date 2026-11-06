@@ -13,6 +13,7 @@ const settingsModel = reactive({ section: 'telegram', busy: '', error: '', dirty
 })
 const sections = [{ id: 'telegram', title: 'Telegram' }, { id: 'rules', title: '下载规则' }, { id: 'processing', title: '解压与回执' }, { id: 'security', title: '安全' }]
 const configured = computed(() => !!props.settings.api_id && props.settings.api_hash_saved)
+const processing = computed(() => props.status.active_tasks.some(task => ['downloading', 'waiting', 'retrying', 'extracting', 'organizing'].includes(task.status)))
 
 function resetForm() {
   const { api_hash_saved, proxy_password_saved, archive_passwords_count, chat, chat_title, enabled, ...form } = props.settings
@@ -40,7 +41,7 @@ async function save() {
     settingsModel.dirty = false
     settingsModel.api_hash = settingsModel.proxy_password = settingsModel.archive_passwords = ''
     settingsModel.replace_passwords = false
-  }, props.status.active ? '已保存，当前任务结束后应用' : '设置已保存')
+  }, '设置已保存，重新连接后从保存的进度恢复')
 }
 function loadDialogs() { return action('dialogs', async () => { settingsModel.dialogs = await api('/telegram/dialogs') }) }
 function cleanPhone() { settingsModel.phone = settingsModel.phone.replace(/[\s\p{Cf}]/gu, '') }
@@ -73,26 +74,28 @@ onBeforeUnmount(clearSecrets)
             <label class="toggle-row"><span class="setting-icon"><Icon name="video" /></span><span><strong>视频</strong><small>选择 Telegram 提供的最高可用清晰度，不转码</small></span><input v-model="settingsModel.form.videos" type="checkbox" role="switch" /></label>
             <label class="toggle-row"><span class="setting-icon"><Icon name="photo" /></span><span><strong>图片</strong><small>保存最高可用尺寸；文档方式发送的图片保留原文件</small></span><input v-model="settingsModel.form.photos" type="checkbox" role="switch" /></label>
             <label class="toggle-row"><span class="setting-icon"><Icon name="archive" /></span><span><strong>压缩包</strong><small>ZIP、RAR、7z、TAR、GZ、BZ2、XZ、ZST 等；同名文件自动编号</small></span><input v-model="settingsModel.form.archives" type="checkbox" role="switch" /></label>
-            <div class="form-grid"><label>单文件分片并发上限<select v-model="settingsModel.form.download_parallelism"><option :value="1">1 路</option><option :value="2">2 路</option><option :value="4">4 路（默认）</option></select></label></div>
-            <p class="muted">仍一次处理一个文件。遇到 Telegram 限流会按要求等待并降低并发；代理拥堵时可手动改为 1 或 2 路。</p>
+            <div class="form-grid"><label>并行下载文件数<select v-model="settingsModel.form.parallel_files"><option v-for="n in 5" :key="n" :value="n">{{ n }} 个{{ n === 5 ? '（默认）' : '' }}</option></select></label><label>账号分片请求总上限<select v-model="settingsModel.form.download_parallelism"><option :value="1">1 路</option><option :value="2">2 路</option><option :value="4">4 路（默认）</option></select></label></div>
+            <p class="muted">所有文件共享分片请求额度，不会叠加成 20 路。遇到 Telegram 限流会统一等待并降低并发。</p>
           </section>
           <section class="settings-section"><h2>文件保存位置</h2><div class="path-box"><Icon name="folder" /><code>{{ status.download_dir }}</code></div><p class="muted">这是程序内部的下载目录。Docker 的实际存放位置由 Compose 下载挂载决定。</p></section>
         </template>
         <template v-if="settingsModel.section === 'processing'">
           <section class="settings-section"><h2>解压与清理</h2><label class="toggle-row"><span><strong>自动解压压缩包</strong><small>先尝试无密码，再依次尝试已保存的密码</small></span><input v-model="settingsModel.form.extract" type="checkbox" role="switch" /></label>
-            <label class="toggle-row"><span><strong>解压成功后删除原包</strong><small>只有完整解压成功才删除；失败和分卷压缩包保留</small></span><input v-model="settingsModel.form.delete_archive" type="checkbox" role="switch" :disabled="!settingsModel.form.extract" /></label>
+            <label class="toggle-row"><span><strong>本地处理成功后删除原包</strong><small>完整解压和整理成功后才删除；分卷整组处理，缺卷保留</small></span><input v-model="settingsModel.form.delete_archive" type="checkbox" role="switch" :disabled="!settingsModel.form.extract" /></label>
+            <label class="toggle-row"><span><strong>平铺到下载根目录</strong><small>资源A/第一套/001.jpg → 资源A-第一套-001.jpg</small></span><input v-model="settingsModel.form.flatten" type="checkbox" role="switch" :disabled="!settingsModel.form.extract" /></label>
+            <label class="toggle-row"><span><strong>删除解压内容中的 PDF</strong><small>只处理本次资源，不扫描下载根目录中的其他 PDF</small></span><input v-model="settingsModel.form.delete_pdf" type="checkbox" role="switch" :disabled="!settingsModel.form.extract" /></label>
             <p v-if="!status.extractor_available" class="notice">未找到 7-Zip，当前只下载、不解压。Windows 安装 7-Zip 后重新连接即可。</p>
             <div class="password-heading"><span>解压密码 <small class="muted">已保存 {{ settings.archive_passwords_count }} 个</small></span><button type="button" class="text-button" @click="settingsModel.replace_passwords = !settingsModel.replace_passwords">{{ settingsModel.replace_passwords ? '取消替换' : '替换密码列表' }}</button></div>
             <label v-if="settingsModel.replace_passwords">每行一个密码，留空保存会清除列表<textarea v-model="settingsModel.archive_passwords" rows="4" autocomplete="off" spellcheck="false" class="secret-text" placeholder="输入固定的几个密码" /></label>
-            <p class="muted">密码只保存在服务器，不会在页面回显。分卷文件请收齐后手动解压。</p>
+            <p class="muted">密码只保存在服务器，不会在页面回显。分卷收齐并通过完整性检查后自动解压。</p>
           </section>
           <section class="settings-section"><h2>群内反馈</h2><label class="toggle-row"><span><strong>下载与解压回执</strong><small>回复原消息，约每 10 秒更新进度、速度和剩余时间</small></span><input v-model="settingsModel.form.receipts" type="checkbox" role="switch" /></label><label class="toggle-row"><span><strong>接收任务后标记已读</strong><small>已读代表收到任务；完成状态以回执为准</small></span><input v-model="settingsModel.form.mark_read" type="checkbox" role="switch" /></label></section>
         </template>
-        <div v-if="settingsModel.section !== 'security'" class="save-bar"><span>{{ settingsModel.dirty ? '有未保存的更改' : status.pending ? '等待当前任务结束后应用' : '设置保存在服务器，重启后保留' }}</span><button class="primary" :disabled="!!settingsModel.busy" type="submit">{{ settingsModel.busy === 'save' ? '保存中…' : '保存设置' }}</button></div>
+        <div v-if="settingsModel.section !== 'security'" class="save-bar"><span>{{ settingsModel.dirty ? '有未保存的更改' : status.pending ? '正在应用设置并恢复任务' : '设置保存在服务器，重启后保留' }}</span><button class="primary" :disabled="!!settingsModel.busy" type="submit">{{ settingsModel.busy === 'save' ? '保存中…' : '保存设置' }}</button></div>
       </form>
       <section v-if="settingsModel.section === 'telegram'" class="settings-section login-section">
         <h2>{{ status.account ? '收集账号与群' : '登录小号' }}</h2>
-        <template v-if="status.account"><div class="account-line"><div class="avatar">{{ status.account.name.slice(0, 1) }}</div><div><strong>{{ status.account.name }}</strong><small>{{ status.account.username ? '@' + status.account.username : 'Telegram 已登录' }}</small></div><button class="text-button danger-text" :disabled="!noBusy || !!status.active" @click="settingsModel.confirm_logout = true">退出 Telegram</button></div>
+        <template v-if="status.account"><div class="account-line"><div class="avatar">{{ status.account.name.slice(0, 1) }}</div><div><strong>{{ status.account.name }}</strong><small>{{ status.account.username ? '@' + status.account.username : 'Telegram 已登录' }}</small></div><button class="text-button danger-text" :disabled="!noBusy || processing" @click="settingsModel.confirm_logout = true">退出 Telegram</button></div>
           <div v-if="settingsModel.confirm_logout" class="notice"><p>退出后停止收集。文件和历史保留，可以重新登录。</p><button class="secondary" @click="settingsModel.confirm_logout = false">取消</button> <button class="danger" :disabled="!noBusy" @click="action('logout', async () => { await api('/telegram/logout', {}); settingsModel.confirm_logout = false })">确认退出</button></div>
           <div class="group-picker"><label>收集群<select v-model="settingsModel.chat" :disabled="!settingsModel.dialogs.length"><option :value="settings.chat">{{ settings.chat_title || '先加载群列表' }}</option><option v-for="dialog in settingsModel.dialogs.filter(d => d.id !== settings.chat)" :key="dialog.id" :value="dialog.id">{{ dialog.title }}</option></select></label><button class="secondary" :disabled="!noBusy" @click="loadDialogs">{{ settingsModel.busy === 'dialogs' ? '加载中…' : '加载群列表' }}</button><button v-if="settingsModel.chat && settingsModel.chat !== settings.chat" class="primary" :disabled="!noBusy" @click="action('chat', () => api('/telegram/chat', { id: settingsModel.chat }), '收集群已保存')">选用此群</button></div>
         </template>

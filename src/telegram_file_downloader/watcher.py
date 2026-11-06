@@ -76,6 +76,7 @@ class TelegramWatcher:
     async def _run_connected_session(self) -> None:
         assert self.client is not None
         history = None
+        processor = None
         scan_task = None
         stop_tasks = []
         self.state.set_status(ConnectionStatus.CONNECTING)
@@ -100,6 +101,7 @@ class TelegramWatcher:
             processor = MessageProcessor(recorder, download_queue, self.config.allowed_extensions)
             if self.processor_factory:
                 processor = self.processor_factory(self.client, history, recorder)
+                processor.start()
             LOGGER.info(
                 "Watching Telegram chat %s; tracking since %s; resume after message %s (%s); last complete scan %s",
                 getattr(target, "title", self.config.chat), history.since.isoformat(), history.message_id,
@@ -131,6 +133,8 @@ class TelegramWatcher:
                     task.cancel()
                     with suppress(asyncio.CancelledError, Exception):
                         await task
+            if self.processor_factory and processor:
+                await processor.close()
             if history:
                 history.close()
             if self.client.is_connected():
@@ -144,7 +148,14 @@ class TelegramWatcher:
         if not before:
             # Telegram's offset is exclusive; include the boundary second then filter locally.
             options["offset_date"] = history.since - timedelta(seconds=1)
-        async for message in self.client.iter_messages(target, **options):
+        iterator = self.client.iter_messages(target, **options).__aiter__()
+        if self.processor_factory:
+            processor.begin_scan()
+        while True:
+            try:
+                message = await asyncio.wait_for(iterator.__anext__(), 45) if self.processor_factory else await iterator.__anext__()
+            except StopAsyncIteration:
+                break
             if self.shutdown.is_set() or self.reconnect_requested.is_set():
                 return False
             if message.id <= history.message_id:
@@ -155,6 +166,8 @@ class TelegramWatcher:
             history.advance(message.id, message.date)
             LOGGER.info("Progress saved through Telegram message %s dated %s", message.id, message.date.isoformat())
         history.checked(started)
+        if self.processor_factory:
+            processor.scan_complete()
         if history.message_id != before:
             LOGGER.info("Catch-up complete; checked through %s", started.isoformat())
         return True

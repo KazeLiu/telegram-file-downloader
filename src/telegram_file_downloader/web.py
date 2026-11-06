@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import re
 import time
 from contextlib import asynccontextmanager
@@ -10,7 +11,7 @@ from typing import Literal
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from telethon import errors
@@ -18,6 +19,8 @@ from telethon import errors
 from .console_store import ConsoleStore
 from .config import compact_connection_input
 from .web_runtime import WebRuntime, telegram_proxy
+from .diagnostics import configure_logs, read_log
+from .organizer import browse
 
 
 class Credentials(BaseModel):
@@ -47,6 +50,9 @@ class SettingsPatch(BaseModel):
     receipts: bool | None = None
     mark_read: bool | None = None
     download_parallelism: Literal[1, 2, 4] | None = None
+    parallel_files: int | None = Field(default=None, ge=1, le=5)
+    flatten: bool | None = None
+    delete_pdf: bool | None = None
 
     @field_validator("proxy_host", "proxy_port", mode="before")
     @classmethod
@@ -76,9 +82,26 @@ class Enabled(BaseModel):
     enabled: bool
 
 
+class TaskAction(BaseModel):
+    action: Literal["pause", "resume", "retry"]
+
+
+class QueuePause(BaseModel):
+    paused: bool
+
+
+class FolderSelection(BaseModel):
+    path: str = Field(default="", max_length=4096)
+
+
+class OrganizeSelection(BaseModel):
+    token: str = Field(default="", max_length=32, pattern=r"^[a-f0-9]*$")
+
+
 def create_app():
     data_dir = Path(os.environ.get("DATA_DIR", str(Path.cwd() / "data"))).resolve()
     download_dir = Path(os.environ.get("DOWNLOAD_DIR", str(Path.cwd() / "downloads"))).resolve()
+    log_dir = configure_logs(data_dir)
     store = ConsoleStore(data_dir)
     runtime = WebRuntime(store, data_dir, download_dir)
     failures: dict[str, list[float]] = {}
@@ -260,8 +283,8 @@ def create_app():
 
     @app.post("/api/telegram/logout")
     async def telegram_logout():
-        if runtime.store.summary()["active"]:
-            raise ValueError("请等待当前任务结束后再退出 Telegram")
+        if store.tasks(statuses={"downloading", "waiting", "retrying", "extracting", "organizing"}):
+            raise ValueError("请先暂停下载，并等待解压整理结束后再退出 Telegram")
         await runtime.logout_telegram()
         return {"ok": True}
 
@@ -286,6 +309,60 @@ def create_app():
         await runtime.retry_extraction(task_id)
         return {"ok": True}
 
+    @app.get("/api/history/{task_id}")
+    async def task_detail(task_id: int):
+        task = store.task(task_id)
+        if not task:
+            raise HTTPException(404, "任务不存在")
+        task["group_members"] = [dict(id=item["id"], filename=item["filename"], status=item["status"], downloaded=item["downloaded"], size=item["size"])
+                                  for item in store.group(task.get("group_id", ""))] if task.get("group_id") else []
+        return task
+
+    @app.post("/api/history/{task_id}/action")
+    async def task_action(task_id: int, body: TaskAction):
+        await runtime.task_action(task_id, body.action)
+        return {"ok": True}
+
+    @app.post("/api/queue")
+    async def queue(body: QueuePause):
+        await runtime.queue_action(body.paused)
+        return {"ok": True}
+
+    @app.get("/api/files")
+    async def files(path: str = "", page: int = 1, search: str = ""):
+        if page < 1 or len(path) > 4096 or len(search) > 255:
+            raise ValueError("无效的文件查询")
+        return await asyncio.to_thread(browse, download_dir, path, page, search)
+
+    @app.post("/api/files/preview")
+    async def preview(body: FolderSelection):
+        return await runtime.preview_folder(body.path)
+
+    @app.post("/api/files/organize")
+    async def organize(body: OrganizeSelection):
+        await runtime.organize_folder(body.token)
+        return {"ok": True}
+
+    @app.get("/api/files/job")
+    async def organize_job():
+        job = store.get("manual_job", {})
+        plan = job.get("plan", {})
+        return dict(status=job.get("status", ""), error=job.get("error", ""), total=len(plan.get("moves", [])),
+                    done=sum(bool(move["done"]) for move in plan.get("moves", [])), result=job.get("result"))
+
+    @app.get("/api/logs")
+    async def logs(name: str = "collector.log"):
+        content = await asyncio.to_thread(read_log, log_dir, name)
+        return dict(name=name, content=content, files=[file.name for file in sorted(log_dir.glob("collector.log*")) if file.is_file()])
+
+    @app.get("/api/logs/download")
+    async def log_download(name: str = "collector.log"):
+        read_log(log_dir, name)  # Validate against the fixed log filename allowlist.
+        file = log_dir / name
+        if not file.is_file():
+            raise HTTPException(404, "日志文件不存在")
+        return FileResponse(file, filename=name, media_type="text/plain")
+
     static = Path(__file__).parent / "static"
     if static.exists():
         app.mount("/", StaticFiles(directory=static, html=True), name="console")
@@ -295,7 +372,7 @@ def create_app():
 def main():
     # One process owns Telegram's session and SQLite connection; do not use multiple workers.
     uvicorn.run(create_app(), host=os.environ.get("WEB_HOST", "127.0.0.1"),
-                port=int(os.environ.get("WEB_PORT", "18880")), access_log=False)
+                port=int(os.environ.get("WEB_PORT", "18880")), access_log=False, log_config=None)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,39 @@ class ExtractionError(ValueError):
     pass
 
 
+class VolumesPending(ExtractionError):
+    pass
+
+
+def volume_info(name: str):
+    patterns = [
+        (r"^(.+\.7z|.+\.zip)\.(\d+)$", "numeric"),
+        (r"^(.+)\.part(\d+)\.rar$", "rar_part"),
+        (r"^(.+)\.r(\d\d)$", "rar_old"),
+        (r"^(.+)\.z(\d\d)$", "zip_old"),
+    ]
+    for pattern, scheme in patterns:
+        match = re.match(pattern, name, re.I)
+        if match:
+            base, number = match.groups()
+            index = int(number) + (2 if scheme == "rar_old" else 0)
+            return dict(base=base, scheme=scheme, index=index, split=True)
+    if name.lower().endswith((".rar", ".zip")):
+        return dict(base=name[:-4], scheme="rar_old" if name.lower().endswith(".rar") else "zip_old",
+                    index=1 if name.lower().endswith(".rar") else 0, split=False)
+    return None
+
+
+def resource_name(name: str):
+    volume = volume_info(name)
+    if volume and volume["split"]:
+        name = volume["base"]
+    for suffix in sorted([*TAR_WRAPPER_SUFFIXES, *ARCHIVE_EXTENSIONS], key=len, reverse=True):
+        if name.lower().endswith(suffix):
+            return name[:-len(suffix)]
+    return name
+
+
 def seven_zip() -> str | None:
     executable = shutil.which("7zz") or shutil.which("7z")
     if not executable and os.name == "nt":
@@ -102,25 +135,32 @@ async def _expand_tar(executable: str, archive: Path, staging: Path) -> Path:
     return contents
 
 
-async def extract_archive(archive: Path, passwords: list[str], source_name: str | None = None) -> Path:
+async def extract_archive(archive: Path, passwords: list[str], source_name: str | None = None, allow_volumes=False) -> Path:
     executable = seven_zip()
     if not executable:
         raise ExtractionError("未找到 7-Zip；原包已保留。Windows 请安装 7-Zip 后重试")
-    if multipart(archive.name):
+    if multipart(archive.name) and not allow_volumes:
         raise ExtractionError("分卷压缩包已下载；为避免缺卷误删，请收齐后手动解压")
     # No password is attempted first. Never include subprocess output/arguments in errors: it can contain secrets.
+    missing_volume = False
     for password in dict.fromkeys(["", *passwords]):
         password_args = (f"-p{password}",) if password else ()
         code, listing = await _command(executable, "l", "-slt", "-ba", "-sccUTF-8", *password_args, "--", str(archive))
         if code:
+            missing_volume |= bool(re.search(r"missing volume|cannot find|can't find|unexpected end|is not a complete", listing, re.I))
             continue
         code, metadata = await _command(executable, "l", "-slt", "-sccUTF-8", *password_args, "--", str(archive))
         if code:
+            missing_volume |= bool(re.search(r"missing volume|cannot find|can't find|unexpected end|is not a complete", metadata, re.I))
             continue
-        if (re.search(r"(?m)^(?:Volume|Multivolume) = \+\r?$", metadata)
+        if not allow_volumes and (re.search(r"(?m)^(?:Volume|Multivolume) = \+\r?$", metadata)
                 or any(int(value) > 1 for value in re.findall(r"(?m)^Volumes = (\d+)", metadata))):
             raise ExtractionError("检测到分卷压缩包；请收齐后手动解压，原包已保留")
         unpacked = _validate_listing(listing)
+        code, result = await _command(executable, "t", "-sccUTF-8", *password_args, "--", str(archive))
+        if code:
+            missing_volume |= bool(re.search(r"missing volume|cannot find|can't find|unexpected end|is not a complete", result, re.I))
+            continue
         if shutil.disk_usage(archive.parent).free < unpacked:
             raise ExtractionError("解压空间不足，已保留原包")
         staging = Path(tempfile.mkdtemp(prefix=".tg-extract-", dir=archive.parent))
@@ -140,7 +180,7 @@ async def extract_archive(archive: Path, passwords: list[str], source_name: str 
                     if inner is None:
                         raise ExtractionError("组合压缩包没有唯一的 TAR 文件，已保留原包")
                     output = await _expand_tar(executable, inner, staging)
-            stem = format_name[:-len(wrapper_suffix)] if wrapper_suffix else archive.stem
+            stem = resource_name(format_name)
             target = collision_safe_path(archive.parent, stem + "_解压")
             output.rename(target)
             return target
@@ -148,4 +188,6 @@ async def extract_archive(archive: Path, passwords: list[str], source_name: str 
             if staging.exists():
                 # staging is a fresh directory created by this function inside archive.parent.
                 shutil.rmtree(staging)
+    if allow_volumes and missing_volume:
+        raise VolumesPending("等待后续分卷：压缩工具未确认整组完整；已有分卷全部保留")
     raise ExtractionError("解压失败：密码不匹配、压缩包损坏或缺卷；原包已保留")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import uuid
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -8,10 +10,13 @@ from telethon import TelegramClient, errors, utils
 
 from .archives import ARCHIVE_EXTENSIONS, seven_zip
 from .config import AppConfig, proxy_from_mapping
-from .console_store import ConsoleStore
+from .console_store import ConsoleStore, now
 from .media_pipeline import ConsoleProcessor
 from .state import AppState
 from .watcher import TelegramWatcher
+from .organizer import inside, make_plan, execute_plan
+
+LOGGER = logging.getLogger(__name__)
 
 def telegram_proxy(settings):
     if settings["proxy_type"] == "direct":
@@ -55,6 +60,9 @@ class WebRuntime:
         self.operation_lock = asyncio.Lock()
         self.pending = False
         self.stopping = False
+        self.processor = None
+        self.local_jobs = set()
+        self.manual_task = None
 
     def status(self):
         return dict(phase=self.phase, account=self.account, error=self.error or self.state.latest_error,
@@ -76,7 +84,7 @@ class WebRuntime:
             await self.changed.wait()
             self.changed.clear()
             try:
-                async with self.control_lock, self.operation_lock:
+                async with self.control_lock:
                     async with asyncio.timeout(60):
                         await self._apply()
             except (ValueError, OSError, EOFError, errors.RPCError) as exc:
@@ -94,9 +102,12 @@ class WebRuntime:
     async def _stop_watcher(self):
         if self.watcher_task:
             self.watcher.request_shutdown()
-            await self.watcher_task
+            self.watcher_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.watcher_task
             self.watcher_task = None
             self.watcher = None
+            self.processor = None
 
     async def _apply(self):
         await self._stop_watcher()
@@ -123,8 +134,9 @@ class WebRuntime:
                 ARCHIVE_EXTENSIONS, proxy=telegram_proxy(settings))
 
             def processor_factory(client, history, recorder):
-                return ConsoleProcessor(client, self.download_dir, history, recorder,
-                                        self.store, settings, self.operation_lock)
+                self.processor = ConsoleProcessor(client, self.download_dir, history, recorder,
+                                                 self.store, settings, self.operation_lock)
+                return self.processor
 
             self.watcher = TelegramWatcher(config, self.state, processor_factory, self.login_required)
             self.watcher_task = asyncio.create_task(self._watch(), name="console-watcher")
@@ -175,7 +187,7 @@ class WebRuntime:
             raise ValueError(self.error) from exc
 
     async def send_code(self, phone):
-        async with self.control_lock, self.operation_lock:
+        async with self.control_lock:
             if self.pending:
                 raise ValueError("连接配置正在应用，请稍后再试")
             if self.account:
@@ -219,7 +231,7 @@ class WebRuntime:
                     async for dialog in client.iter_dialogs() if dialog.is_group or dialog.is_channel]
 
     async def logout_telegram(self):
-        async with self.control_lock, self.operation_lock:
+        async with self.control_lock:
             await self._stop_watcher()
             client = await self._connect()
             if not await client.log_out():
@@ -233,27 +245,128 @@ class WebRuntime:
             self.phase, self.error = "phone", ""
 
     async def retry_extraction(self, task_id):
-        async with self.control_lock, self.operation_lock:
+        async with self.control_lock:
             task = self.store.task(task_id)
-            if not task or task["kind"] != "archive" or task["status"] not in {"extraction_failed", "completed", "interrupted"}:
+            if not task or task["kind"] != "archive" or task["status"] not in {"extraction_failed", "processing_failed", "waiting_volumes", "completed", "interrupted"}:
                 raise ValueError("这个任务不需要重新解压")
-            if not Path(task["path"]).is_file():
+            group = task.get("group_id") or str(task_id)
+            if not task["path"] or (not Path(task["path"]).is_file() and not self.store.get(f"organize:{group}")):
                 raise ValueError("原压缩包不在原下载目录，无法重试")
-            settings = self.store.settings()
-            client = self.watcher.client if self.watcher else self.auth_client
-            processor = ConsoleProcessor(client, self.download_dir, None, None, self.store, settings, self.operation_lock)
-            await processor.unpack(task_id)
-            if client:
-                await processor.receipt(self.store.task(task_id))
+            if self.processor and (task_id in self.processor.running or group in self.processor.post_tasks):
+                raise ValueError("这一组资源正在处理")
+            if any(job.get_name() == f"local-workflow-{group}" for job in self.local_jobs):
+                raise ValueError("这一组资源正在处理")
+            if not task.get("group_id"):
+                self.store.update_task(task_id, group_id=group)
+            members = self.store.group(group)
+            for member in members:
+                if member["status"] not in {"failed", "paused", "queued"}:
+                    self.store.update_task(member["id"], status="downloaded")
+            self.store.put(f"volume_attempt:{group}", None)
+            if self.processor:
+                await self.processor.unpack(task_id)
+                return
+            processor = ConsoleProcessor(None, self.download_dir, None, None, self.store, self.store.settings(), self.operation_lock)
+            job = asyncio.create_task(processor._postprocess(group), name=f"local-workflow-{group}")
+            self.local_jobs.add(job)
+            job.add_done_callback(self.local_jobs.discard)
+
+    async def task_action(self, task_id, action):
+        task = self.store.task(task_id)
+        if not task:
+            raise ValueError("任务不存在")
+        if action == "retry" and task["kind"] == "archive" and (task.get("stage", "download") != "download" or task["status"] in {"extraction_failed", "processing_failed", "waiting_volumes"}):
+            return await self.retry_extraction(task_id)
+        if not self.processor:
+            if action == "pause" and task["status"] in {"queued", "interrupted", "failed"}:
+                self.store.update_task(task_id, status="paused", speed=0)
+                return
+            raise ValueError("请先连接当前账号与收集群，并开启收集，再继续下载")
+        await self.processor.control(task_id, action)
+
+    async def queue_action(self, paused):
+        if not paused and self.manual_task and not self.manual_task.done():
+            raise ValueError("手动整理正在进行，请完成后再继续下载")
+        if self.processor:
+            await self.processor.pause_queue(paused)
+        else:
+            self.store.put("queue_paused", paused)
+
+    def selected_folder(self, value):
+        if Path(value).parts and Path(value).parts[0] == ".tg-work":
+            raise ValueError("工作流内部目录不能手动整理")
+        folder = inside(self.download_dir, value)
+        if not folder.is_dir():
+            raise ValueError("文件夹不存在")
+        return folder
+
+    def ensure_idle_folder(self, folder):
+        if self.processor and not self.store.get("queue_paused", False):
+            raise ValueError("请先暂停下载队列，再手动整理")
+        if self.store.tasks(statuses={"downloading", "retrying", "waiting", "extracting", "organizing"}):
+            raise ValueError("请先暂停下载队列，并等待解压和整理完成，再手动整理")
+
+    async def preview_folder(self, value):
+        folder = self.selected_folder(value)
+        self.ensure_idle_folder(folder)
+        if self.manual_task and not self.manual_task.done():
+            raise ValueError("已有文件整理正在执行")
+        old = self.store.get("manual_job", {})
+        if old.get("status") in {"running", "interrupted", "failed"}:
+            raise ValueError("上次整理尚未完成，请先继续原任务")
+        prefix = "-".join(folder.relative_to(self.download_dir).parts)
+        plan = await asyncio.to_thread(make_plan, self.download_dir, folder, prefix, False)
+        token = uuid.uuid4().hex
+        self.store.put(f"manual_preview:{token}", plan)
+        return dict(token=token, total=len(plan["moves"]), items=[
+            dict(source=str(Path(move["source"]).relative_to(self.download_dir)), target=Path(move["target"]).name)
+            for move in plan["moves"][:200]])
+
+    async def organize_folder(self, token):
+        if self.manual_task and not self.manual_task.done():
+            raise ValueError("已有文件整理正在执行")
+        self.ensure_idle_folder(self.download_dir)
+        job = self.store.get("manual_job", {})
+        if token:
+            if job.get("status") in {"running", "interrupted", "failed"}:
+                raise ValueError("请先继续上次整理")
+            plan = self.store.get(f"manual_preview:{token}")
+            if not plan or plan["complete"]:
+                raise ValueError("预览已失效，请重新预览")
+            job = dict(status="running", token=token, plan=plan, error="", created_at=now())
+        elif job.get("status") not in {"failed", "interrupted", "running"}:
+            raise ValueError("没有需要继续的整理任务")
+        job["status"], job["error"] = "running", ""
+        self.store.put("queue_paused", True)
+        self.store.put("manual_job", job)
+        async def run():
+            try:
+                async with self.operation_lock:
+                    def save(plan):
+                        job["plan"] = plan
+                        self.store.put("manual_job", job)
+                    job["result"] = await execute_plan(self.download_dir, job["plan"], save)
+                    job["status"] = "completed"
+            except asyncio.CancelledError:
+                job["status"] = "interrupted"
+                raise
+            except (OSError, ValueError) as exc:
+                LOGGER.exception("manual organize failed")
+                job.update(status="failed", error=str(exc))
+            finally:
+                self.store.put("manual_job", job)
+        self.manual_task = asyncio.create_task(run(), name="manual-organize")
 
     async def close(self):
         self.stopping = True
+        for job in [self.manual_task, *self.local_jobs]:
+            if job:
+                job.cancel()
+        await asyncio.gather(*(job for job in [self.manual_task, *self.local_jobs] if job), return_exceptions=True)
         if self.supervisor:
             self.supervisor.cancel()
             with suppress(asyncio.CancelledError):
                 await self.supervisor
         if self.watcher_task:
-            self.watcher.request_shutdown()
-            with suppress(asyncio.CancelledError):
-                await self.watcher_task
+            await self._stop_watcher()
         await self._disconnect_auth()

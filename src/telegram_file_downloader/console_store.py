@@ -24,6 +24,7 @@ DEFAULT_SETTINGS = {
     "extract": True, "delete_archive": False, "archive_passwords": [],
     "receipts": True, "mark_read": True, "enabled": False,
     "download_parallelism": 4,
+    "parallel_files": 5, "flatten": True, "delete_pdf": True,
 }
 SECRET_KEYS = {"api_hash", "proxy_password", "archive_passwords"}
 
@@ -44,10 +45,15 @@ class ConsoleStore:
                 id INTEGER PRIMARY KEY, scope TEXT NOT NULL, message_id INTEGER NOT NULL,
                 status TEXT NOT NULL, filename TEXT NOT NULL, data TEXT NOT NULL,
                 UNIQUE(scope, message_id));
+            CREATE INDEX IF NOT EXISTS task_status_scope ON tasks(status,scope);
         """)
         self.db.commit()
+        manual = self.get("manual_job", {})
+        if manual.get("status") == "running":
+            manual["status"] = "interrupted"
+            self.put("manual_job", manual)
         with self.db:
-            rows = self.db.execute("SELECT id, data FROM tasks WHERE status IN ('queued','downloading','waiting','downloaded','extracting')").fetchall()
+            rows = self.db.execute("SELECT id, data FROM tasks WHERE status IN ('queued','downloading','waiting','retrying','downloaded','extracting','organizing')").fetchall()
             for row in rows:
                 data = json.loads(row["data"])
                 data.update(status="interrupted", speed=0, eta=None, wait_until=None)
@@ -124,6 +130,8 @@ class ConsoleStore:
                     elapsed=0, path="", output="", archive_deleted=False, error="", warning="",
                     receipt_id=None)
         data.update(wait_until=None, wait_reason="", parallelism=None)
+        data.update(group_id="", volume=None, stage="download", steps={}, last_progress_at=None,
+                    attempts=0, result_files=0, deleted_pdfs=0)
         with self.db:
             cursor = self.db.execute("INSERT INTO tasks(scope,message_id,status,filename,data) VALUES (?,?,?,?,?)",
                                      (scope, message_id, "queued", filename, "{}"))
@@ -148,12 +156,30 @@ class ConsoleStore:
                                (*args, (page - 1) * 25)).fetchall()
         return {"items": [json.loads(row[0]) for row in rows], "total": count, "page": page, "page_size": 25}
 
+    def tasks(self, scope=None, statuses=None):
+        condition = " AND status IN (" + ",".join("?" for _ in statuses) + ")" if statuses else ""
+        rows = self.db.execute("SELECT data FROM tasks WHERE (? IS NULL OR scope=?)" + condition + " ORDER BY id",
+                               (scope, scope, *(statuses or [])))
+        return [json.loads(row[0]) for row in rows]
+
+    def volume_candidate(self, scope, signature, album):
+        row = self.db.execute("""SELECT data FROM tasks WHERE scope=?
+            AND json_extract(data,'$.volume_signature')=? AND json_extract(data,'$.album_id')=?
+            AND status NOT IN ('completed','extracted','organized') ORDER BY id DESC LIMIT 1""",
+            (scope, signature, album)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def group(self, group_id):
+        return [json.loads(row[0]) for row in self.db.execute(
+            "SELECT data FROM tasks WHERE json_extract(data,'$.group_id')=? ORDER BY id", (group_id,))]
+
     def summary(self):
         rows = self.db.execute("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status").fetchall()
         counts = {row["status"]: row["n"] for row in rows}
-        active = self.db.execute("SELECT data FROM tasks WHERE status IN ('downloading','waiting','extracting','queued') ORDER BY id LIMIT 1").fetchone()
+        active = [json.loads(row[0]) for row in self.db.execute("SELECT data FROM tasks WHERE status IN ('downloading','waiting','retrying','extracting','organizing','queued','waiting_volumes','paused','interrupted') ORDER BY CASE WHEN status IN ('downloading','waiting','retrying','extracting','organizing') THEN 0 WHEN status='queued' THEN 1 ELSE 2 END, id LIMIT 100")]
         total_bytes = self.db.execute("SELECT COALESCE(SUM(json_extract(data, '$.downloaded')), 0) FROM tasks").fetchone()[0]
-        return dict(counts=counts, total_bytes=total_bytes, active=json.loads(active[0]) if active else None)
+        return dict(counts=counts, total_bytes=total_bytes, active=active[0] if active else None,
+                    active_tasks=active, queue_paused=bool(self.get("queue_paused", False)))
 
     def close(self):
         self.db.close()

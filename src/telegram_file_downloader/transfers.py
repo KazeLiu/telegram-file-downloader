@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
+from collections import deque
 from pathlib import Path
 
 from telethon import errors
@@ -34,24 +36,31 @@ class TransferThrottle:
         self.reason = saved.get("reason", "flood")
         self.active = 0
         self.condition = asyncio.Condition()
+        self.waiters = deque()
         self.persist = persist
 
     @asynccontextmanager
     async def request(self, on_wait=None):
         async with self.condition:
-            while True:
-                remaining = self.deadline - time.monotonic()
-                if remaining <= 0 and self.active < self.parallelism:
-                    self.active += 1
-                    break
-                if remaining > 0:
-                    await notify(on_wait, self.until, self.reason, self.parallelism)
-                    try:
-                        await asyncio.wait_for(self.condition.wait(), remaining)
-                    except TimeoutError:
-                        pass
-                else:
-                    await self.condition.wait()
+            ticket = object()
+            self.waiters.append(ticket)
+            try:
+                while True:
+                    remaining = self.deadline - time.monotonic()
+                    if remaining <= 0 and self.active < self.parallelism and self.waiters[0] is ticket:
+                        self.active += 1
+                        break
+                    if remaining > 0:
+                        await notify(on_wait, self.until, self.reason, self.parallelism)
+                        try:
+                            await asyncio.wait_for(self.condition.wait(), remaining)
+                        except TimeoutError:
+                            pass
+                    else:
+                        await self.condition.wait()
+            finally:
+                self.waiters.remove(ticket)
+                self.condition.notify_all()
         try:
             yield
         except FLOOD_ERRORS as exc:
@@ -76,13 +85,17 @@ class TransferThrottle:
                        error.seconds, self.parallelism)
 
 
-async def download_document(client, message, destination: Path, parallelism, throttle, progress, on_wait):
+async def download_document(client, message, destination: Path, parallelism, throttle, progress, on_wait, history=None):
     document = message.document
     file_size = document.size
     part_count = (file_size + PART_SIZE - 1) // PART_SIZE
     worker_count = min(parallelism, part_count)
-    downloaded = 0
-    completed_parts = 0
+    parts = history.transfer(message.id, document.id, file_size) if history else set()
+    if parts and (not destination.is_file() or any(i < 0 or i >= part_count or
+            destination.stat().st_size < min((i + 1) * PART_SIZE, file_size) for i in parts)):
+        raise ValueError("下载分片记录与临时文件不符，请检查挂载；已保留文件")
+    downloaded = sum(min(PART_SIZE, file_size - i * PART_SIZE) for i in parts)
+    last_sync = time.monotonic()
     refresh_lock = asyncio.Lock()
 
     async def refresh_reference(failed_reference):
@@ -93,7 +106,7 @@ async def download_document(client, message, destination: Path, parallelism, thr
             while True:
                 try:
                     async with throttle.request(on_wait):
-                        fresh = await client.get_messages(message.chat_id, ids=message.id)
+                        fresh = await asyncio.wait_for(client.get_messages(message.chat_id, ids=message.id), 45)
                     break
                 except FLOOD_ERRORS:
                     continue
@@ -104,13 +117,26 @@ async def download_document(client, message, destination: Path, parallelism, thr
                 raise RuntimeError("Telegram 附件已变化或无法访问，无法继续同一文件")
             document = match
 
-    with destination.open("wb") as output:
-        await notify(progress, 0, file_size)
+    with destination.open("r+b" if destination.exists() else "w+b") as output:
+        if not parts:
+            output.truncate(0)
+        def checkpoint():
+            nonlocal last_sync
+            output.flush()
+            os.fsync(output.fileno())
+            if history:
+                history.save_parts(message.id, document.id, file_size, parts)
+            last_sync = time.monotonic()
+
+        await notify(progress, downloaded, file_size)
 
         async def worker(index):
-            nonlocal downloaded, completed_parts
+            nonlocal downloaded
             refreshed = False
             while index < part_count:
+                if index in parts:
+                    index += worker_count
+                    continue
                 reference = document.file_reference
                 remaining = (part_count - 1 - index) // worker_count + 1
                 iterator = client.iter_download(document, offset=index * PART_SIZE, stride=worker_count * PART_SIZE,
@@ -119,7 +145,7 @@ async def download_document(client, message, destination: Path, parallelism, thr
                     while index < part_count:
                         try:
                             async with throttle.request(on_wait):
-                                chunk = await iterator.__anext__()
+                                chunk = await asyncio.wait_for(iterator.__anext__(), 90)
                         except StopAsyncIteration as exc:
                             raise RuntimeError("Telegram 提前结束下载，分片尚未完整") from exc
                         offset = index * PART_SIZE
@@ -132,10 +158,14 @@ async def download_document(client, message, destination: Path, parallelism, thr
                         if written != expected:
                             raise OSError("下载分片未完整写入磁盘")
                         downloaded += written
-                        completed_parts += 1
+                        parts.add(index)
                         index += worker_count
                         refreshed = False
+                        if time.monotonic() - last_sync >= 1:
+                            checkpoint()
                         await notify(progress, downloaded, file_size)
+                        if index in parts:
+                            break
                 except FLOOD_ERRORS:
                     continue
                 except (errors.FilerefUpgradeNeededError, errors.FileReferenceExpiredError):
@@ -156,25 +186,51 @@ async def download_document(client, message, destination: Path, parallelism, thr
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-        if completed_parts != part_count or downloaded != file_size:
+            checkpoint()
+        if len(parts) != part_count or downloaded != file_size:
             raise RuntimeError("Telegram 下载分片不完整")
     return str(destination)
 
 
 async def transfer_media(client, message, destination, parallelism=None, throttle=None,
-                         progress=None, on_wait=None, on_notice=None):
+                         progress=None, on_wait=None, on_notice=None, history=None):
     throttle = throttle or TransferThrottle(parallelism or 1)
+    if parallelism is None:
+        # Legacy CLI callers retain their original download_media call contract.
+        while True:
+            try:
+                async with throttle.request(on_wait):
+                    options = {"progress_callback": progress} if progress else {}
+                    return await client.download_media(message, file=str(destination), **options)
+            except FLOOD_ERRORS:
+                continue
     document = getattr(message, "document", None)
     if parallelism and document and document.size:
         try:
-            return await download_document(client, message, destination, parallelism, throttle, progress, on_wait)
+            return await download_document(client, message, destination, parallelism, throttle, progress, on_wait, history)
         except _CdnRedirect:
             LOGGER.info("Telegram CDN redirect: using Telethon's standard CDN download path")
             await notify(on_notice, "此文件由 Telegram CDN 分发，使用标准下载路径处理")
+            if history:
+                history.clear_parts(message.id)
     while True:
         try:
             async with throttle.request(on_wait):
-                options = {"progress_callback": progress} if progress else {}
-                return await client.download_media(message, file=str(destination), **options)
+                last_progress = time.monotonic()
+                async def update(current, total):
+                    nonlocal last_progress
+                    last_progress = time.monotonic()
+                    await notify(progress, current, total)
+                transfer = asyncio.create_task(client.download_media(message, file=str(destination), progress_callback=update))
+                try:
+                    while not transfer.done():
+                        done, _ = await asyncio.wait([transfer], timeout=15)
+                        if not done and time.monotonic() - last_progress >= 90:
+                            raise TimeoutError("连续 90 秒未收到下载数据，保留文件并重试")
+                    return await transfer
+                finally:
+                    if not transfer.done():
+                        transfer.cancel()
+                    await asyncio.gather(transfer, return_exceptions=True)
         except FLOOD_ERRORS:
             continue

@@ -22,6 +22,9 @@ const paths: Record<string, string> = {
   logout: 'M10 4H4v16h6 M10 12h11 M16 7l5 5-5 5',
   chevron: 'M9 5l7 7-7 7',
   refresh: 'M20 7a9 9 0 1 0 1 9 M20 2v6h-6',
+  workflow: 'M3 4h6v6H3z M15 14h6v6h-6z M9 7h6a3 3 0 0 1 3 3v4 M6 10v7h9',
+  cloud: 'M6 18h12a4 4 0 0 0 0-8 6 6 0 0 0-11-2 5 5 0 0 0-1 10',
+  trash: 'M4 6h16 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',
 }
 </script>
 <template><svg :width="size || 20" :height="size || 20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="paths[name] || paths.file" /></svg></template>

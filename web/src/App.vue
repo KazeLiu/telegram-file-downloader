@@ -4,20 +4,26 @@ import { api, ApiError, bytes, date, duration, percent, waitRemaining, phaseLabe
 import Icon from './Icon.vue'
 import TaskList from './TaskList.vue'
 import SettingsPanel from './SettingsPanel.vue'
+import WorkflowSteps from './WorkflowSteps.vue'
+import TaskActions from './TaskActions.vue'
+import FilesPanel from './FilesPanel.vue'
+import LogsPanel from './LogsPanel.vue'
 
 const appModel = reactive({ booting: true, page: 'overview', status: null as Status | null,
-  settings: null as Settings | null, error: '', toast: '', busy: false, refreshing: false })
+  settings: null as Settings | null, error: '', toast: '', busy: false, refreshing: false, workflowTask: null as number | null })
 const authModel = reactive({ initialized: false, authenticated: false, password: '', confirm: '', busy: false, error: '' })
 const historyModel = reactive({ items: [] as Task[], total: 0, page: 1, status: '', search: '', appliedSearch: '', selected: null as Task | null, busy: false })
 const dialog = ref<HTMLDialogElement>()
 let timer: ReturnType<typeof setInterval>
 let toastTimer: ReturnType<typeof setTimeout>
-const navigation = [{ id: 'overview', title: '收集概览', icon: 'overview' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'settings', title: '设置', icon: 'settings' }]
+const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '文件管理', icon: 'folder' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
 const title = computed(() => navigation.find(n => n.id === appModel.page)?.title)
 const running = computed(() => appModel.status?.phase === 'watching' && appModel.status?.connection === 'Connected')
-const completed = computed(() => (appModel.status?.counts.completed || 0) + (appModel.status?.counts.extracted || 0) + (appModel.status?.counts.extraction_failed || 0))
+const completed = computed(() => (appModel.status?.counts.completed || 0) + (appModel.status?.counts.extracted || 0) + (appModel.status?.counts.organized || 0))
 const phase = computed(() => appModel.status?.pending ? '正在应用设置' : appModel.status?.phase === 'watching' && !running.value ? '正在连接' : phaseLabels[appModel.status?.phase || 'unconfigured'])
 const recent = computed(() => historyModel.items.slice(0, 5))
+const workflowTask = computed(() => appModel.status?.active_tasks.find(t => t.id === appModel.workflowTask) || appModel.status?.active)
+const pageDescriptions: Record<string, string> = { overview: '从接收、下载到整理，每一步都看得见。', history: '每一次下载，都有迹可循。', files: '把文件夹整理成一个平铺的资源库。', logs: '查看任务进展、连接恢复与失败原因。', settings: '按你的习惯，安排每一份资源。' }
 
 function message(value: string) {
   appModel.toast = value; clearTimeout(toastTimer)
@@ -26,10 +32,7 @@ function message(value: string) {
 async function loadHistory() {
   const result = await api(`/history?page=${historyModel.page}&status=${encodeURIComponent(historyModel.status)}&search=${encodeURIComponent(historyModel.appliedSearch)}`)
   historyModel.items = result.items; historyModel.total = result.total
-  if (historyModel.selected) {
-    const current = result.items.find((task: Task) => task.id === historyModel.selected?.id)
-    if (current) historyModel.selected = current
-  }
+  if (historyModel.selected && dialog.value?.open) historyModel.selected = await api<Task>(`/history/${historyModel.selected.id}`)
 }
 async function refresh() {
   if (!authModel.authenticated || appModel.refreshing) return
@@ -55,7 +58,7 @@ async function authenticate() {
 }
 async function toggleWatcher() {
   appModel.busy = true
-  try { await api('/watcher', { enabled: !appModel.settings?.enabled }); message(appModel.settings?.enabled ? '当前任务结束后暂停' : '开始收集新消息'); await refresh() }
+  try { await api('/watcher', { enabled: !appModel.settings?.enabled }); message(appModel.settings?.enabled ? '收集已暂停，下载进度会保留' : '开始收集新消息'); await refresh() }
   catch (error) { appModel.error = (error as Error).message }
   finally { appModel.busy = false }
 }
@@ -66,6 +69,20 @@ async function logout() {
 async function openTask(task: Task) {
   historyModel.selected = task
   await nextTick(); dialog.value?.showModal()
+  try { historyModel.selected = await api<Task>(`/history/${task.id}`) }
+  catch (error) { appModel.error = (error as Error).message }
+}
+async function taskAction(task: Task, action: 'pause' | 'resume' | 'retry') {
+  appModel.busy = true
+  try { await api(`/history/${task.id}/action`, { action }); await refresh(); message(action === 'pause' ? '已暂停，下载分片已保留' : '任务已加入处理队列') }
+  catch (error) { appModel.error = (error as Error).message }
+  finally { appModel.busy = false }
+}
+async function toggleQueue() {
+  appModel.busy = true
+  try { await api('/queue', { paused: !appModel.status?.queue_paused }); await refresh(); message(appModel.status?.queue_paused ? '下载已暂停，新消息仍会进入队列' : '下载队列已继续') }
+  catch (error) { appModel.error = (error as Error).message }
+  finally { appModel.busy = false }
 }
 async function filterHistory() {
   historyModel.page = 1; historyModel.appliedSearch = historyModel.search
@@ -111,33 +128,28 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
       <div class="sidebar-bottom"><div class="storage-label"><Icon name="folder" :size="18" /><span>文件保存在你的设备<small>{{ appModel.status?.download_dir || '正在读取…' }}</small></span></div><button class="account-menu" aria-label="退出管理页面" @click="logout"><Icon name="lock" :size="18" /><span>退出管理页面</span><Icon name="logout" :size="17" /></button></div>
     </aside>
     <div class="workspace"><header class="topbar"><span>我的资源库<span class="slash">/</span>{{ title }}</span><div class="connection"><span class="status-dot" :class="{ online: running }"></span>{{ phase }}</div></header>
-      <main class="page-content"><div class="page-heading"><div><h1>{{ title }}</h1><p>{{ appModel.page === 'overview' ? '把喜欢的资源转发到群，剩下的交给这里。' : appModel.page === 'history' ? '每一次下载，都有迹可循。' : '按你的习惯，安排每一份资源。' }}</p></div><button v-if="appModel.page === 'overview' && appModel.status?.account && appModel.settings?.chat" :class="appModel.settings.enabled ? 'secondary' : 'primary'" :disabled="appModel.busy || appModel.status.pending" @click="toggleWatcher"><Icon :name="appModel.settings.enabled ? 'pause' : 'play'" :size="17" />{{ appModel.settings.enabled ? '暂停收集' : '开始收集' }}</button></div>
+      <main class="page-content"><div class="page-heading"><div><h1>{{ title }}</h1><p>{{ pageDescriptions[appModel.page] }}</p></div><button v-if="appModel.page === 'overview' && appModel.status?.account && appModel.settings?.chat" :class="appModel.settings.enabled ? 'secondary' : 'primary'" :disabled="appModel.busy || appModel.status.pending" @click="toggleWatcher"><Icon :name="appModel.settings.enabled ? 'pause' : 'play'" :size="17" />{{ appModel.settings.enabled ? '暂停收集' : '开始收集' }}</button></div>
         <p v-if="appModel.error" class="notice error" role="alert">{{ appModel.error }}<button class="text-button" @click="refresh">重试</button></p>
         <p v-if="appModel.status?.error && appModel.page !== 'history'" class="notice error" role="alert">{{ appModel.status.error }}</p>
         <template v-if="appModel.settings && appModel.status">
           <template v-if="appModel.page === 'overview'">
-            <section v-if="appModel.status.active" class="transfer-panel">
-              <div class="section-heading"><h2>正在处理</h2><span class="badge" :class="appModel.status.active.status">{{ taskLabels[appModel.status.active.status] }}</span></div>
-              <p v-if="appModel.status.active.status === 'waiting'" class="notice">{{ appModel.status.active.wait_reason === 'premium' ? 'Telegram 返回了账号下载限速' : 'Telegram 要求暂停下载请求' }}，到期后自动恢复。当前分片并发上限 {{ appModel.status.active.parallelism }} 路。</p>
-              <div class="transfer-file"><div class="file-icon large"><Icon :name="appModel.status.active.kind === 'archive' ? 'archive' : 'file'" :size="34" /></div><div><h3>{{ appModel.status.active.filename }}</h3><p>{{ bytes(appModel.status.active.downloaded) }} / {{ bytes(appModel.status.active.size) }} <span v-if="appModel.status.active.quality">· {{ appModel.status.active.quality }}</span></p></div></div>
-              <progress :value="percent(appModel.status.active)" max="100" aria-label="当前下载进度" />
-              <div class="transfer-metrics">
-                <div><span>下载进度</span><strong>{{ percent(appModel.status.active).toFixed(1) }}<small>%</small></strong></div>
-                <div><span>当前速度</span><strong>{{ bytes(appModel.status.active.speed) }}<small>/s</small></strong></div>
-                <div><span>{{ appModel.status.active.status === 'waiting' ? '恢复下载' : '预计剩余' }}</span><strong class="eta">{{ appModel.status.active.status === 'waiting' ? duration(waitRemaining(appModel.status.active)) + '后' : appModel.status.active.status === 'extracting' ? '正在解压' : duration(appModel.status.active.eta) }}</strong></div>
-              </div>
+            <WorkflowSteps :task="workflowTask" :settings="appModel.settings" />
+            <section v-if="appModel.status.active_tasks.length || appModel.status.account" class="queue-panel"><div class="section-heading"><div><h2>下载队列 <small class="muted">最多 {{ appModel.settings.parallel_files }} 个文件同时下载</small></h2><p class="muted">{{ appModel.status.queue_paused ? '下载已暂停，新转发仍会进入队列。' : `共享 ${appModel.settings.download_parallelism} 路分片请求，遇到限流统一等待。` }}</p></div><button class="secondary" :disabled="appModel.busy" @click="toggleQueue"><Icon :name="appModel.status.queue_paused ? 'play' : 'pause'" :size="16" />{{ appModel.status.queue_paused ? '继续下载' : '暂停下载' }}</button></div>
+              <div v-for="task in appModel.status.active_tasks.slice(0, 10)" :key="task.id" class="queue-item" :class="{ focused: workflowTask?.id === task.id }"><div class="queue-file"><button class="queue-filename" @click="appModel.workflowTask = task.id"><Icon :name="task.kind === 'archive' ? 'archive' : 'file'" :size="20" /><strong>{{ task.filename }}</strong></button><span class="badge" :class="task.status">{{ taskLabels[task.status] }}</span></div><progress :value="percent(task)" max="100" :aria-label="task.filename + ' 下载进度'" /><div class="queue-meta"><span>{{ bytes(task.downloaded) }} / {{ bytes(task.size) }}</span><span>{{ bytes(task.speed) }}/s</span><span>{{ task.status === 'waiting' ? duration(waitRemaining(task)) + '后恢复' : task.status === 'downloading' ? '剩余 ' + duration(task.eta) : taskLabels[task.status] }}</span><button class="text-button" @click="openTask(task)">详情</button><TaskActions :task="task" :busy="appModel.busy" @action="taskAction(task, $event)" /></div><p v-if="task.error" class="queue-error">{{ task.error }}</p></div><div v-if="!appModel.status.active_tasks.length" class="empty-list"><Icon name="inbox" :size="28" /><p>等待下一次转发</p></div><button v-if="appModel.status.active_tasks.length > 10" class="text-button" @click="navigate('history')">查看全部任务</button>
             </section>
-            <section v-else-if="!appModel.status.account || !appModel.settings.chat" class="welcome-panel"><div class="welcome-icon"><Icon name="inbox" :size="54" /></div><h2>{{ !appModel.status.account ? '连接 Telegram，开始收集。' : '选一个群，作为收集入口。' }}</h2><p>用小号守候在群里，自动保存你转发的文件。</p><button class="primary" @click="navigate('settings')">{{ !appModel.status.account ? '连接 Telegram' : '选择收集群' }}<Icon name="arrow" :size="18" /></button><div class="welcome-foot"><span><Icon name="check" :size="15" />首次跳过旧消息</span><span><Icon name="check" :size="15" />登录状态持久保存</span></div></section>
-            <section v-else class="idle-panel"><div class="idle-symbol"><Icon :name="appModel.settings.enabled ? 'inbox' : 'pause'" :size="36" /></div><div><h2>{{ appModel.settings.enabled ? '一切就绪，等你下一次转发。' : '收集已暂停。' }}</h2><p>{{ appModel.settings.chat_title }}<span class="inline-dot">·</span>{{ appModel.settings.enabled ? '新附件会自动下载到你的设备' : '已保存的文件和登录状态不会受到影响' }}</p></div><span class="badge" :class="running ? 'completed' : ''">{{ phase }}</span></section>
+            <section v-if="!appModel.status.account || !appModel.settings.chat" class="welcome-panel"><div class="welcome-icon"><Icon name="inbox" :size="54" /></div><h2>{{ !appModel.status.account ? '连接 Telegram，开始收集。' : '选一个群，作为收集入口。' }}</h2><p>用小号守候在群里，自动保存你转发的文件。</p><button class="primary" @click="navigate('settings')">{{ !appModel.status.account ? '连接 Telegram' : '选择收集群' }}<Icon name="arrow" :size="18" /></button><div class="welcome-foot"><span><Icon name="check" :size="15" />首次跳过旧消息</span><span><Icon name="check" :size="15" />登录状态持久保存</span></div></section>
+            <section v-else-if="!appModel.status.active_tasks.length" class="idle-panel"><div class="idle-symbol"><Icon :name="appModel.settings.enabled ? 'inbox' : 'pause'" :size="36" /></div><div><h2>{{ appModel.settings.enabled ? '一切就绪，等你下一次转发。' : '收集已暂停。' }}</h2><p>{{ appModel.settings.chat_title }}<span class="inline-dot">·</span>{{ appModel.settings.enabled ? '新附件会自动下载到你的设备' : '已保存的文件和登录状态不会受到影响' }}</p></div><span class="badge" :class="running ? 'completed' : ''">{{ phase }}</span></section>
             <section class="summary-strip" aria-label="收集统计"><div><span>已收集文件</span><strong>{{ completed }}<small>个</small></strong></div><div><span>累计下载</span><strong>{{ bytes(appModel.status.total_bytes) }}</strong></div><div><span>收集入口</span><strong class="group-title">{{ appModel.settings.chat_title || '尚未选择' }}</strong></div></section>
             <section class="recent-section"><div class="section-heading"><h2>最近收集</h2><button class="text-button" @click="navigate('history')">全部记录<Icon name="chevron" :size="16" /></button></div><TaskList v-if="recent.length" :tasks="recent" compact @select="openTask" /><div v-else class="empty-list"><Icon name="history" :size="28" /><p>还没有下载记录</p><span>开始收集后，下载进度和处理结果会显示在这里。</span></div></section>
             <section class="rules-summary"><span>当前规则</span><span class="rule-chip" :class="{ enabled: appModel.settings.videos }"><Icon name="video" :size="16" />视频 · {{ appModel.settings.videos ? '最高可用清晰度' : '不下载' }}</span><span class="rule-chip" :class="{ enabled: appModel.settings.photos }"><Icon name="photo" :size="16" />图片 · {{ appModel.settings.photos ? '下载' : '不下载' }}</span><span class="rule-chip" :class="{ enabled: appModel.settings.archives }"><Icon name="archive" :size="16" />压缩包 · {{ appModel.settings.archives ? '下载' : '不下载' }}</span><button class="text-button" @click="navigate('settings')">调整</button></section>
           </template>
           <template v-else-if="appModel.page === 'history'">
-            <form class="history-toolbar" @submit.prevent="filterHistory"><div class="search-box"><Icon name="search" :size="18" /><input v-model="historyModel.search" type="search" placeholder="搜索文件名" aria-label="搜索文件名" /><button class="text-button" type="submit">搜索</button></div><select v-model="historyModel.status" aria-label="按处理状态筛选" @change="filterHistory"><option value="">全部状态</option><option value="downloading">下载中</option><option value="waiting">限流等待</option><option value="completed">已下载</option><option value="extracted">已解压</option><option value="extraction_failed">待处理</option><option value="failed">下载失败</option></select><span>{{ historyModel.total }} 条记录</span></form>
+            <form class="history-toolbar" @submit.prevent="filterHistory"><div class="search-box"><Icon name="search" :size="18" /><input v-model="historyModel.search" type="search" placeholder="搜索文件名" aria-label="搜索文件名" /><button class="text-button" type="submit">搜索</button></div><select v-model="historyModel.status" aria-label="按处理状态筛选" @change="filterHistory"><option value="">全部状态</option><option v-for="(label, status) in taskLabels" :key="status" :value="status">{{ label }}</option></select><span>{{ historyModel.total }} 条记录</span></form>
             <section class="history-panel"><TaskList v-if="historyModel.items.length" :tasks="historyModel.items" @select="openTask" /><div v-else class="empty-list tall"><Icon name="history" :size="38" /><h2>{{ historyModel.appliedSearch || historyModel.status ? '没有符合条件的记录' : '你的资源旅程，从一次转发开始。' }}</h2><p>{{ historyModel.appliedSearch || historyModel.status ? '试试其他文件名或状态。' : '下载时间、速度、进度和解压结果，都会记录在这里。' }}</p><button v-if="!appModel.status.account" class="secondary" @click="navigate('settings')">先连接 Telegram</button></div></section>
             <div v-if="historyModel.total > 25" class="pagination"><span>第 {{ historyModel.page }} / {{ Math.ceil(historyModel.total / 25) }} 页</span><button class="secondary" :disabled="historyModel.page === 1" @click="pageHistory(-1)">上一页</button><button class="secondary" :disabled="historyModel.page * 25 >= historyModel.total" @click="pageHistory(1)">下一页</button></div>
           </template>
+          <FilesPanel v-else-if="appModel.page === 'files'" @message="message" />
+          <LogsPanel v-else-if="appModel.page === 'logs'" />
           <SettingsPanel v-else :settings="appModel.settings" :status="appModel.status" @refresh="refresh" @message="message" />
         </template>
         <footer class="page-footer"><span>拾存 · 本地优先的 Telegram 收集工具</span><span><Icon name="lock" :size="13" />设置与会话持久保存</span></footer>
@@ -148,6 +160,8 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
         <div class="section-heading"><h2>文件详情</h2><button class="icon-button" aria-label="关闭详情" @click="dialog?.close()"><Icon name="close" /></button></div>
         <div class="detail-title"><span class="file-icon large"><Icon name="file" :size="30" /></span><h3>{{ historyModel.selected.filename }}</h3></div>
         <span class="badge" :class="historyModel.selected.status">{{ taskLabels[historyModel.selected.status] }}</span>
+        <WorkflowSteps :task="historyModel.selected" :settings="appModel.settings || undefined" />
+        <TaskActions :task="historyModel.selected" :busy="appModel.busy" @action="taskAction(historyModel.selected!, $event)" />
         <progress :value="percent(historyModel.selected)" max="100" aria-label="文件下载进度" />
         <dl class="detail-grid">
           <div><dt>接收时间</dt><dd>{{ date(historyModel.selected.created_at) }}</dd></div>
@@ -157,6 +171,9 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           <div><dt>下载大小</dt><dd>{{ bytes(historyModel.selected.downloaded) }} / {{ bytes(historyModel.selected.size) }}</dd></div>
           <div><dt>下载进度</dt><dd>{{ percent(historyModel.selected).toFixed(1) }}%</dd></div>
           <div><dt>平均速度</dt><dd>{{ bytes(historyModel.selected.average_speed) }}/s</dd></div>
+          <div><dt>最近进度更新</dt><dd>{{ date(historyModel.selected.last_progress_at || null) }}</dd></div>
+          <div v-if="historyModel.selected.result_files"><dt>整理文件</dt><dd>{{ historyModel.selected.result_files }} 个</dd></div>
+          <div v-if="historyModel.selected.deleted_pdfs"><dt>删除 PDF</dt><dd>{{ historyModel.selected.deleted_pdfs }} 个</dd></div>
           <div v-if="historyModel.selected.status === 'downloading'"><dt>预计剩余</dt><dd>{{ duration(historyModel.selected.eta) }}</dd></div>
           <div v-if="historyModel.selected.parallelism"><dt>分片并发上限</dt><dd>{{ historyModel.selected.parallelism }} 路</dd></div>
           <div v-if="historyModel.selected.status === 'waiting'"><dt>恢复下载</dt><dd>{{ duration(waitRemaining(historyModel.selected)) }}后</dd></div>
@@ -167,8 +184,10 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           <div v-if="historyModel.selected.output" class="full"><dt>解压位置</dt><dd>{{ historyModel.selected.output }}</dd></div>
         </dl>
         <p v-if="historyModel.selected.error" class="notice error">{{ historyModel.selected.error }}</p>
+        <p v-if="appModel.error" class="notice error" role="alert">{{ appModel.error }}</p>
         <p v-if="historyModel.selected.warning" class="notice">{{ historyModel.selected.warning }}</p>
-        <button v-if="historyModel.selected.kind === 'archive' && historyModel.selected.path && ['extraction_failed','completed','interrupted'].includes(historyModel.selected.status) && !historyModel.selected.archive_deleted" class="primary" :disabled="historyModel.busy" @click="retryExtraction">{{ historyModel.busy ? '正在尝试解压…' : '重新尝试解压' }}</button>
+        <div v-if="historyModel.selected.group_members && historyModel.selected.group_members.length > 1" class="volume-list"><h3>同组分卷</h3><p v-for="part in historyModel.selected.group_members" :key="part.id"><span>{{ part.filename }}</span><span class="badge" :class="part.status">{{ taskLabels[part.status] }}</span></p></div>
+        <button v-if="historyModel.selected.kind === 'archive' && historyModel.selected.path && ['completed','interrupted'].includes(historyModel.selected.status) && !historyModel.selected.archive_deleted" class="primary" :disabled="historyModel.busy" @click="retryExtraction">{{ historyModel.busy ? '正在加入队列…' : '尝试解压并整理' }}</button>
       </template>
     </dialog>
   </div>
