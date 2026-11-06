@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watchEffect } from 'vue'
 import { api, bytes } from './api'
 import Icon from './Icon.vue'
 import XiaomiBatchUpload from './XiaomiBatchUpload.vue'
@@ -19,15 +19,18 @@ const recycleDialog = ref<HTMLDialogElement>()
 const uploadDialog = ref<HTMLDialogElement>()
 const fileInput = ref<HTMLInputElement>()
 const albumHeading = ref<HTMLHeadingElement>()
+const wallEnd = ref<HTMLDivElement>()
 const albumName = computed(() => cloud.albums.find(item => item.id === cloud.album)?.name || '')
 let pollTimer: ReturnType<typeof setTimeout>
 let disposed = false
+let wallObserver: IntersectionObserver | undefined
 
 function params(values: Record<string, string>) {
   return new URLSearchParams({ connection: cloud.account!.connection, ...values })
 }
 
 async function run(label: string, action: () => Promise<void>) {
+  if (cloud.busy) return
   cloud.busy = label; cloud.error = ''
   try { await action() }
   catch (error) { cloud.error = (error as Error).message }
@@ -46,6 +49,16 @@ async function loadMedia(page = 0, append = false) {
 function resetMedia() {
   cloud.items = []; cloud.page = 0; cloud.last = true; cloud.ready = false
 }
+
+function loadMore() {
+  if (!cloud.wall || !cloud.ready || cloud.last || cloud.busy || cloud.error || disposed) return
+  void run('正在加载下一批图片…', () => loadMedia(cloud.page + 1, true))
+}
+
+watchEffect(() => {
+  wallObserver?.disconnect()
+  if (wallEnd.value && cloud.wall && cloud.ready && !cloud.last && !cloud.busy && !cloud.error) wallObserver?.observe(wallEnd.value)
+}, { flush: 'post' })
 
 async function loadAccount() {
   const previous = cloud.account?.connection
@@ -187,8 +200,11 @@ async function uploadFile() {
   await run('正在刷新云相册…', () => loadMedia())
 }
 
-onMounted(() => void run('正在读取连接…', loadAccount))
-onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
+onMounted(() => {
+  wallObserver = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) loadMore() }, { rootMargin: '0px 0px 160px' })
+  void run('正在读取连接…', loadAccount)
+})
+onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disconnect() })
 </script>
 
 <template>
@@ -222,7 +238,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
       <template v-if="!cloud.album">
         <section v-if="cloud.albums.length" class="cloud-albums" aria-label="相册列表">
           <button v-for="album in cloud.albums" :id="`xiaomi-album-${album.id}`" :key="album.id" type="button" class="cloud-album" :disabled="!!cloud.busy" @click="openAlbum(album.id)">
-            <span class="album-cover" :class="{ 'album-private': album.id === '1000' }"><Icon :name="album.id === '1000' ? 'lock' : album.id === '1' || album.id === '2' ? 'photo' : 'folder'" :size="32" /></span>
+            <span class="album-cover" :class="{ 'album-private': album.id === '1000' }"><Icon :name="album.id === '1000' ? 'lock' : 'folder'" :size="22" /></span>
             <span class="album-label"><strong>{{ album.name }}</strong><Icon name="chevron" :size="15" /></span>
           </button>
         </section>
@@ -235,7 +251,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
             <h2 id="xiaomi-album-heading" ref="albumHeading" tabindex="-1">{{ albumName }}</h2>
           </div>
           <div class="cloud-actions">
-            <label class="flex flex-row items-center gap-2"><input type="checkbox" role="switch" :checked="cloud.wall" :disabled="!!cloud.busy" @change="toggleWall" />图片墙</label>
+            <label class="wall-toggle"><input type="checkbox" role="switch" :checked="cloud.wall" :disabled="!!cloud.busy" @change="toggleWall" />图片墙</label>
             <button class="secondary" :disabled="!!cloud.busy" @click="run('正在刷新相册内容…', () => loadMedia(cloud.wall ? 0 : cloud.page))"><Icon name="refresh" :size="17" />刷新</button>
             <XiaomiNameRecycle :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :album-name="albumName"
               :last-local-recycle="props.lastLocalRecycle" :disabled="!!cloud.busy" @recycled="afterNameRecycle" @message="emit('message', $event)" />
@@ -262,8 +278,9 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
         <div v-else-if="!cloud.busy && !cloud.error && cloud.last" class="empty-list">
           <Icon name="photo" :size="30" /><p>这个相册还没有图片或视频</p>
         </div>
-        <div v-if="cloud.wall && cloud.ready && !cloud.last" class="mt-4 text-center">
-          <button class="secondary" :disabled="!!cloud.busy" @click="run('正在加载下一批图片…', () => loadMedia(cloud.page + 1, true))">加载下 20 张</button>
+        <div v-if="cloud.wall && cloud.ready && !cloud.last" ref="wallEnd" class="wall-end" role="status">
+          <template v-if="cloud.busy">正在加载…</template>
+          <button v-else-if="cloud.error" class="text-button" @click="cloud.error = ''; loadMore()">重试加载</button>
         </div>
         <div v-if="!cloud.wall && cloud.ready && (cloud.page > 0 || !cloud.last)" class="pagination">
           <span>第 {{ cloud.page + 1 }} 页</span>
@@ -309,11 +326,11 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
 .cloud-account { @apply mb-2; }
 .cloud-account > div { @apply flex items-center gap-2.5; }
 .cloud-account svg { @apply text-blue; }
-.cloud-albums { @apply grid grid-cols-2 gap-3 min-[760px]:grid-cols-3 xl:grid-cols-4; }
-.cloud-album { @apply flex min-w-0 flex-col overflow-hidden rounded-xl border border-solid border-hairline bg-canvas p-0 text-left; }
-.album-cover { @apply grid aspect-[2/1] w-full place-items-center bg-blue/10 text-blue; }
+.cloud-albums { @apply grid grid-cols-2 gap-2 min-[760px]:grid-cols-3 xl:grid-cols-5; }
+.cloud-album { @apply flex min-h-16 min-w-0 items-center gap-2 rounded-lg border border-solid border-hairline bg-canvas px-3 py-2 text-left; }
+.album-cover { @apply grid size-9 shrink-0 place-items-center rounded-lg bg-blue/10 text-blue; }
 .album-cover.album-private { @apply bg-soft text-muted; }
-.album-label { @apply flex min-h-12 w-full items-center justify-between gap-2 px-3 py-2; }
+.album-label { @apply flex min-w-0 flex-1 items-center justify-between gap-2; }
 .album-label strong { @apply min-w-0; overflow-wrap: anywhere; }
 .album-label svg { @apply text-muted; }
 .cloud-library { @apply px-6 py-5; }
@@ -321,6 +338,8 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
 .cloud-detail-heading { @apply flex min-w-0 flex-wrap items-center gap-x-4; }
 .cloud-detail-heading h2 { overflow-wrap: anywhere; }
 .cloud-status { @apply mb-2.5; }
+.wall-toggle { @apply flex flex-row items-center gap-2; }
+.wall-end { @apply grid min-h-14 place-items-center text-sm text-muted; }
 .cloud-files { @apply m-0 list-none p-0; }
 .cloud-wall { @apply m-0 grid list-none grid-cols-3 gap-2 p-0 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
 .wall-recycle { @apply absolute top-1 right-1 grid size-8 min-h-0 place-items-center rounded-full bg-canvas p-0 text-danger; }

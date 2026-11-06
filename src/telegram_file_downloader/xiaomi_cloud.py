@@ -358,7 +358,8 @@ class XiaomiCloud:
                   "size": item.get("size"), "taken_at": item.get("dateTaken")}
         info = item.get("thumbnailInfo")
         source = info.get("data") if isinstance(info, dict) and not info.get("encryptInfo") else None
-        if connection and isinstance(source, str) and not item.get("isEncryptMedia") and not item.get("encryptInfo"):
+        # The thumbnail's own encryption metadata applies; the original can be encrypted independently.
+        if connection and isinstance(source, str):
             if source.startswith("data:"):
                 header, _, encoded = source.partition(",")
                 if not (header.removeprefix("data:").removesuffix(";base64") in THUMBNAIL_TYPES

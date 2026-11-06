@@ -114,7 +114,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
 </script>
 
 <template>
-  <button class="primary" :disabled="disabled || model.busy" @click="open">上传下载目录文件</button>
+  <button class="primary" :disabled="disabled || model.busy" @click="open">上传图片管理中全部图片</button>
   <dialog ref="dialog" class="task-dialog batch-dialog" @close="stopPolling">
     <div class="section-heading"><h2>批量上传{{ albumName ? `到「${albumName}」` : '' }}</h2><button class="icon-button" aria-label="关闭批量上传" :disabled="model.busy" @click="dialog?.close()"><Icon name="close" /></button></div>
     <p v-if="model.error" class="notice error" role="alert">{{ model.error }}<button class="text-button" :disabled="model.busy" @click="run(loadDialog)">刷新</button></p>
@@ -154,7 +154,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
       <button class="primary" :disabled="model.busy || !model.selected.size || !album || album === '1000'" @click="start">上传所选 {{ model.selected.size }} 个文件</button>
     </div>
     <template v-else-if="model.job && !running">
-      <p v-if="model.confirming" class="notice" role="status">将重新核对目标相册。仍在云端、且本地未变化的图片才会移入「图片管理 → 回收站」。</p>
+      <p v-if="model.confirming" class="notice" role="status">将重新核对目标相册。仍在云端、且本地未变化的图片才会移入「图片快筛 → 回收站」。</p>
       <div class="dialog-actions" v-if="model.confirming"><button class="secondary" @click="model.confirming = false">取消</button><button class="danger" @click="recycle">确认回收本地图片</button></div>
       <div class="dialog-actions" v-else>
         <button class="secondary" :disabled="model.busy" @click="run(loadFiles)">选择下一批</button>

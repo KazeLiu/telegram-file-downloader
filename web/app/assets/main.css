@@ -1,6 +1,8 @@
 @layer theme, base, components, utilities;
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/utilities.css' layer(utilities);
+@source '../';
+@source '../../src';
 
 @theme static {
   --font-sans: 'PingFang SC', 'Microsoft YaHei UI', 'Segoe UI', sans-serif;
