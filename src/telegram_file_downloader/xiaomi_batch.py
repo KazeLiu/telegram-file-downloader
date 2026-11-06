@@ -9,16 +9,12 @@ from pathlib import Path
 from stat import S_ISREG
 from uuid import uuid4
 
-from .storage import RecycleBin, inside, is_link
+from .storage import RecycleBin, file_version, inside, is_link
 from .xiaomi_cloud import UPLOAD_LIMIT, XiaomiError, upload_media
 
 
 LOGGER = logging.getLogger(__name__)
 PAGE_SIZE = 60
-
-
-def file_version(stat):
-    return f"{stat.st_dev}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_ctime_ns}"
 
 
 def local_media(root):

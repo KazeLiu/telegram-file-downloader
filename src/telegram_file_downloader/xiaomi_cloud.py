@@ -124,6 +124,7 @@ class XiaomiCloud:
         self.thumbnail_sources = OrderedDict()
         self.thumbnail_source_size = 0
         self.thumbnail_pause_until = 0.0
+        self.media_snapshots = OrderedDict()
 
     async def close(self):
         task = self.qr_task
@@ -153,6 +154,7 @@ class XiaomiCloud:
         self.store.put("xiaomi_account", None)
         self.ticket = None
         self.thumbnail_sources.clear()
+        self.media_snapshots.clear()
         self.thumbnail_source_size = 0
         self.thumbnail_pause_until = 0.0
 
@@ -365,6 +367,21 @@ class XiaomiCloud:
         })
         return page_data(data, "galleries")
 
+    def remember_media(self, connection, album, items):
+        for media in items:
+            key = (connection, album, media["id"])
+            self.media_snapshots[key] = media
+            self.media_snapshots.move_to_end(key)
+            while len(self.media_snapshots) > 8192:
+                self.media_snapshots.popitem(last=False)
+
+    def selected_media(self, connection, album, media_id):
+        self.local_owner(connection)
+        item = self.media_snapshots.get((connection, album, media_id))
+        if not item:
+            raise XiaomiError("文件预览已过期，请刷新相册或重新匹配文件名", 409)
+        return item
+
     def cache_thumbnail(self, connection, key, source):
         if isinstance(source, str):
             if source.startswith("data:"):
@@ -451,6 +468,7 @@ class XiaomiCloud:
         entries, last = await self.media_page(connection, album_id, page, 20 if wall else 30)
         items = [self.public_media(item, connection if wall else None)
                  for item in entries if item.get("type") in {"image", "video"}]
+        self.remember_media(connection, album_id, items)
         return {"items": items, "last": last}
 
     async def match_media(self, connection, album_id, page, names):
@@ -460,6 +478,7 @@ class XiaomiCloud:
         matches = [self.public_media(item, connection) for item in entries
                    if item.get("type") == "image" and isinstance(item.get("fileName"), str) and item["fileName"] in names
                    and (item.get("groupId") is None or str(item["groupId"]) == album_id)]
+        self.remember_media(connection, album_id, matches)
         return {"items": matches, "last": last, "marker": remote_id(entries[-1].get("id")) if entries else ""}
 
     async def recycle(self, connection, media_id):

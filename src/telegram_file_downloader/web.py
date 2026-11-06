@@ -27,6 +27,7 @@ from .web_runtime import WebRuntime, telegram_proxy
 from .diagnostics import configure_logs, read_log
 from .organizer import browse, plan_counts
 from .image_library import ImageLibrary
+from .linked_recycle import LinkedRecycle
 from .storage import RecycleBin, inside
 from .xiaomi_batch import XiaomiBatch, local_media
 from .xiaomi_local import XiaomiLocalIndex
@@ -125,6 +126,7 @@ class XiaomiConnection(BaseModel):
 
 class XiaomiRecycle(XiaomiConnection):
     id: str = Field(pattern=ID_PATTERN)
+    token: str | None = Field(default=None, pattern=CONNECTION_PATTERN)
 
 
 class XiaomiNameMatch(XiaomiConnection):
@@ -139,6 +141,10 @@ class XiaomiAlbumSelection(XiaomiConnection):
 
 class XiaomiFolderBinding(XiaomiAlbumSelection):
     path: str = Field(max_length=4096)
+
+
+class XiaomiRecyclePreview(XiaomiAlbumSelection):
+    ids: list[Annotated[str, Field(pattern=ID_PATTERN)]] = Field(min_length=1, max_length=2000)
 
 
 class XiaomiLocalFile(BaseModel):
@@ -182,6 +188,7 @@ def create_app():
         runtime.operation_lock.locked() or library.state["running"] or xiaomi.write_lock.locked()
         or bool(runtime.local_jobs) or bool(runtime.processor and runtime.processor.running)
         or bool(runtime.manual_task and not runtime.manual_task.done())))
+    linked_recycle = LinkedRecycle(store, xiaomi, local_index)
     failures: dict[str, list[float]] = {}
 
     @asynccontextmanager
@@ -456,8 +463,23 @@ def create_app():
 
     @app.post("/api/xiaomi/recycle")
     async def xiaomi_recycle(body: XiaomiRecycle):
+        if body.token:
+            ensure_library_idle()
+            async with runtime.operation_lock:
+                result = await linked_recycle.execute(body.connection, body.id, body.token)
+            if result["local_done"]:
+                library.start_scan()
+            return result
         await xiaomi.recycle(body.connection, body.id)
         return {"ok": True}
+
+    @app.post("/api/xiaomi/recycle/preview")
+    async def xiaomi_recycle_preview(body: XiaomiRecyclePreview):
+        return linked_recycle.preview(body.connection, body.album, body.ids)
+
+    @app.get("/api/xiaomi/recycle/pending")
+    async def xiaomi_recycle_pending(connection: str = Query(pattern=CONNECTION_PATTERN)):
+        return {"items": linked_recycle.pending(connection)}
 
     @app.get("/api/xiaomi/local-media")
     async def xiaomi_local_media(connection: str = Query(pattern=CONNECTION_PATTERN)):
@@ -640,22 +662,33 @@ def create_app():
                     await asyncio.sleep(0)
         return dict(moved=moved, failures=failures)
 
+    @app.get("/api/recycle/roots")
+    async def recycle_roots():
+        return {"items": local_index.recycle_roots(download_dir)}
+
     @app.get("/api/recycle")
-    async def recycle_items(page: int = 1):
+    async def recycle_items(page: int = 1, root: str = "downloads", windows: bool = False):
         if page < 1:
             raise ValueError("无效的回收站页码")
         if runtime.operation_lock.locked():
             raise ValueError("文件整理正在进行，请结束后再查看回收站")
         async with runtime.operation_lock:
-            with RecycleBin(download_dir) as recycle:
-                return recycle.listing(page)
+            directory = local_index.recycle_root(root, download_dir)
+            if not directory.is_dir():
+                raise ValueError("回收目录不可访问，请检查挂载")
+            with RecycleBin(directory) as recycle:
+                return recycle.listing(page, windows)
 
     @app.post("/api/recycle/{record_id}/restore")
-    async def restore_item(record_id: str):
+    async def restore_item(record_id: str, root: str = "downloads"):
         ensure_library_idle()
         async with runtime.operation_lock:
-            with RecycleBin(download_dir) as recycle:
+            directory = local_index.recycle_root(root, download_dir)
+            with RecycleBin(directory) as recycle:
                 original = recycle.restore(record_id)
+        for source in local_index.db.execute("""SELECT owner,album FROM bindings JOIN roots ON roots.id=bindings.root_id
+                                               WHERE roots.path=?""", (str(directory),)).fetchall():
+            local_index.refresh(source["owner"], source["album"])
         library.start_scan()
         return dict(original=original)
 

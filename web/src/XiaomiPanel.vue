@@ -4,6 +4,7 @@ import { api, bytes } from './api'
 import Icon from './Icon.vue'
 import XiaomiBatchUpload from './XiaomiBatchUpload.vue'
 import XiaomiNameRecycle from './XiaomiNameRecycle.vue'
+import XiaomiRecycleDialog from './XiaomiRecycleDialog.vue'
 import XiaomiThumbnail from './XiaomiThumbnail.vue'
 import XiaomiLocalBinding from './XiaomiLocalBinding.vue'
 import XiaomiLocalIndicator from './XiaomiLocalIndicator.vue'
@@ -17,8 +18,7 @@ const cloud = reactive({ account: null as Account | null, albums: [] as Album[],
   wall: false, page: 0, last: true, ready: false, busy: '', error: '', initialized: false, qr: '', verifying: false,
   coverErrors: new Set<string>(), bound: false, localStates: {} as Record<string, LocalFileState> })
 const upload = reactive({ file: null as File | null, name: '', error: '' })
-const selected = ref<Media>()
-const recycleDialog = ref<HTMLDialogElement>()
+const recycleDialog = ref<InstanceType<typeof XiaomiRecycleDialog>>()
 const uploadDialog = ref<HTMLDialogElement>()
 const fileInput = ref<HTMLInputElement>()
 const albumHeading = ref<HTMLHeadingElement>()
@@ -149,19 +149,7 @@ function batchFinished(album: string) {
 }
 
 async function confirmRecycle(item: Media) {
-  selected.value = item
-  await nextTick(); recycleDialog.value?.showModal()
-}
-
-function recycle() {
-  const item = selected.value!
-  recycleDialog.value?.close()
-  return run('正在移入小米云回收站…', async () => {
-    await api('/xiaomi/recycle', { connection: cloud.account!.connection, id: item.id })
-    cloud.items = cloud.items.filter(media => media.id !== item.id)
-    emit('message', '已移入小米云回收站')
-    await loadMedia(cloud.wall ? 0 : cloud.items.length || !cloud.last ? cloud.page : Math.max(0, cloud.page - 1))
-  })
+  await recycleDialog.value?.open([item])
 }
 
 function afterNameRecycle(ids: string[]) {
@@ -266,13 +254,14 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
             <label class="wall-toggle"><input type="checkbox" role="switch" :checked="cloud.wall" :disabled="!!cloud.busy" @change="toggleWall" />图片墙</label>
             <button class="secondary" :disabled="!!cloud.busy" @click="run('正在刷新相册内容…', () => loadMedia(cloud.wall ? 0 : cloud.page))"><Icon name="refresh" :size="17" />刷新</button>
             <XiaomiNameRecycle :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :album-name="albumName"
-              :last-local-recycle="props.lastLocalRecycle" :disabled="!!cloud.busy" @recycled="afterNameRecycle" @message="emit('message', $event)" />
+              :last-local-recycle="props.lastLocalRecycle" :disabled="!!cloud.busy" @confirm="recycleDialog?.open($event)" />
             <button class="secondary" :disabled="!!cloud.busy || !albumName || cloud.album === '1000'" @click="openUpload">从此设备上传</button>
             <XiaomiBatchUpload :key="cloud.account.connection" :connection="cloud.account.connection" :album="cloud.album" :albums="cloud.albums" :disabled="!!cloud.busy || !albumName"
               @message="emit('message', $event)" @finished="batchFinished" />
           </div>
         </div>
         <XiaomiLocalBinding :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :items="cloud.items" @status="localStatus" />
+        <XiaomiRecycleDialog :key="`recycle:${cloud.account.connection}:${cloud.album}`" ref="recycleDialog" :connection="cloud.account.connection" :album="cloud.album" @recycled="afterNameRecycle" @message="emit('message', $event)" />
         <p v-if="cloud.album === '1000'" class="cloud-status muted">隐私相册请在小米云网页版上传。</p>
         <ul v-if="cloud.wall && cloud.items.length" class="cloud-wall">
           <li v-for="item in cloud.items" :key="item.id" class="relative min-w-0">
@@ -304,16 +293,6 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
         </div>
       </section>
     </template>
-
-    <dialog ref="recycleDialog" class="task-dialog recycle-dialog">
-      <template v-if="selected">
-        <h2>移入小米云回收站？</h2>
-        <div v-if="selected.thumbnail" class="mt-4 max-w-40"><XiaomiThumbnail :item="selected" /></div>
-        <p><strong>{{ selected.name }}</strong><br /><span class="muted">{{ takenAt(selected.taken_at) }} · 文件编号 {{ selected.id }}</span></p>
-        <p>删除会同步到同账号已开启相册同步的设备。需要找回时，请前往小米云回收站。</p>
-        <div class="dialog-actions"><button class="secondary" autofocus @click="recycleDialog?.close()">保留</button><button class="danger" @click="recycle">移入回收站</button></div>
-      </template>
-    </dialog>
 
     <dialog ref="uploadDialog" class="task-dialog cloud-upload" @cancel="(event) => { if (cloud.busy) event.preventDefault() }">
       <h2>上传到「{{ albumName }}」</h2>

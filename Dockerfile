@@ -17,6 +17,8 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY LICENSE THIRD_PARTY_NOTICES.md ./
 COPY src ./src
+COPY scripts/Move-ExpiredRecycle.ps1 scripts/WindowsRecycle.cs scripts/windows-recycle.example.json ./host-tools/scripts/
+COPY WINDOWS_RECYCLE.zh-CN.md ./host-tools/
 COPY --from=frontend /build/src/telegram_file_downloader/static ./src/telegram_file_downloader/static
 COPY --from=sevenzip /opt/7zip /opt/7zip
 RUN pip install --no-cache-dir . \

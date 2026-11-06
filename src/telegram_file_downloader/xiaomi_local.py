@@ -10,12 +10,13 @@ from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
 
-from .storage import internal_directory, is_link
+from .storage import file_version, inside, internal_directory, is_link
 
 REFRESH_INTERVAL = 6 * 3600
 
 
 def folder_entries(root):
+    root = Path(root)
     pending = [root]
     while pending:
         folder = pending.pop()
@@ -29,7 +30,8 @@ def folder_entries(root):
                     if entry.is_dir(follow_symlinks=False):
                         pending.append(entry.path)
                     elif entry.is_file(follow_symlinks=False):
-                        yield entry.name, entry.stat(follow_symlinks=False).st_size
+                        info = os.stat(entry.path, follow_symlinks=False)
+                        yield entry.name, info.st_size, Path(entry.path).relative_to(root).as_posix(), file_version(info)
                 except FileNotFoundError:
                     continue
             # Yield control even when a tree contains many empty directories.
@@ -53,11 +55,23 @@ class XiaomiLocalIndex:
                 PRIMARY KEY(owner,album));
             CREATE TABLE IF NOT EXISTS files (
                 root_id TEXT NOT NULL, generation TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL,
-                PRIMARY KEY(root_id,generation,name,size));
+                path TEXT NOT NULL, version TEXT NOT NULL, PRIMARY KEY(root_id,generation,path));
             DELETE FROM files WHERE NOT EXISTS (
                 SELECT 1 FROM roots WHERE roots.id=files.root_id AND roots.generation=files.generation);
             UPDATE roots SET attempted=0 WHERE generation='' AND error='';
         """)
+        if "path" not in {row[1] for row in self.db.execute("PRAGMA table_info(files)")}:
+            # The old name/size cache cannot distinguish files in different subdirectories.
+            self.db.executescript("""
+                BEGIN;
+                DROP TABLE files;
+                CREATE TABLE files (
+                    root_id TEXT NOT NULL, generation TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL,
+                    path TEXT NOT NULL, version TEXT NOT NULL, PRIMARY KEY(root_id,generation,path));
+                UPDATE roots SET generation='',attempted=0,count=0,error='';
+                COMMIT;
+            """)
+        self.db.execute("CREATE INDEX IF NOT EXISTS local_file_name ON files(root_id,generation,name)")
         self.db.commit()
         if os.name != "nt":
             self.database.chmod(0o600)
@@ -108,6 +122,52 @@ class XiaomiLocalIndex:
             self.requested.add(source["id"])
             self.wake.set()
 
+    def recycle_preview(self, owner, album, item):
+        source = self.source(owner, album)
+        result = dict(id=item["id"], name=item["name"], path="", version="", root="", root_id="", status="kept", detail="未绑定本地目录")
+        if not source:
+            return result
+        root = Path(source["path"])
+        result.update(root=str(root), root_id=source["id"])
+        if not root.is_dir() or not source["generation"] or source["error"] or source["id"] in self.progress:
+            result["detail"] = "目录不可访问或索引尚未就绪，请更新索引"
+            return result
+        rows = self.db.execute("SELECT * FROM files WHERE root_id=? AND generation=? AND name=?",
+                               (source["id"], source["generation"], item["name"])).fetchall()
+        if not rows:
+            result["detail"] = "本地没有同名文件"
+        elif len(rows) != 1:
+            result["detail"] = f"本地有 {len(rows)} 个同名文件，全部保留；请先处理重名并更新索引"
+        elif item["size"] is None or rows[0]["size"] != item["size"]:
+            result["detail"] = "文件大小不一致或云端大小未知，本地保留"
+        else:
+            try:
+                path = inside(root, rows[0]["path"])
+                info = path.stat()
+                if not path.is_file() or file_version(info) != rows[0]["version"]:
+                    raise ValueError("本地文件已变化，请更新索引后再回收")
+                result.update(path=rows[0]["path"], version=file_version(info), status="ready", detail="云端成功后移入本地回收站")
+            except (OSError, ValueError) as exc:
+                result["detail"] = str(exc)
+        return result
+
+    def recycle_roots(self, download_dir):
+        roots = [{"id": "downloads", "path": str(download_dir)}]
+        roots.extend(dict(id=row["id"], path=row["path"]) for row in self.db.execute("SELECT id,path FROM roots ORDER BY path")
+                     if Path(row["path"]) != download_dir)
+        return roots
+
+    def recycle_root(self, root_id, download_dir):
+        if root_id == "downloads":
+            return download_dir
+        source = self.db.execute("SELECT path FROM roots WHERE id=?", (root_id,)).fetchone()
+        if not source:
+            raise ValueError("回收目录不存在")
+        root = Path(source["path"])
+        if not root.is_dir():
+            raise ValueError("回收目录不可访问，请检查挂载")
+        return root
+
     def compare(self, owner, album, items):
         with closing(sqlite3.connect(self.database)) as db:
             db.row_factory = sqlite3.Row
@@ -141,8 +201,8 @@ class XiaomiLocalIndex:
 
     def write_batch(self, root_id, generation, batch):
         with closing(sqlite3.connect(self.database)) as db, db:
-            db.executemany("INSERT OR IGNORE INTO files VALUES (?,?,?,?)",
-                           ((root_id, generation, name, size) for name, size in batch))
+            db.executemany("INSERT OR IGNORE INTO files VALUES (?,?,?,?,?,?)",
+                           ((root_id, generation, name, size, path, version) for name, size, path, version in batch))
 
     def publish(self, root_id, generation, count):
         with closing(sqlite3.connect(self.database)) as db, db:

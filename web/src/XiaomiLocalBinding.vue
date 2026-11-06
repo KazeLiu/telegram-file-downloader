@@ -93,8 +93,8 @@ onUnmounted(() => { disposed = true; revision++; clearTimeout(timer) })
     <div class="section-heading"><h2 id="local-folder-title">绑定本地文件夹</h2><button class="icon-button" aria-label="关闭" :disabled="model.busy" @click="dialog?.close()"><Icon name="close" /></button></div>
     <form class="mt-4 grid gap-4" @submit.prevent="bind(model.path)">
       <label>目录绝对路径<input v-model="model.path" required maxlength="4096" placeholder="例如 /backups/手机淘宝 或 D:\照片备份" aria-describedby="local-folder-help" :disabled="model.busy" /></label>
-      <p id="local-folder-help" class="muted">读取程序所在机器的目录及子目录。Docker 中请先只读挂载，例如 /backups；不会修改文件或联动删除。</p>
-      <p class="muted">只缓存文件名和大小，后台每六小时择空闲更新。目录改动后也可手动更新索引。</p>
+      <p id="local-folder-help" class="muted">读取程序所在机器的目录及子目录，例如已挂载的 /backups。在本项目删除云端文件时，会先核对并回收唯一的同名同大小本地文件；联动回收需要可写挂载。</p>
+      <p class="muted">只缓存文件路径、大小和修改信息，不读取原图。后台每六小时择空闲更新，目录改动后也可手动更新索引。</p>
       <p v-if="model.error" class="notice error" role="alert">{{ model.error }}</p>
       <div class="dialog-actions"><button v-if="model.binding" type="button" class="secondary" :disabled="model.busy" @click="bind('')">解除绑定</button><button class="primary" :disabled="model.busy">{{ model.busy ? '正在保存…' : '保存绑定' }}</button></div>
     </form>
