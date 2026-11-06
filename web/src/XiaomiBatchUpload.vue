@@ -120,12 +120,11 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
     <p v-if="model.error" class="notice error" role="alert">{{ model.error }}<button class="text-button" :disabled="model.busy" @click="run(loadDialog)">刷新</button></p>
 
     <template v-if="model.selecting">
-      <p class="muted">只显示下载根目录中符合上传大小限制的图片和视频。已回收的文件不会出现。</p>
       <div class="section-heading batch-tools"><button class="secondary" :disabled="model.busy || !model.files.length" @click="selectAll">{{ allSelected ? '取消全选' : '全选全部页面' }}</button><span class="muted">已选 {{ model.selected.size }} / {{ model.files.length }} 个文件</span></div>
       <ul v-if="filesOnPage.length" class="batch-list">
         <li v-for="item in filesOnPage" :key="item.name"><label><input type="checkbox" :checked="model.selected.has(item.name)" :disabled="model.busy" @change="select(item.name, $event)" /><Icon :name="item.kind === 'video' ? 'video' : 'photo'" :size="17" /><span>{{ item.name }}</span><small class="muted">{{ bytes(item.size) }}</small></label></li>
       </ul>
-      <p v-else-if="!model.error" class="empty-list">{{ model.busy ? '正在读取下载目录…' : '没有可上传的图片或视频' }}</p>
+      <p v-else-if="!model.error" class="empty-list">{{ model.busy ? '正在读取下载目录…' : '下载根目录没有符合上传大小限制的图片或视频。' }}</p>
       <p v-if="album === '1000'" class="muted">隐私相册请在小米云网页版上传。</p>
       <p v-if="model.job?.eligible" class="muted">开始新批次会替换上批结果，未回收的图片会留在原处。</p>
     </template>
@@ -166,16 +165,19 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
   </dialog>
 </template>
 
-<style scoped lang="scss">
+<style scoped>
+@reference '../app/assets/main.css';
+
 .batch-dialog { width: min(740px, calc(100% - 32px)); }
-.batch-dialog > .section-heading { margin-bottom: 14px; }
+.batch-dialog > .section-heading { @apply mb-3.5; }
 .batch-dialog h2, .batch-progress { overflow-wrap: anywhere; }
-.batch-tools, .batch-progress { margin: 14px 0; }
-.batch-list { max-height: min(42vh, 460px); overflow: auto; list-style: none; margin: 0; padding: 0; }
-.batch-list li { border-top: 1px solid var(--soft); padding: 10px 4px; }
-.batch-list label, .batch-result { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 30px; }
-.batch-result { grid-template-columns: minmax(0, 1fr) auto; }
-.batch-result small { grid-column: 1 / -1; }
+.batch-tools, .batch-progress { @apply my-3.5; }
+.batch-list { @apply m-0 max-h-[min(42vh,460px)] list-none overflow-auto p-0; }
+.batch-list li { @apply px-1 py-2.5; border-top: 1px solid var(--color-soft); }
+.batch-list label, .batch-result { @apply grid min-h-[30px] items-center gap-2.5; }
+.batch-list label { @apply grid-cols-[auto_auto_minmax(0,1fr)_auto]; }
+.batch-result { @apply grid-cols-[minmax(0,1fr)_auto]; }
+.batch-result small { @apply col-span-full; }
 .batch-list span, .batch-result small { overflow-wrap: anywhere; }
-.batch-dialog .notice { margin: 12px 0; }
+.batch-dialog .notice { @apply my-3; }
 </style>

@@ -38,7 +38,7 @@ const labels: Record<string, string> = { done: '完成', manual: '用户确认',
 </script>
 <template>
   <section class="workflow-panel" aria-label="资源处理工作流">
-    <div class="section-heading"><h2>从转发，到资源库。</h2><span class="muted">{{ task ? `任务 #${task.id} · ${taskLabels[task.status] || task.status}` : '自动工作流' }}</span></div>
+    <div class="section-heading"><h2>处理步骤</h2><span v-if="task" class="badge" :class="task.status">{{ taskLabels[task.status] || task.status }}</span></div>
     <div class="workflow-track"><button v-for="node in nodes" :key="node.id" class="workflow-node" :class="[state(node.id), { selected: workflowModel.selected === node.id }]" :aria-current="workflowModel.selected === node.id ? 'step' : undefined" @click="workflowModel.selected = node.id"><span class="node-icon"><Icon :name="state(node.id) === 'done' ? 'check' : node.icon" :size="23" /></span><strong>{{ node.title }}</strong><small>{{ labels[state(node.id)] }}</small></button></div>
     <div class="workflow-caption"><Icon :name="nodes.find(n => n.id === workflowModel.selected)?.icon || 'workflow'" :size="17" /><p>{{ nodes.find(n => n.id === workflowModel.selected)?.detail }}</p></div>
   </section>

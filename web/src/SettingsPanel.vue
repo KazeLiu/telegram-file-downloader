@@ -61,12 +61,11 @@ onBeforeUnmount(clearSecrets)
       <form @submit.prevent="save" @input="settingsModel.dirty = true" @change="settingsModel.dirty = true">
         <template v-if="settingsModel.section === 'telegram'">
           <section class="settings-section"><div class="section-heading"><h2>连接 Telegram</h2><span class="badge" :class="status.account ? 'completed' : ''">{{ status.account ? '已登录' : '未登录' }}</span></div>
-            <p class="muted">使用小号的 API 信息登录，大号只负责转发资源。</p>
             <div class="form-grid"><label>API ID<input v-model="settingsModel.form.api_id" inputmode="numeric" autocomplete="off" placeholder="数字 ID" :disabled="!!status.account" /></label><label>API Hash<input v-model="settingsModel.api_hash" type="password" autocomplete="new-password" :placeholder="settings.api_hash_saved ? '已保存，留空保持不变' : '填写 API Hash'" :disabled="!!status.account" /></label></div>
           </section>
-          <section class="settings-section"><h2>网络代理</h2><p class="muted">支持 IP、域名或完整代理 URL，保存后自动拆分。容器访问宿主机代理用 host.docker.internal，Windows 直接运行用 127.0.0.1。</p>
+          <section class="settings-section"><h2>网络代理</h2>
             <div class="form-grid"><label>代理类型<select v-model="settingsModel.form.proxy_type"><option value="socks5">SOCKS5</option><option value="http">HTTP / Mixed</option><option value="direct">直连（不使用代理）</option></select></label><span></span></div>
-            <template v-if="settingsModel.form.proxy_type !== 'direct'"><div class="form-grid host-port"><label>代理地址<input v-model="settingsModel.form.proxy_host" placeholder="host.docker.internal" autocomplete="off" /></label><label>端口<input v-model="settingsModel.form.proxy_port" inputmode="numeric" placeholder="7890" /></label></div><div class="form-grid"><label>用户名（可选）<input v-model="settingsModel.form.proxy_username" autocomplete="off" /></label><label>密码（可选）<input v-model="settingsModel.proxy_password" type="password" autocomplete="new-password" :placeholder="settings.proxy_password_saved ? '已保存，留空保持不变' : '无认证时留空'" :disabled="settingsModel.clear_proxy_password" /></label></div><label v-if="settings.proxy_password_saved" class="clear-password"><input v-model="settingsModel.clear_proxy_password" type="checkbox" />清除已保存的代理密码</label></template>
+            <template v-if="settingsModel.form.proxy_type !== 'direct'"><div class="form-grid host-port"><label>代理地址<input v-model="settingsModel.form.proxy_host" placeholder="IP、域名或完整代理 URL" autocomplete="off" aria-describedby="proxy-host-help" /></label><label>端口<input v-model="settingsModel.form.proxy_port" inputmode="numeric" placeholder="7890" /></label></div><p id="proxy-host-help" class="muted mt-2">宿主机代理地址：Docker 用 host.docker.internal，Windows 直接运行用 127.0.0.1。</p><div class="form-grid"><label>用户名（可选）<input v-model="settingsModel.form.proxy_username" autocomplete="off" /></label><label>密码（可选）<input v-model="settingsModel.proxy_password" type="password" autocomplete="new-password" :placeholder="settings.proxy_password_saved ? '已保存，留空保持不变' : '无认证时留空'" :disabled="settingsModel.clear_proxy_password" /></label></div><label v-if="settings.proxy_password_saved" class="clear-password"><input v-model="settingsModel.clear_proxy_password" type="checkbox" />清除已保存的代理密码</label></template>
           </section>
         </template>
         <template v-if="settingsModel.section === 'rules'">
@@ -92,7 +91,7 @@ onBeforeUnmount(clearSecrets)
           </section>
           <section class="settings-section"><h2>群内反馈</h2><label class="toggle-row"><span><strong>下载与解压回执</strong><small>回复原消息，约每 10 秒更新进度、速度和剩余时间</small></span><input v-model="settingsModel.form.receipts" type="checkbox" role="switch" /></label><label class="toggle-row"><span><strong>接收任务后标记已读</strong><small>已读代表收到任务；完成状态以回执为准</small></span><input v-model="settingsModel.form.mark_read" type="checkbox" role="switch" /></label></section>
         </template>
-        <div v-if="settingsModel.section !== 'security'" class="save-bar"><span>{{ settingsModel.dirty ? '有未保存的更改' : status.pending ? '正在应用设置并恢复任务' : '设置保存在服务器，重启后保留' }}</span><button class="primary" :disabled="!!settingsModel.busy" type="submit">{{ settingsModel.busy === 'save' ? '保存中…' : '保存设置' }}</button></div>
+        <div v-if="settingsModel.section !== 'security'" class="save-bar"><span>{{ settingsModel.dirty ? '有未保存的更改' : status.pending ? '正在应用设置并恢复任务' : '' }}</span><button class="primary" :disabled="!!settingsModel.busy" type="submit">{{ settingsModel.busy === 'save' ? '保存中…' : '保存设置' }}</button></div>
       </form>
       <section v-if="settingsModel.section === 'telegram'" class="settings-section login-section">
         <h2>{{ status.account ? '收集账号与群' : '登录小号' }}</h2>

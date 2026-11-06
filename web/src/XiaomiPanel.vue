@@ -172,10 +172,10 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
       <button v-if="!cloud.account" class="text-button" :disabled="!!cloud.busy" @click="run('正在刷新…', loadAccount)">刷新连接</button>
     </p>
     <section v-if="!cloud.account" class="cloud-connect">
-      <span class="welcome-icon"><Icon name="cloud" :size="42" /></span>
+      <span class="welcome-icon"><Icon name="cloud" :size="28" /></span>
       <div>
         <h2>{{ cloud.qr ? '扫码连接小米账号' : '连接小米账号' }}</h2>
-        <p v-if="!cloud.qr" class="muted">用小米手机扫码确认。首次连接前，可先在小米云网页版打开相册并完成安全验证。</p>
+        <p v-if="!cloud.qr" class="muted">遇到安全验证时，先在小米云网页版打开相册。</p>
         <p v-else class="muted" role="status">{{ cloud.verifying ? '已扫码，正在验证云相册访问权限…' : '请使用小米手机扫描二维码并确认。' }}</p>
         <img v-if="cloud.qr && !cloud.verifying" class="cloud-qr" :src="`/api/xiaomi/qr/${cloud.qr}/image`" width="200" height="200" alt="小米账号登录二维码" />
         <div class="cloud-actions">
@@ -192,10 +192,10 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
       </div>
       <section class="cloud-library" aria-label="云端文件">
         <div class="cloud-toolbar">
-          <label>云相册<select v-model="cloud.album" :disabled="!!cloud.busy || !cloud.albums.length" @change="changeAlbum">
+          <select v-model="cloud.album" aria-label="选择相册" :disabled="!!cloud.busy || !cloud.albums.length" @change="changeAlbum">
             <option v-if="!cloud.albums.length" value="">暂无可选相册</option>
             <option v-for="album in cloud.albums" :key="album.id" :value="album.id">{{ album.name }}</option>
-          </select></label>
+          </select>
           <div class="cloud-actions">
             <button class="secondary" :disabled="!!cloud.busy" @click="run('正在刷新云相册…', loadAccount)"><Icon name="refresh" :size="17" />刷新</button>
             <button class="secondary" :disabled="!!cloud.busy || !albumName || cloud.album === '1000'" @click="openUpload">从此设备上传</button>
@@ -208,7 +208,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
         <ul v-if="cloud.items.length" class="cloud-files">
           <li v-for="item in cloud.items" :key="item.id">
             <span class="file-icon"><Icon :name="item.kind === 'video' ? 'video' : 'photo'" /></span>
-            <div class="cloud-file"><strong>{{ item.name }}</strong><p class="muted">{{ item.kind === 'video' ? '视频' : '图片' }} · {{ takenAt(item.taken_at) }}<template v-if="item.size"> · {{ bytes(item.size) }}</template></p></div>
+            <div class="cloud-file"><strong>{{ item.name }}</strong><p class="muted"><span class="sr-only">{{ item.kind === 'video' ? '视频' : '图片' }}，</span>{{ takenAt(item.taken_at) }}<template v-if="item.size"> · {{ bytes(item.size) }}</template></p></div>
             <button class="text-button danger-text" :aria-label="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="16" />移入回收站</button>
           </li>
         </ul>
@@ -245,32 +245,34 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
   </div>
 </template>
 
-<style scoped lang="scss">
-.cloud-connect, .cloud-account, .cloud-library { background: var(--canvas); border-radius: var(--radius); }
-.cloud-connect { display: flex; align-items: flex-start; gap: 24px; padding: 32px; }
-.cloud-connect p { margin-top: 8px; }
-.cloud-connect .cloud-actions { margin-top: 16px; }
-.cloud-qr { display: block; width: 200px; max-width: 100%; height: auto; margin-top: 14px; }
-.cloud-account, .cloud-toolbar, .cloud-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.cloud-account, .cloud-toolbar { justify-content: space-between; }
-.cloud-account { margin-bottom: 16px; padding: 8px 24px; }
-.cloud-account > div { display: flex; align-items: center; gap: 10px; }
-.cloud-account svg { color: var(--blue); }
-.cloud-library { padding: 20px 24px; }
-.cloud-toolbar { align-items: flex-end; padding-bottom: 16px; }
-.cloud-toolbar label { width: min(300px, 100%); }
-.cloud-status { margin-bottom: 10px; }
-.cloud-files { margin: 0; padding: 0; list-style: none; }
-.cloud-files li { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--soft); }
-.cloud-file { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.cloud-file p { margin-top: 3px; font-size: 13px; }
+<style scoped>
+@reference '../app/assets/main.css';
+
+.cloud-connect, .cloud-library { @apply rounded-panel bg-canvas; }
+.cloud-connect { @apply flex items-start gap-5 p-6; }
+.cloud-connect p { @apply mt-2; }
+.cloud-connect .cloud-actions { @apply mt-4; }
+.cloud-qr { @apply mt-3.5 block h-auto w-[200px] max-w-full; }
+.cloud-account, .cloud-toolbar, .cloud-actions { @apply flex flex-wrap items-center gap-3; }
+.cloud-account, .cloud-toolbar { @apply justify-between; }
+.cloud-account { @apply mb-2; }
+.cloud-account > div { @apply flex items-center gap-2.5; }
+.cloud-account svg { @apply text-blue; }
+.cloud-library { @apply px-6 py-5; }
+.cloud-toolbar { @apply pb-4; }
+.cloud-toolbar > select { @apply w-full max-w-[280px]; }
+.cloud-status { @apply mb-2.5; }
+.cloud-files { @apply m-0 list-none p-0; }
+.cloud-files li { @apply flex items-center gap-3 py-3; border-top: 1px solid var(--color-soft); }
+.cloud-file { @apply min-w-0 flex-1; overflow-wrap: anywhere; }
+.cloud-file p { @apply mt-1 text-[13px]; }
 .cloud-upload { width: min(560px, calc(100% - 32px)); }
-.cloud-upload form { display: grid; gap: 16px; margin-top: 16px; }
+.cloud-upload form { @apply mt-4 grid gap-4; }
 .recycle-dialog p { overflow-wrap: anywhere; }
 @media (max-width: 560px) {
-  .cloud-connect, .cloud-account, .cloud-library { padding: 16px; }
-  .cloud-connect .welcome-icon { display: none; }
-  .cloud-toolbar { align-items: stretch; }
-  .cloud-files .file-icon { display: none; }
+  .cloud-connect, .cloud-library { @apply p-4; }
+  .cloud-connect .welcome-icon { @apply hidden; }
+  .cloud-files .file-icon { @apply size-8; }
+  .cloud-toolbar { @apply items-stretch; }
 }
 </style>

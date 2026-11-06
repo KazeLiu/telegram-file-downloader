@@ -13,6 +13,9 @@ app-data/
 *.part
 .git/
 web/node_modules/
+web/.nuxt/
+web/.output/
+web/dist
 src/telegram_file_downloader/static/
 .preview/
 web-data/

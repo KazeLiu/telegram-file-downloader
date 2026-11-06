@@ -198,49 +198,51 @@ function decisionLabel(i: number) {
   </dialog>
 </template>
 
-<style scoped lang="scss">
+<style scoped>
+@reference '../app/assets/main.css';
+
 .image-review {
   width: min(1020px, calc(100% - 32px)); height: min(830px, calc(100dvh - 32px)); max-height: none;
-  padding: 0; background: var(--canvas); overscroll-behavior: contain;
+  @apply overscroll-contain bg-canvas p-0;
 }
-.review-layout { min-height: 100%; height: 100%; display: flex; flex-direction: column; gap: 12px; padding: 16px 20px; }
-.review-heading { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
-.review-heading button { justify-self: end; }
-.review-count { font-variant-numeric: tabular-nums; }
-.review-stage { flex: 1; min-height: 140px; position: relative; border-radius: 14px; background: var(--parchment); overflow: hidden; }
-.review-swipe { position: absolute; inset: 0; touch-action: none; user-select: none; cursor: grab; }
-.review-swipe:active { cursor: grabbing; }
-.review-slide { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; padding: 10px 52px; pointer-events: none; }
-.review-slide img { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; }
-.review-empty { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px; color: var(--muted); text-align: center; }
-.review-bin { position: absolute; bottom: 10%; left: 50%; translate: -50% 50%; border-radius: 50%; background: var(--danger); color: white; padding: 10px; pointer-events: none; }
-.review-arrow { position: absolute; top: 50%; translate: 0 -50%; background: var(--canvas); box-shadow: 0 1px 5px #1d1d1f20; }
-.review-previous { left: 6px; }
+.review-layout { @apply flex h-full min-h-full flex-col gap-3 px-5 py-4; }
+.review-heading { @apply grid grid-cols-[1fr_auto_1fr] items-center gap-2; }
+.review-heading button { @apply justify-self-end; }
+.review-count { @apply tabular-nums; }
+.review-stage { @apply relative min-h-[140px] flex-1 overflow-hidden rounded-xl bg-parchment; }
+.review-swipe { @apply absolute inset-0 cursor-grab touch-none select-none; }
+.review-swipe:active { @apply cursor-grabbing; }
+.review-slide { @apply pointer-events-none absolute inset-0 flex items-center justify-center px-[52px] py-2.5; }
+.review-slide img { @apply block size-full min-h-0 object-contain; }
+.review-empty { @apply flex flex-col items-center justify-center gap-2.5 text-center text-muted; }
+.review-bin { @apply pointer-events-none absolute bottom-[10%] left-1/2 -translate-x-1/2 translate-y-1/2 rounded-full bg-danger p-2.5 text-white; }
+.review-arrow { @apply absolute top-1/2 -translate-y-1/2 bg-canvas shadow-sm; }
+.review-previous { @apply left-1.5; }
 .review-previous svg { rotate: 180deg; }
-.review-next { right: 6px; }
-.review-caption { min-height: 22px; display: flex; align-items: center; gap: 12px; }
-.review-caption strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-caption span { flex: none; }
-.review-caption .muted { margin-left: auto; }
-.review-caption .keep, .review-actions .keep { color: var(--success); }
-.review-caption .recycle, .review-actions .recycle { color: var(--danger); }
-.review-filmstrip { width: min(100%, 472px); margin-inline: auto; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; }
-.review-slot button { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 1; padding: 0; border-radius: 8px; background: var(--parchment); color: var(--muted); }
-.review-slot button[aria-current] { outline: 2px solid var(--blue); outline-offset: 2px; }
-.review-slot button:focus-visible { outline: 3px solid var(--blue-focus); outline-offset: 3px; }
-.review-slot img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
-.review-stamp { position: absolute; right: 3px; bottom: 3px; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: white; }
-.review-stamp.keep { background: var(--success); }
-.review-stamp.recycle { background: var(--danger); }
-.review-status { text-align: center; }
-.review-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
-.review-actions button { padding: 8px 13px; gap: 5px; }
-.review-actions kbd { color: var(--muted); }
+.review-next { @apply right-1.5; }
+.review-caption { @apply flex min-h-[22px] items-center gap-3; }
+.review-caption strong { @apply min-w-0 truncate; }
+.review-caption span { @apply flex-none; }
+.review-caption .muted { @apply ml-auto; }
+.review-caption .keep, .review-actions .keep { @apply text-success; }
+.review-caption .recycle, .review-actions .recycle { @apply text-danger; }
+.review-filmstrip { @apply mx-auto grid w-full max-w-[472px] auto-cols-fr grid-flow-col gap-1.5; }
+.review-slot button { @apply relative grid aspect-square w-full place-items-center rounded-lg bg-parchment p-0 text-muted; }
+.review-slot button[aria-current] { outline: 2px solid var(--color-blue); outline-offset: 2px; }
+.review-slot button:focus-visible { outline: 3px solid var(--color-blue-focus); outline-offset: 3px; }
+.review-slot img { @apply absolute inset-0 size-full object-cover; border-radius: inherit; }
+.review-stamp { @apply absolute right-[3px] bottom-[3px] grid size-5 place-items-center rounded-full text-white; }
+.review-stamp.keep { @apply bg-success; }
+.review-stamp.recycle { @apply bg-danger; }
+.review-status { @apply text-center; }
+.review-actions { @apply flex flex-wrap justify-center gap-2; }
+.review-actions button { @apply gap-1.5 px-3 py-2; }
+.review-actions kbd { @apply text-muted; }
 @media (max-width: 600px) {
   .image-review { width: 100%; height: 100dvh; max-width: none; margin: 0; border-radius: 0; }
   .review-layout { padding: max(10px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); gap: 10px; }
   .review-slide { padding-inline: 8px; }
-  .review-arrow { background: color-mix(in srgb, var(--canvas) 88%, transparent); }
+  .review-arrow { background: color-mix(in srgb, var(--color-canvas) 88%, transparent); }
   .review-actions kbd { display: none; }
 }
 @media (max-width: 420px) {
