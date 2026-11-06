@@ -307,7 +307,7 @@ class WebRuntime:
         if self.store.tasks(statuses={"downloading", "retrying", "waiting", "extracting", "organizing"}):
             raise ValueError("请先暂停下载队列，并等待解压和整理完成，再手动整理")
 
-    async def preview_folder(self, value):
+    async def preview_folder(self, value, delete_psd=False):
         folder = self.selected_folder(value)
         self.ensure_idle_folder(folder)
         if self.manual_task and not self.manual_task.done():
@@ -316,12 +316,13 @@ class WebRuntime:
         if old.get("status") in {"running", "interrupted", "failed"}:
             raise ValueError("上次整理尚未完成，请先继续原任务")
         prefix = "-".join(folder.relative_to(self.download_dir).parts)
-        plan = await asyncio.to_thread(make_plan, self.download_dir, folder, prefix, False)
+        plan = await asyncio.to_thread(make_plan, self.download_dir, folder, prefix, delete_psd)
         token = uuid.uuid4().hex
         self.store.put(f"manual_preview:{token}", plan)
         return dict(token=token, total=len(plan["moves"]), items=[
             dict(source=str(Path(move["source"]).relative_to(self.download_dir)), target=Path(move["target"]).name)
-            for move in plan["moves"][:200]])
+            for move in plan["moves"][:200]], delete_total=len(plan["psds"]),
+            delete_items=[str(Path(name).relative_to(self.download_dir)) for name in plan["psds"][:200]])
 
     async def organize_folder(self, token):
         if self.manual_task and not self.manual_task.done():

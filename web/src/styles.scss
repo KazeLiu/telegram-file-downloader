@@ -256,6 +256,10 @@ input[type=checkbox] { appearance: none; flex-shrink: 0; width: 42px; height: 26
 .file-manager, .logs-panel { min-width: 0; }
 .files-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; p { margin-top: 8px; overflow-wrap: anywhere; } }
 .files-help { margin: 18px 0 24px; }
+.organize-option { flex-direction: row; align-items: center; gap: 10px; margin: -8px 0 22px; min-height: 44px;
+  input[type=checkbox] { appearance: auto; accent-color: var(--blue); width: 18px; height: 18px; border-radius: 4px; background: transparent; &::after { display: none; } }
+  small { display: block; color: var(--muted); margin-top: 4px; font-size: 12px; }
+}
 .files-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; .search-box { max-width: 260px; input { font-size: 13px; } } }
 .breadcrumbs { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 13px; > span { color: #b0b0b5; } button { display: flex; align-items: center; gap: 6px; color: var(--blue); min-height: 36px; overflow-wrap: anywhere; } }
 .files-list { background: white; border-radius: var(--radius); padding: 0 20px; }
@@ -265,7 +269,8 @@ input[type=checkbox] { appearance: none; flex-shrink: 0; width: 42px; height: 26
 .manual-job { display: flex; justify-content: space-between; gap: 16px; padding: 18px 22px; background: #edf4fd; border-radius: 12px; margin-bottom: 24px; p { font-size: 13px; margin-top: 6px; } &.completed { background: #edf5f0; } &.failed { background: #fff1ee; } }
 .organize-dialog { width: min(860px, calc(100% - 32px)); > p { margin: 18px 0; } }
 .rename-preview { max-height: 45vh; overflow-y: auto; margin: 20px 0; > div { display: grid; grid-template-columns: 1fr 18px 1fr; gap: 14px; font-size: 13px; padding: 14px 0; border-bottom: 1px solid var(--soft); align-items: center; overflow-wrap: anywhere; > span { color: var(--muted); } strong { font-weight: 400; } } }
-.dialog-actions { display: flex; justify-content: flex-end; gap: 12px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 12px; > button:last-child { white-space: normal; } }
+.delete-preview { max-height: 28vh; overflow-y: auto; margin: 0 0 20px; > div { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--soft); font-size: 13px; > span:nth-child(2) { flex: 1; overflow-wrap: anywhere; } > svg { color: var(--danger); } } }
 .logs-toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; > select { width: 190px; } > a { min-height: 44px; } }
 .live-logs { display: flex; flex-direction: row; align-items: center; gap: 8px; margin-right: auto; font-size: 13px; }
 .log-output { background: white; border: 1px solid var(--hairline); border-radius: 12px; padding: 20px; margin: 22px 0 0; height: 58vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.8 Consolas, 'SFMono-Regular', monospace; color: #404044; }

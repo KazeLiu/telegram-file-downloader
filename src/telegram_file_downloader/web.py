@@ -92,6 +92,7 @@ class QueuePause(BaseModel):
 
 class FolderSelection(BaseModel):
     path: str = Field(default="", max_length=4096)
+    delete_psd: bool = False
 
 
 class OrganizeSelection(BaseModel):
@@ -336,7 +337,7 @@ def create_app():
 
     @app.post("/api/files/preview")
     async def preview(body: FolderSelection):
-        return await runtime.preview_folder(body.path)
+        return await runtime.preview_folder(body.path, body.delete_psd)
 
     @app.post("/api/files/organize")
     async def organize(body: OrganizeSelection):
@@ -347,8 +348,11 @@ def create_app():
     async def organize_job():
         job = store.get("manual_job", {})
         plan = job.get("plan", {})
-        return dict(status=job.get("status", ""), error=job.get("error", ""), total=len(plan.get("moves", [])),
-                    done=sum(bool(move["done"]) for move in plan.get("moves", [])), result=job.get("result"))
+        moved = sum(bool(move["done"]) for move in plan.get("moves", []))
+        deleted = len(plan.get("deleted_psds", []))
+        return dict(status=job.get("status", ""), error=job.get("error", ""),
+                    total=len(plan.get("moves", [])) + len(plan.get("psds", [])), done=moved + deleted,
+                    moved_files=moved, psd_total=len(plan.get("psds", [])), deleted_psds=deleted, result=job.get("result"))
 
     @app.get("/api/logs")
     async def logs(name: str = "collector.log"):
