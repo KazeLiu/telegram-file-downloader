@@ -16,6 +16,7 @@ const selected = ref<Media>()
 const recycleDialog = ref<HTMLDialogElement>()
 const uploadDialog = ref<HTMLDialogElement>()
 const fileInput = ref<HTMLInputElement>()
+const albumHeading = ref<HTMLHeadingElement>()
 const albumName = computed(() => cloud.albums.find(item => item.id === cloud.album)?.name || '')
 let pollTimer: ReturnType<typeof setTimeout>
 let disposed = false
@@ -40,16 +41,19 @@ async function loadMedia(page = 0) {
   cloud.items = result.items; cloud.last = result.last; cloud.page = page; cloud.ready = true
 }
 
+function resetMedia() {
+  cloud.items = []; cloud.page = 0; cloud.last = true; cloud.ready = false
+}
+
 async function loadAccount() {
   const previous = cloud.account?.connection
   const result = await api<{ account: Account | null }>('/xiaomi/account')
-  cloud.account = result.account; cloud.initialized = true; cloud.ready = false; cloud.items = []
-  cloud.albums = []
-  if (!cloud.account || cloud.account.connection !== previous) cloud.album = ''
+  cloud.account = result.account; cloud.initialized = true
+  if (!cloud.account || cloud.account.connection !== previous) {
+    cloud.albums = []; cloud.album = ''; resetMedia()
+  }
   if (!cloud.account) return
   cloud.albums = (await api<{ items: Album[] }>(`/xiaomi/albums?${params({})}`)).items
-  if (!cloud.albums.some(item => item.id === cloud.album)) cloud.album = cloud.albums[0]?.id || ''
-  if (cloud.album) await loadMedia()
 }
 
 async function pollQr(id: string) {
@@ -98,9 +102,16 @@ function disconnect() {
   })
 }
 
-function changeAlbum() {
-  cloud.items = []; cloud.ready = false
-  return run('正在读取云相册…', () => loadMedia())
+async function openAlbum(album: string) {
+  cloud.album = album; resetMedia()
+  void run('正在读取相册内容…', () => loadMedia())
+  await nextTick(); albumHeading.value?.focus()
+}
+
+async function backToAlbums() {
+  const previous = cloud.album
+  cloud.album = ''; cloud.error = ''; resetMedia()
+  await nextTick(); document.getElementById(`xiaomi-album-${previous}`)?.focus()
 }
 
 function batchFinished(album: string) {
@@ -188,22 +199,34 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
     <template v-else>
       <div class="cloud-account">
         <div><Icon name="cloud" :size="20" /><strong>小米账号</strong><span class="muted">{{ cloud.account.label }}</span></div>
-        <button class="text-button" :disabled="!!cloud.busy" @click="disconnect">断开连接</button>
+        <div>
+          <button v-if="!cloud.album" class="text-button" :disabled="!!cloud.busy" @click="run('正在刷新相册列表…', loadAccount)"><Icon name="refresh" :size="16" />刷新</button>
+          <button class="text-button" :disabled="!!cloud.busy" @click="disconnect">断开连接</button>
+        </div>
       </div>
-      <section class="cloud-library" aria-label="云端文件">
+      <p v-if="cloud.busy" class="cloud-status muted" role="status">{{ cloud.busy }}</p>
+      <template v-if="!cloud.album">
+        <section v-if="cloud.albums.length" class="cloud-albums" aria-label="相册列表">
+          <button v-for="album in cloud.albums" :id="`xiaomi-album-${album.id}`" :key="album.id" type="button" class="cloud-album" :disabled="!!cloud.busy" @click="openAlbum(album.id)">
+            <span class="album-cover" :class="{ 'album-private': album.id === '1000' }"><Icon :name="album.id === '1000' ? 'lock' : album.id === '1' || album.id === '2' ? 'photo' : 'folder'" :size="32" /></span>
+            <span class="album-label"><strong>{{ album.name }}</strong><Icon name="chevron" :size="15" /></span>
+          </button>
+        </section>
+        <div v-else-if="!cloud.busy && !cloud.error" class="empty-list"><Icon name="folder" :size="30" /><p>此账号没有可访问的相册</p></div>
+      </template>
+      <section v-else class="cloud-library" aria-labelledby="xiaomi-album-heading">
         <div class="cloud-toolbar">
-          <select v-model="cloud.album" aria-label="选择相册" :disabled="!!cloud.busy || !cloud.albums.length" @change="changeAlbum">
-            <option v-if="!cloud.albums.length" value="">暂无可选相册</option>
-            <option v-for="album in cloud.albums" :key="album.id" :value="album.id">{{ album.name }}</option>
-          </select>
+          <div class="cloud-detail-heading">
+            <button class="text-button" :disabled="!!cloud.busy" @click="backToAlbums"><Icon name="chevron" class="rotate-180" :size="16" />返回相册</button>
+            <h2 id="xiaomi-album-heading" ref="albumHeading" tabindex="-1">{{ albumName }}</h2>
+          </div>
           <div class="cloud-actions">
-            <button class="secondary" :disabled="!!cloud.busy" @click="run('正在刷新云相册…', loadAccount)"><Icon name="refresh" :size="17" />刷新</button>
+            <button class="secondary" :disabled="!!cloud.busy" @click="run('正在刷新相册内容…', () => loadMedia(cloud.page))"><Icon name="refresh" :size="17" />刷新</button>
             <button class="secondary" :disabled="!!cloud.busy || !albumName || cloud.album === '1000'" @click="openUpload">从此设备上传</button>
             <XiaomiBatchUpload :key="cloud.account.connection" :connection="cloud.account.connection" :album="cloud.album" :albums="cloud.albums" :disabled="!!cloud.busy || !albumName"
               @message="emit('message', $event)" @finished="batchFinished" />
           </div>
         </div>
-        <p v-if="cloud.busy" class="cloud-status muted" role="status">{{ cloud.busy }}</p>
         <p v-if="cloud.album === '1000'" class="cloud-status muted">隐私相册请在小米云网页版上传。</p>
         <ul v-if="cloud.items.length" class="cloud-files">
           <li v-for="item in cloud.items" :key="item.id">
@@ -213,7 +236,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
           </li>
         </ul>
         <div v-else-if="!cloud.busy && !cloud.error" class="empty-list">
-          <Icon name="photo" :size="30" /><p>{{ cloud.album ? '这个相册还没有图片或视频' : '此账号没有可访问的云相册' }}</p>
+          <Icon name="photo" :size="30" /><p>这个相册还没有图片或视频</p>
         </div>
         <div v-if="cloud.ready && (cloud.page > 0 || !cloud.last)" class="pagination">
           <span>第 {{ cloud.page + 1 }} 页</span>
@@ -258,9 +281,17 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
 .cloud-account { @apply mb-2; }
 .cloud-account > div { @apply flex items-center gap-2.5; }
 .cloud-account svg { @apply text-blue; }
+.cloud-albums { @apply grid grid-cols-2 gap-3 min-[760px]:grid-cols-3 xl:grid-cols-4; }
+.cloud-album { @apply flex min-w-0 flex-col overflow-hidden rounded-xl border border-solid border-hairline bg-canvas p-0 text-left; }
+.album-cover { @apply grid aspect-[2/1] w-full place-items-center bg-blue/10 text-blue; }
+.album-cover.album-private { @apply bg-soft text-muted; }
+.album-label { @apply flex min-h-12 w-full items-center justify-between gap-2 px-3 py-2; }
+.album-label strong { @apply min-w-0; overflow-wrap: anywhere; }
+.album-label svg { @apply text-muted; }
 .cloud-library { @apply px-6 py-5; }
 .cloud-toolbar { @apply pb-4; }
-.cloud-toolbar > select { @apply w-full max-w-[280px]; }
+.cloud-detail-heading { @apply flex min-w-0 flex-wrap items-center gap-x-4; }
+.cloud-detail-heading h2 { overflow-wrap: anywhere; }
 .cloud-status { @apply mb-2.5; }
 .cloud-files { @apply m-0 list-none p-0; }
 .cloud-files li { @apply flex items-center gap-3 py-3; border-top: 1px solid var(--color-soft); }
