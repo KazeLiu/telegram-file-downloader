@@ -538,10 +538,10 @@ def create_app():
         return library.start_scan()
 
     @app.get("/api/images")
-    async def images(page: int = 1, candidate: bool = False, threshold: int = 80, search: str = ""):
-        if page < 1 or len(search) > 255 or threshold not in {65, 80}:
+    async def images(page: int = 1, candidate: bool = False, search: str = "", after: int | None = None):
+        if page < 1 or len(search) > 255 or (after is not None and after < 1):
             raise ValueError("无效的图片查询")
-        return library.listing(page, candidate, threshold, search)
+        return library.listing(page, candidate, search, after)
 
     @app.get("/api/images/{image_id}/thumbnail")
     async def image_thumbnail(image_id: int, version: str):
