@@ -25,6 +25,8 @@ let timer: ReturnType<typeof setInterval>
 let observer: IntersectionObserver | undefined
 let loadRevision = 0
 let polling = false
+let press: { pointerId: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | undefined
+let held = false
 
 function isSelected(item: Picture) { return imageModel.selected.get(item.id)?.version === item.version }
 function clearSelection() { imageModel.selected.clear() }
@@ -102,6 +104,32 @@ function select(item: Picture, checked: boolean) {
   else imageModel.selected.delete(item.id)
 }
 async function preview(item: Picture) { imageModel.picture = item; await nextTick(); pictureDialog.value?.showModal() }
+function stopPress(event?: PointerEvent) {
+  if (!press || (event && press.pointerId !== event.pointerId)) return
+  clearTimeout(press.timer)
+  press = undefined
+}
+function startPress(event: PointerEvent, item: Picture) {
+  if (!event.isPrimary || event.button !== 0) return
+  stopPress()
+  held = false
+  const button = event.currentTarget as HTMLButtonElement
+  const timer = setTimeout(() => {
+    press = undefined
+    if (!button.isConnected || button.disabled) return
+    held = true
+    void preview(item)
+  }, 450)
+  press = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timer }
+}
+function movePress(event: PointerEvent) {
+  if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 9) stopPress(event)
+}
+function activateImage(event: MouseEvent, item: Picture) {
+  if (held && event.detail) { held = false; return }
+  if (imageModel.organizing) select(item, !isSelected(item))
+  else review(item)
+}
 function review(item: Picture) {
   reviewDialog.value?.open(imageModel.items, item, imageModel.nextCursor, imageModel.total)
 }
@@ -171,7 +199,7 @@ onMounted(() => {
   }, 2000)
   void scan()
 })
-onUnmounted(() => { clearInterval(timer); observer?.disconnect() })
+onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
 </script>
 
 <template>
@@ -202,16 +230,15 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect() })
       </div>
       <div class="image-grid" :aria-busy="imageModel.loading || imageModel.loadingMore">
         <article v-for="item in imageModel.items" :key="item.id + ':' + item.version" class="image-card">
-          <div class="image-preview" :class="{ selected: imageModel.organizing && isSelected(item) }" :title="item.name">
-            <img v-if="item.width && !item.error && !imageModel.broken[item.id]" :src="thumbnail(item)" alt="" loading="lazy" decoding="async" @error="imageModel.broken[item.id] = true" />
-            <Icon v-else name="photo" class="image-placeholder" :size="16" />
-            <template v-if="imageModel.organizing">
-              <input type="checkbox" :checked="isSelected(item)" :aria-label="'选择 ' + item.name" :disabled="blocked" @change="select(item, ($event.target as HTMLInputElement).checked)" />
-              <span class="image-check" aria-hidden="true"><Icon v-if="isSelected(item)" name="check" :size="12" /></span>
-            </template>
-            <button v-else :aria-label="'快速审阅 ' + item.name" :disabled="blocked" @click="review(item)"></button>
-          </div>
-          <button v-if="imageModel.organizing" class="image-details" :aria-label="'查看 ' + item.name + ' 的详情'" :disabled="blocked" @click="preview(item)">详情</button>
+          <button type="button" class="image-preview" :title="item.name" :disabled="blocked"
+            :aria-label="(imageModel.organizing ? '选择 ' : '快速审阅 ') + item.name" :aria-pressed="imageModel.organizing ? isSelected(item) : undefined"
+            aria-keyshortcuts="Shift+Enter" @click="activateImage($event, item)" @keydown.shift.enter.prevent="!$event.repeat && preview(item)"
+            @pointerdown="startPress($event, item)" @pointermove="movePress" @pointerup="stopPress" @pointerleave="stopPress" @pointercancel="stopPress" @contextmenu.prevent>
+            <span class="image-thumb">
+              <img v-if="item.width && !item.error && !imageModel.broken[item.id]" :src="thumbnail(item)" alt="" draggable="false" loading="lazy" decoding="async" @error="imageModel.broken[item.id] = true" />
+              <Icon v-else name="photo" class="text-muted" :size="16" />
+            </span>
+          </button>
         </article>
       </div>
       <div v-if="canLoadMore" class="image-more"><button ref="moreButton" class="text-button" :disabled="toolbarBlocked" @click="loadMore">{{ imageModel.loadingMore ? '正在加载…' : '加载更多' }}</button></div>
