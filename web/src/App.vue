@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { api, ApiError, bytes, date, duration, percent, waitRemaining, phaseLabels, taskLabels, type Settings, type Status, type Task } from './api'
+import { api, ApiError, bytes, date, duration, percent, groupPercent, waitRemaining, phaseLabels, taskLabels, type Settings, type Status, type Task, type TaskAction } from './api'
 import Icon from './Icon.vue'
 import TaskList from './TaskList.vue'
 import SettingsPanel from './SettingsPanel.vue'
@@ -16,12 +16,15 @@ const appModel = reactive({ booting: true, page: 'overview', status: null as Sta
 const authModel = reactive({ initialized: false, authenticated: false, password: '', confirm: '', busy: false, error: '' })
 const historyModel = reactive({ items: [] as Task[], total: 0, page: 1, status: '', search: '', appliedSearch: '', selected: null as Task | null, busy: false })
 const dialog = ref<HTMLDialogElement>()
+const archiveDialog = ref<HTMLDialogElement>()
+const archiveConfirm = reactive({ action: 'extract_only' as 'extract_only' | 'mark_manual_extracted', taskId: 0,
+  members: [] as { id: number; filename: string }[], busy: false, error: '' })
 let timer: ReturnType<typeof setInterval>
 let toastTimer: ReturnType<typeof setTimeout>
 const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '文件管理', icon: 'folder' }, { id: 'images', title: '图片管理', icon: 'photo' }, { id: 'xiaomi', title: '小米云相册', icon: 'cloud' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
 const title = computed(() => navigation.find(n => n.id === appModel.page)?.title)
 const running = computed(() => appModel.status?.phase === 'watching' && appModel.status?.connection === 'Connected')
-const completed = computed(() => (appModel.status?.counts.completed || 0) + (appModel.status?.counts.extracted || 0) + (appModel.status?.counts.organized || 0))
+const completed = computed(() => (appModel.status?.counts.completed || 0) + (appModel.status?.counts.extracted || 0) + (appModel.status?.counts.organized || 0) + (appModel.status?.counts.manual_extracted || 0))
 const phase = computed(() => appModel.status?.pending ? '正在应用设置' : appModel.status?.phase === 'watching' && !running.value ? '正在连接' : phaseLabels[appModel.status?.phase || 'unconfigured'])
 const recent = computed(() => historyModel.items.slice(0, 5))
 const workflowTask = computed(() => appModel.status?.active_tasks.find(t => t.id === appModel.workflowTask) || appModel.status?.active)
@@ -65,7 +68,7 @@ async function toggleWatcher() {
   finally { appModel.busy = false }
 }
 async function logout() {
-  try { await api('/auth/logout', {}); authModel.authenticated = false; appModel.status = null; appModel.settings = null; historyModel.items = []; dialog.value?.close() }
+  try { await api('/auth/logout', {}); authModel.authenticated = false; appModel.status = null; appModel.settings = null; historyModel.items = []; archiveDialog.value?.close(); dialog.value?.close() }
   catch (error) { appModel.error = (error as Error).message }
 }
 async function openTask(task: Task) {
@@ -74,11 +77,30 @@ async function openTask(task: Task) {
   try { historyModel.selected = await api<Task>(`/history/${task.id}`) }
   catch (error) { appModel.error = (error as Error).message }
 }
-async function taskAction(task: Task, action: 'pause' | 'resume' | 'retry') {
+async function taskAction(task: Task, action: TaskAction) {
+  if (action === 'extract_only' || action === 'mark_manual_extracted') {
+    try {
+      const snapshot = task.group_members ? task : await api<Task>(`/history/${task.id}`)
+      archiveConfirm.action = action; archiveConfirm.taskId = task.id; archiveConfirm.error = ''
+      archiveConfirm.members = (snapshot.group_members?.length ? snapshot.group_members : [snapshot]).map(part => ({ id: part.id, filename: part.filename }))
+      await nextTick(); archiveDialog.value?.showModal()
+    } catch (error) { appModel.error = (error as Error).message }
+    return
+  }
   appModel.busy = true
   try { await api(`/history/${task.id}/action`, { action }); await refresh(); message(action === 'pause' ? '已暂停，下载分片已保留' : '任务已加入处理队列') }
   catch (error) { appModel.error = (error as Error).message }
   finally { appModel.busy = false }
+}
+async function confirmArchiveAction() {
+  archiveConfirm.busy = true; archiveConfirm.error = ''
+  try {
+    await api(`/history/${archiveConfirm.taskId}/action`, { action: archiveConfirm.action, member_ids: archiveConfirm.members.map(part => part.id) })
+    archiveDialog.value?.close()
+    await refresh()
+    message(archiveConfirm.action === 'mark_manual_extracted' ? '已标记为手动解压' : '已加入仅解压任务，原包会保留')
+  } catch (error) { archiveConfirm.error = (error as Error).message }
+  finally { archiveConfirm.busy = false }
 }
 async function toggleQueue() {
   appModel.busy = true
@@ -162,15 +184,20 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
     <dialog ref="dialog" class="task-dialog" @click="(event: MouseEvent) => { if (event.target === dialog) dialog?.close() }">
       <template v-if="historyModel.selected">
         <div class="section-heading"><h2>文件详情</h2><button class="icon-button" aria-label="关闭详情" @click="dialog?.close()"><Icon name="close" /></button></div>
-        <div class="detail-title"><span class="file-icon large"><Icon name="file" :size="30" /></span><h3>{{ historyModel.selected.filename }}</h3></div>
-        <span class="badge" :class="historyModel.selected.status">{{ taskLabels[historyModel.selected.status] }}</span>
+        <div class="detail-title"><span class="file-icon large"><Icon :name="historyModel.selected.kind === 'archive' ? 'archive' : 'file'" :size="30" /></span><div><h3>{{ historyModel.selected.archive_name || historyModel.selected.filename }}</h3><p v-if="(historyModel.selected.group_count || 0) > 1" class="muted">{{ historyModel.selected.group_count }} 个分卷 · {{ bytes(historyModel.selected.group_size) }}</p></div></div>
+        <span class="badge" :class="historyModel.selected.display_status || historyModel.selected.status">{{ taskLabels[historyModel.selected.display_status || historyModel.selected.status] }}</span>
         <WorkflowSteps :task="historyModel.selected" :settings="appModel.settings || undefined" />
-        <TaskActions :task="historyModel.selected" :busy="appModel.busy" @action="taskAction(historyModel.selected!, $event)" />
-        <progress :value="percent(historyModel.selected)" max="100" aria-label="文件下载进度" />
+        <TaskActions :task="historyModel.selected" :busy="appModel.busy" archive-controls @action="taskAction(historyModel.selected!, $event)" />
+        <p v-if="historyModel.selected.archive_group_warning" class="notice">{{ historyModel.selected.archive_group_warning }}</p>
+        <p v-if="historyModel.selected.manual_source === 'external'" class="notice">已按你的确认标记为手动解压；未检查原包，不会再自动处理这一组记录。</p>
+        <p v-else-if="historyModel.selected.manual_extract_only" class="notice">仅解压并保留原包，不自动平铺或清理。需要在图片管理中处理时，先到文件管理整理此文件夹。</p>
+        <progress :value="groupPercent(historyModel.selected)" max="100" aria-label="整组下载进度" />
+        <p v-if="(historyModel.selected.group_count || 0) > 1" class="detail-member-label">以下为当前分卷：{{ historyModel.selected.filename }}<br />暂停、继续与下载重试只影响此分卷；手动解压操作作用于整组。</p>
         <dl class="detail-grid">
           <div><dt>接收时间</dt><dd>{{ date(historyModel.selected.created_at) }}</dd></div>
           <div><dt>开始下载</dt><dd>{{ date(historyModel.selected.started_at) }}</dd></div>
           <div><dt>完成时间</dt><dd>{{ date(historyModel.selected.completed_at) }}</dd></div>
+          <div v-if="historyModel.selected.manual_processed_at"><dt>手动解压时间</dt><dd>{{ date(historyModel.selected.manual_processed_at) }}</dd></div>
           <div><dt>下载耗时</dt><dd>{{ duration(historyModel.selected.elapsed) }}</dd></div>
           <div><dt>下载大小</dt><dd>{{ bytes(historyModel.selected.downloaded) }} / {{ bytes(historyModel.selected.size) }}</dd></div>
           <div><dt>下载进度</dt><dd>{{ percent(historyModel.selected).toFixed(1) }}%</dd></div>
@@ -187,16 +214,24 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           <div v-if="historyModel.selected.status === 'waiting'"><dt>恢复下载</dt><dd>{{ duration(waitRemaining(historyModel.selected)) }}后</dd></div>
           <div v-if="historyModel.selected.status === 'waiting'"><dt>等待原因</dt><dd>{{ historyModel.selected.wait_reason === 'premium' ? '账号下载限速' : 'Telegram 请求限流' }}</dd></div>
           <div v-if="historyModel.selected.quality"><dt>下载版本</dt><dd>{{ historyModel.selected.quality }}</dd></div>
-          <div v-if="historyModel.selected.kind === 'archive'"><dt>原压缩包</dt><dd>{{ historyModel.selected.archive_deleted ? '解压成功后已删除' : '保留' }}</dd></div>
+          <div v-if="historyModel.selected.kind === 'archive'"><dt>原压缩包</dt><dd>{{ historyModel.selected.manual_source === 'external' ? '由你自行处理，未检查是否存在' : historyModel.selected.archive_deleted ? '解压成功后已删除' : '程序未删除' }}</dd></div>
           <div class="full"><dt>下载位置</dt><dd>{{ historyModel.selected.path || '尚未完成' }}</dd></div>
           <div v-if="historyModel.selected.output" class="full"><dt>解压位置</dt><dd>{{ historyModel.selected.output }}</dd></div>
         </dl>
         <p v-if="historyModel.selected.error" class="notice error">{{ historyModel.selected.error }}</p>
         <p v-if="appModel.error" class="notice error" role="alert">{{ appModel.error }}</p>
         <p v-if="historyModel.selected.warning" class="notice">{{ historyModel.selected.warning }}</p>
-        <div v-if="historyModel.selected.group_members && historyModel.selected.group_members.length > 1" class="volume-list"><h3>同组分卷</h3><p v-for="part in historyModel.selected.group_members" :key="part.id"><span>{{ part.filename }}</span><span class="badge" :class="part.status">{{ taskLabels[part.status] }}</span></p></div>
-        <button v-if="historyModel.selected.kind === 'archive' && historyModel.selected.path && ['completed','interrupted'].includes(historyModel.selected.status) && !historyModel.selected.archive_deleted" class="primary" :disabled="historyModel.busy" @click="retryExtraction">{{ historyModel.busy ? '正在加入队列…' : '尝试解压并整理' }}</button>
+        <details v-if="historyModel.selected.manual_previous_error" class="previous-error"><summary>处理前的错误记录</summary><p>{{ historyModel.selected.manual_previous_error }}</p></details>
+        <div v-if="historyModel.selected.group_members && historyModel.selected.group_members.length > 1" class="volume-list"><h3>同组分卷</h3><article v-for="part in historyModel.selected.group_members" :key="part.id"><div><strong>{{ part.filename }}</strong><small>{{ bytes(part.downloaded) }} / {{ bytes(part.size) }} · 平均 {{ bytes(part.average_speed) }}/s</small></div><span class="badge" :class="part.status">{{ taskLabels[part.status] }}</span><button v-if="part.id !== historyModel.selected.id" class="text-button" @click="openTask({ ...historyModel.selected!, ...part })">详情</button></article></div>
+        <button v-if="historyModel.selected.kind === 'archive' && historyModel.selected.path && ['completed','interrupted'].includes(historyModel.selected.status) && !historyModel.selected.archive_deleted && !historyModel.selected.manual_extract_only" class="primary" :disabled="historyModel.busy" @click="retryExtraction">{{ historyModel.busy ? '正在加入队列…' : '尝试解压并整理' }}</button>
       </template>
+    </dialog>
+    <dialog ref="archiveDialog" class="task-dialog archive-confirm-dialog" aria-labelledby="archive-confirm-title" @cancel="archiveConfirm.busy && $event.preventDefault()">
+      <div class="section-heading"><h2 id="archive-confirm-title">{{ archiveConfirm.action === 'extract_only' ? '仅解压到文件夹' : '标记为手动解压' }}</h2><button class="icon-button" aria-label="取消" :disabled="archiveConfirm.busy" @click="archiveDialog?.close()"><Icon name="close" /></button></div>
+      <p>{{ archiveConfirm.action === 'extract_only' ? '将以下压缩包作为一组解压到下载根目录中的资源文件夹。保留原包，不平铺、不清理 PSD/TXT，也不上传。' : '确认你已自行完成这一组资源的解压。只更新记录，即使原包已删除也能标记；不会操作磁盘文件。' }}</p>
+      <div class="archive-confirm-list"><p v-for="part in archiveConfirm.members" :key="part.id"><Icon name="archive" :size="18" /><span>{{ part.filename }}</span></p></div>
+      <p v-if="archiveConfirm.error" class="notice error" role="alert">{{ archiveConfirm.error }}</p>
+      <div class="dialog-actions"><button class="secondary" :disabled="archiveConfirm.busy" @click="archiveDialog?.close()">取消</button><button class="primary" :disabled="archiveConfirm.busy" @click="confirmArchiveAction"><Icon v-if="archiveConfirm.busy" name="loader" class="loading-icon" :size="17" />{{ archiveConfirm.busy ? '正在提交…' : archiveConfirm.action === 'extract_only' ? `解压 ${archiveConfirm.members.length} 个文件` : `标记 ${archiveConfirm.members.length} 个文件` }}</button></div>
     </dialog>
   </div>
   <div v-if="appModel.toast" class="toast" role="status"><Icon name="check" :size="18" />{{ appModel.toast }}</div>

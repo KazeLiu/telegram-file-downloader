@@ -91,7 +91,8 @@ class Enabled(BaseModel):
 
 
 class TaskAction(BaseModel):
-    action: Literal["pause", "resume", "retry"]
+    action: Literal["pause", "resume", "retry", "extract_only", "mark_manual_extracted"]
+    member_ids: list[int] | None = Field(default=None, min_length=1)
 
 
 class QueuePause(BaseModel):
@@ -496,13 +497,13 @@ def create_app():
         task = store.task(task_id)
         if not task:
             raise HTTPException(404, "任务不存在")
-        task["group_members"] = [dict(id=item["id"], filename=item["filename"], status=item["status"], downloaded=item["downloaded"], size=item["size"])
-                                  for item in store.group(task.get("group_id", ""))] if task.get("group_id") else []
-        return task
+        return store.task_view(task)
 
     @app.post("/api/history/{task_id}/action")
     async def task_action(task_id: int, body: TaskAction):
-        await runtime.task_action(task_id, body.action)
+        if body.action in {"extract_only", "mark_manual_extracted"} and not body.member_ids:
+            raise ValueError("请确认本次要处理的压缩包清单")
+        await runtime.task_action(task_id, body.action, body.member_ids)
         return {"ok": True}
 
     @app.post("/api/queue")

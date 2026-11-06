@@ -28,8 +28,12 @@ export interface Task {
   stage?: string; steps?: Record<string, string>; group_id?: string
   volume?: { base: string; scheme: string; index: number; split: boolean } | null
   last_progress_at?: string | null; result_files?: number; deleted_psds?: number; deleted_txts?: number; deleted_pdfs?: number; recycled_psds?: number; recycled_txts?: number; attempts?: number
-  group_members?: { id: number; filename: string; status: string; downloaded: number; size: number }[]
+  group_members?: { id: number; filename: string; status: string; downloaded: number; size: number; average_speed: number }[]
+  group_count?: number; group_size?: number; group_downloaded?: number; display_status?: string; archive_name?: string
+  archive_group_warning?: string; manual_extract_only?: boolean; manual_source?: 'app' | 'external'
+  manual_processed_at?: string; manual_previous_error?: string
 }
+export type TaskAction = 'pause' | 'resume' | 'retry' | 'extract_only' | 'mark_manual_extracted'
 export interface Status {
   phase: string; connection: string; account: { name: string; username: string; id: number } | null
   error: string | null; pending: boolean; download_dir: string; data_dir: string
@@ -41,6 +45,7 @@ export const taskLabels: Record<string, string> = {
   queued: '等待下载', downloading: '下载中', downloaded: '下载完成', extracting: '解压中', completed: '已下载',
   extracted: '已解压', failed: '下载失败', extraction_failed: '待处理', interrupted: '等待恢复', waiting: '限流等待',
   organized: '已整理', organizing: '整理中', processing_failed: '整理失败', waiting_volumes: '等待分卷', paused: '已暂停', retrying: '恢复连接中',
+  manual_extracted: '手动解压',
 }
 export const phaseLabels: Record<string, string> = {
   unconfigured: '尚未连接', connecting: '正在连接', phone: '等待登录', code: '等待验证码', password: '两步验证',
@@ -61,4 +66,5 @@ export function date(value: string | null): string {
   return value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '—'
 }
 export function percent(task: Task): number { return task.size ? Math.min(100, task.downloaded / task.size * 100) : 0 }
+export function groupPercent(task: Task): number { return task.group_size ? Math.min(100, (task.group_downloaded || 0) / task.group_size * 100) : percent(task) }
 export function waitRemaining(task: Task): number { return Math.max(0, (task.wait_until || 0) - Date.now() / 1000) }

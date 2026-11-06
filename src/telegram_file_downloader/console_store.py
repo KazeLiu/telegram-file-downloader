@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .organizer import restore_progress, plan_counts
+from .archive_groups import archive_set_updates, task_view
 
 
 def now() -> str:
@@ -49,6 +50,8 @@ class ConsoleStore:
                 status TEXT NOT NULL, filename TEXT NOT NULL, data TEXT NOT NULL,
                 UNIQUE(scope, message_id));
             CREATE INDEX IF NOT EXISTS task_status_scope ON tasks(status,scope);
+            CREATE INDEX IF NOT EXISTS task_archive_set ON tasks(json_extract(data,'$.archive_set'));
+            CREATE INDEX IF NOT EXISTS task_volume_signature ON tasks(scope,json_extract(data,'$.volume_signature'));
         """)
         self.db.commit()
         settings = self.get("settings", {})
@@ -78,6 +81,7 @@ class ConsoleStore:
                 data.setdefault("steps", {}).pop("pdf", None)
                 data["steps"].pop("psd", None)
                 self.db.execute("UPDATE tasks SET data=? WHERE id=?", (json.dumps(data), row["id"]))
+        self.refresh_archive_sets()
 
     def get(self, key, default=None):
         row = self.db.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
@@ -169,21 +173,53 @@ class ConsoleStore:
         return data
 
     def update_task(self, task_id, **changes):
-        data = self.task(task_id)
-        data.update(changes)
-        data["updated_at"] = now()
+        return self.update_tasks([(task_id, changes)])[0]
+
+    def update_tasks(self, changes):
+        updated = []
         with self.db:
-            self.db.execute("UPDATE tasks SET status = ?, data = ? WHERE id = ?",
-                            (data["status"], json.dumps(data, ensure_ascii=False), task_id))
-        return data
+            for task_id, values in changes:
+                data = self.task(task_id)
+                data.update(values)
+                data["updated_at"] = now()
+                self.db.execute("UPDATE tasks SET status = ?, data = ? WHERE id = ?",
+                                (data["status"], json.dumps(data, ensure_ascii=False), task_id))
+                updated.append(data)
+        return updated
+
+    def refresh_archive_sets(self, scope=None, signature=None):
+        conditions, args = ["json_extract(data,'$.kind')='archive'"], []
+        if scope is not None:
+            conditions.append("scope=?")
+            args.append(scope)
+        if signature is not None:
+            conditions.append("json_extract(data,'$.volume_signature')=?")
+            args.append(signature)
+        rows = self.db.execute("SELECT data FROM tasks WHERE " + " AND ".join(conditions) + " ORDER BY id", args).fetchall()
+        tasks = {item["id"]: item for row in rows if (item := json.loads(row[0]))}
+        changes = [(task_id, values) for task_id, values in archive_set_updates(tasks.values())
+                   if any(tasks[task_id].get(key) != value for key, value in values.items())]
+        self.update_tasks(changes)
+
+    def archive_members(self, task):
+        if task.get("archive_set"):
+            return [json.loads(row[0]) for row in self.db.execute(
+                "SELECT data FROM tasks WHERE json_extract(data,'$.archive_set')=? ORDER BY id", (task["archive_set"],))]
+        return self.group(task["group_id"]) if task.get("group_id") else [task]
+
+    def task_view(self, task):
+        return task_view(task, self.archive_members(task))
 
     def history(self, page=1, status="", search=""):
-        condition = "WHERE (? = '' OR status = ?) AND (? = '' OR instr(lower(filename), lower(?)) > 0)"
+        grouped = """WITH grouped AS (
+            SELECT MIN(id) AS leader, MAX(id) AS latest FROM tasks
+            GROUP BY COALESCE(json_extract(data,'$.archive_set'),'task:'||id)
+            HAVING (?='' OR MAX(status=?)=1) AND (?='' OR MAX(instr(lower(filename),lower(?))>0)=1)) """
         args = (status, status, search, search)
-        count = self.db.execute(f"SELECT COUNT(*) FROM tasks {condition}", args).fetchone()[0]
-        rows = self.db.execute(f"SELECT data FROM tasks {condition} ORDER BY id DESC LIMIT 25 OFFSET ?",
+        count = self.db.execute(grouped + "SELECT COUNT(*) FROM grouped", args).fetchone()[0]
+        rows = self.db.execute(grouped + "SELECT tasks.data FROM grouped JOIN tasks ON tasks.id=grouped.leader ORDER BY grouped.latest DESC LIMIT 25 OFFSET ?",
                                (*args, (page - 1) * 25)).fetchall()
-        return {"items": [json.loads(row[0]) for row in rows], "total": count, "page": page, "page_size": 25}
+        return {"items": [self.task_view(json.loads(row[0])) for row in rows], "total": count, "page": page, "page_size": 25}
 
     def tasks(self, scope=None, statuses=None):
         condition = " AND status IN (" + ",".join("?" for _ in statuses) + ")" if statuses else ""
@@ -192,11 +228,15 @@ class ConsoleStore:
         return [json.loads(row[0]) for row in rows]
 
     def volume_candidate(self, scope, signature, album):
-        row = self.db.execute("""SELECT data FROM tasks WHERE scope=?
-            AND json_extract(data,'$.volume_signature')=? AND json_extract(data,'$.album_id')=?
-            AND status NOT IN ('completed','extracted','organized') ORDER BY id DESC LIMIT 1""",
-            (scope, signature, album)).fetchone()
-        return json.loads(row[0]) if row else None
+        rows = self.db.execute("""SELECT data FROM tasks WHERE scope=?
+            AND json_extract(data,'$.volume_signature')=?
+            AND COALESCE(json_extract(data,'$.manual_extract_only'),0)=0
+            AND status NOT IN ('completed','extracted','organized','manual_extracted') ORDER BY id DESC""",
+            (scope, signature)).fetchall()
+        tasks = [json.loads(row[0]) for row in rows]
+        exact = [task for task in tasks if album and task.get("album_id") == album]
+        candidates = exact or tasks
+        return candidates[0] if len({task["group_id"] for task in candidates}) == 1 else None
 
     def group(self, group_id):
         return [json.loads(row[0]) for row in self.db.execute(

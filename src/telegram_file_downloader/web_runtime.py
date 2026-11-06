@@ -8,7 +8,8 @@ from pathlib import Path
 
 from telethon import TelegramClient, errors, utils
 
-from .archives import ARCHIVE_EXTENSIONS, seven_zip
+from .archives import ARCHIVE_EXTENSIONS, seven_zip, extract_archive_set, VolumesPending
+from .archive_groups import ACTIVE_ARCHIVES, CLOSED_ARCHIVES
 from .config import AppConfig, proxy_from_mapping
 from .console_store import ConsoleStore, now
 from .media_pipeline import ConsoleProcessor
@@ -247,10 +248,15 @@ class WebRuntime:
             self.phase, self.error = "phone", ""
 
     async def retry_extraction(self, task_id):
+        task = self.store.task(task_id)
+        if task and task.get("manual_extract_only"):
+            return await self.extract_only(task_id)
         async with self.control_lock:
             task = self.store.task(task_id)
             if not task or task["kind"] != "archive" or task["status"] not in {"extraction_failed", "processing_failed", "waiting_volumes", "completed", "interrupted"}:
                 raise ValueError("这个任务不需要重新解压")
+            if len({item.get("group_id") for item in self.store.archive_members(task)}) > 1:
+                raise ValueError("分卷分散在不同下载批次，请使用“仅解压到文件夹”")
             group = task.get("group_id") or str(task_id)
             if not task["path"] or (not Path(task["path"]).is_file() and not self.store.get(f"organize:{group}")):
                 raise ValueError("原压缩包不在原下载目录，无法重试")
@@ -273,7 +279,99 @@ class WebRuntime:
             self.local_jobs.add(job)
             job.add_done_callback(self.local_jobs.discard)
 
-    async def task_action(self, task_id, action):
+    def _archive_action_members(self, task_id, member_ids):
+        task = self.store.task(task_id)
+        if not task or task["kind"] != "archive":
+            raise ValueError("请选择压缩包任务")
+        members = self.store.archive_members(task)
+        if member_ids is not None and sorted(member_ids) != sorted(item["id"] for item in members):
+            raise ValueError("分卷清单已变化，请重新打开详情并确认")
+        groups = {item.get("group_id") or str(item["id"]) for item in members}
+        if any(item["status"] in ACTIVE_ARCHIVES for item in members):
+            raise ValueError("这一组资源仍在下载或处理，请先暂停或等待完成")
+        if any(item["status"] in CLOSED_ARCHIVES for item in members):
+            raise ValueError("这一组资源已经处理完成，请刷新记录")
+        if self.processor and (any(item["id"] in self.processor.running for item in members)
+                               or groups.intersection(self.processor.post_tasks)):
+            raise ValueError("这一组资源仍在处理，请稍后再操作")
+        if any(job.get_name() in {f"local-workflow-{group}" for group in groups} for job in self.local_jobs):
+            raise ValueError("这一组资源仍在处理，请稍后再操作")
+        return task, members, groups
+
+    def _claim_manual_group(self, old_groups):
+        group = next(iter(old_groups)) if len(old_groups) == 1 else f"manual:{uuid.uuid4().hex}"
+        if self.processor:
+            self.processor.pending_groups.difference_update(old_groups)
+        return group
+
+    async def mark_manual_extracted(self, task_id, member_ids=None):
+        async with self.control_lock:
+            task, members, groups = self._archive_action_members(task_id, member_ids)
+            group, stamp = self._claim_manual_group(groups), now()
+            self.store.update_tasks([(item["id"], dict(status="manual_extracted", stage="complete", group_id=group,
+                manual_extract_only=True, manual_source="external", manual_processed_at=stamp, completed_at=stamp,
+                manual_previous_error=item["error"] or item.get("manual_previous_error", ""), error="", output="",
+                speed=0, eta=None, wait_until=None, wait_reason="",
+                steps={**item.get("steps", {}), "volumes": "manual" if len(members) > 1 or (item.get("volume") or {}).get("split") else "skipped",
+                       "extract": "manual", "organize": "skipped", "cleanup": "skipped", "cloud": "skipped"}))
+                for item in members])
+            self.store.refresh_archive_sets(task["scope"], task.get("volume_signature") or None)
+            if self.processor and task["scope"] == self.processor.history.scope:
+                self.processor.final_receipts.update(item["id"] for item in members)
+            LOGGER.info("manual extraction acknowledged group=%s tasks=%s", group, [item["id"] for item in members])
+
+    async def extract_only(self, task_id, member_ids=None):
+        async with self.control_lock:
+            task, members, groups = self._archive_action_members(task_id, member_ids)
+            for item in members:
+                if item["status"] in {"queued", "paused", "failed"} or not item["path"]:
+                    raise ValueError("分卷尚未全部下载完成；若已在外部处理，请使用“标记为手动解压”")
+                file = inside(self.download_dir, str(Path(item["path"]).relative_to(self.download_dir)))
+                if not file.is_file():
+                    raise ValueError("原压缩包已移走或删除；若已解压，请使用“标记为手动解压”")
+                if item["size"] and file.stat().st_size != item["size"]:
+                    raise ValueError("分卷文件大小与下载记录不符，请检查文件完整性")
+            group = self._claim_manual_group(groups)
+            self.store.update_tasks([(item["id"], dict(group_id=group, manual_extract_only=True, manual_source="app",
+                status="extracting", stage="extract", completed_at=None, error="",
+                manual_previous_error=item["error"] or item.get("manual_previous_error", ""),
+                steps={**item.get("steps", {}), "volumes": "active" if len(members) > 1 or (item.get("volume") or {}).get("split") else "skipped",
+                       "extract": "active", "organize": "skipped", "cleanup": "skipped", "cloud": "skipped"}))
+                for item in members])
+            async def run():
+                try:
+                    async with self.operation_lock:
+                        output = await extract_archive_set(self.download_dir, members, self.store.settings()["archive_passwords"])
+                    stamp = now()
+                    self.store.update_tasks([(item["id"], dict(status="manual_extracted", stage="complete", output=str(output),
+                        completed_at=stamp, manual_processed_at=stamp, error="", speed=0, eta=None,
+                        steps={**item.get("steps", {}), "volumes": "done" if len(members) > 1 or (item.get("volume") or {}).get("split") else "skipped",
+                               "extract": "done", "organize": "skipped", "cleanup": "skipped", "cloud": "skipped"}))
+                        for item in members])
+                    LOGGER.info("manual extraction complete group=%s output=%s", group, output)
+                except asyncio.CancelledError:
+                    self.store.update_tasks([(item["id"], dict(status="interrupted", stage="extract")) for item in members])
+                    raise
+                except (OSError, ValueError) as exc:
+                    status = "waiting_volumes" if isinstance(exc, VolumesPending) else "extraction_failed"
+                    self.store.update_tasks([(item["id"], dict(status=status, stage="volumes" if status == "waiting_volumes" else "extract", error=str(exc),
+                        steps={**item.get("steps", {}), "volumes": "waiting" if status == "waiting_volumes" else "idle",
+                               "extract": "idle" if status == "waiting_volumes" else "failed", "organize": "skipped", "cleanup": "skipped", "cloud": "skipped"}))
+                        for item in members])
+                    LOGGER.warning("manual extraction failed group=%s", group, exc_info=True)
+                finally:
+                    self.store.refresh_archive_sets(task["scope"], task.get("volume_signature") or None)
+                    if self.processor and task["scope"] == self.processor.history.scope:
+                        self.processor.final_receipts.update(item["id"] for item in members)
+            job = asyncio.create_task(run(), name=f"manual-archive-{group}")
+            self.local_jobs.add(job)
+            job.add_done_callback(self.local_jobs.discard)
+
+    async def task_action(self, task_id, action, member_ids=None):
+        if action == "mark_manual_extracted":
+            return await self.mark_manual_extracted(task_id, member_ids)
+        if action == "extract_only":
+            return await self.extract_only(task_id, member_ids)
         task = self.store.task(task_id)
         if not task:
             raise ValueError("任务不存在")

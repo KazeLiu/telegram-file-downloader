@@ -19,7 +19,7 @@ from .transfers import TransferThrottle
 
 LOGGER = logging.getLogger(__name__)
 DOWNLOAD_STATES = {"queued", "interrupted"}
-FINISHED = {"completed", "extracted", "organized"}
+FINISHED = {"completed", "extracted", "organized", "manual_extracted"}
 
 
 def select_media(message, settings):
@@ -115,6 +115,8 @@ class ConsoleProcessor:
     def scan_complete(self):
         self.ready = True
         for task in self.store.tasks(self.history.scope, {"downloaded", "waiting_volumes", "interrupted"}):
+            if task.get("manual_extract_only"):
+                continue
             if task["status"] in {"downloaded", "waiting_volumes"} or (
                     task["status"] == "interrupted" and task.get("stage") != "download"):
                 self.pending_groups.add(task.get("group_id") or str(task["id"]))
@@ -161,6 +163,8 @@ class ConsoleProcessor:
         self.store.update_task(task["id"], group_id=group_id, volume=volume, volume_signature=signature,
                                album_id=str(getattr(message, "grouped_id", None) or ""),
                                dc_id=getattr(selected.document or selected.photo, "dc_id", None))
+        if volume:
+            self.store.refresh_archive_sets(self.history.scope, signature)
         LOGGER.info("task=%s received message=%s group=%s name=%s size=%s", task["id"], message.id, group_id, task["filename"], task["size"])
         return True
 
@@ -209,7 +213,8 @@ class ConsoleProcessor:
                       "paused": "已暂停", "retrying": "连接恢复中", "failed": "下载失败，可在页面重试",
                       "downloaded": "下载完成", "waiting_volumes": "等待分卷", "extracting": "正在解压",
                       "organizing": "正在整理文件", "organized": "本地工作流完成", "extracted": "解压完成",
-                      "extraction_failed": "解压未完成", "processing_failed": "文件整理未完成", "completed": "下载完成"}
+                      "extraction_failed": "解压未完成", "processing_failed": "文件整理未完成", "completed": "下载完成",
+                      "manual_extracted": "手动解压"}
             text = f"{labels.get(task['status'], task['status'])}\n{task['filename']}"
             if task["status"] == "downloading":
                 percent = task["downloaded"] * 100 / task["size"] if task["size"] else 0
@@ -376,6 +381,8 @@ class ConsoleProcessor:
 
     async def unpack_group(self, group):
         members = self.store.group(group)
+        if any(task.get("manual_extract_only") or task["status"] == "manual_extracted" for task in members):
+            return
         saved_plan = self.store.get(f"organize:{group}")
         allowed = {"downloaded", "waiting_volumes", "interrupted", "extraction_failed", "processing_failed"}
         if saved_plan:
@@ -458,6 +465,7 @@ class ConsoleProcessor:
                     recycled_psds=result["recycled_psds"], recycled_txts=result["recycled_txts"])
                 self.final_receipts.add(task["id"])
             LOGGER.info("group=%s workflow complete moved=%s recycled_psds=%s recycled_txts=%s", group, result["moved"], result["recycled_psds"], result["recycled_txts"])
+            self.store.refresh_archive_sets(leader["scope"], leader.get("volume_signature") or None)
         except (ExtractionError, OSError, ValueError) as exc:
             failure_stage = self.store.task(task_id).get("stage", "extract")
             status = "waiting_volumes" if isinstance(exc, VolumesPending) else (

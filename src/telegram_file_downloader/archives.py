@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .files import collision_safe_path
+from .storage import inside
 
 
 STREAM_EXTENSIONS = frozenset({".gz", ".gzip", ".bz2", ".bzip2", ".xz", ".zst", ".zstd", ".lzma", ".z"})
@@ -135,7 +136,8 @@ async def _expand_tar(executable: str, archive: Path, staging: Path) -> Path:
     return contents
 
 
-async def extract_archive(archive: Path, passwords: list[str], source_name: str | None = None, allow_volumes=False) -> Path:
+async def extract_archive(archive: Path, passwords: list[str], source_name: str | None = None, allow_volumes=False,
+                          output_directory: Path | None = None) -> Path:
     executable = seven_zip()
     if not executable:
         raise ExtractionError("未找到 7-Zip；原包已保留。Windows 请安装 7-Zip 后重试")
@@ -181,7 +183,7 @@ async def extract_archive(archive: Path, passwords: list[str], source_name: str 
                         raise ExtractionError("组合压缩包没有唯一的 TAR 文件，已保留原包")
                     output = await _expand_tar(executable, inner, staging)
             stem = resource_name(format_name)
-            target = collision_safe_path(archive.parent, stem)
+            target = collision_safe_path(output_directory or archive.parent, stem)
             output.rename(target)
             return target
         finally:
@@ -191,3 +193,33 @@ async def extract_archive(archive: Path, passwords: list[str], source_name: str 
     if allow_volumes and missing_volume:
         raise VolumesPending("等待后续分卷：压缩工具未确认整组完整；已有分卷全部保留")
     raise ExtractionError("解压失败：密码不匹配、压缩包损坏或缺卷；原包已保留")
+
+
+async def extract_archive_set(root: Path, members, passwords) -> Path:
+    members = sorted(members, key=lambda task: ((volume_info(task["filename"]) or {}).get("index", 0), task["id"]))
+    volume = volume_info(members[0]["filename"])
+    split = len(members) > 1 or bool(volume and volume["split"])
+    if split:
+        volumes = [volume_info(task["filename"]) for task in members]
+        if not all(item and (item["base"].casefold(), item["scheme"]) == (volume["base"].casefold(), volume["scheme"]) for item in volumes):
+            raise ExtractionError("分卷名称或格式不一致，请检查分组")
+        indices = [item["index"] for item in volumes]
+        if len(set(indices)) != len(indices):
+            raise ExtractionError("分组中存在重复卷号，请先处理重复分卷")
+        start = 0 if volume["scheme"] == "zip_old" else 1
+        missing = next((expected for expected, index in enumerate(indices, start) if expected != index), None)
+        if missing is not None:
+            raise VolumesPending(f"分卷编号不连续，请检查第 {missing} 卷")
+    names = [task["filename"].casefold() for task in members]
+    if len(set(names)) != len(names):
+        raise ExtractionError("分组中存在重复文件名，已保留原包")
+    work = inside(root, ".tg-work")
+    work.mkdir(exist_ok=True)
+    # Links collect complete volumes without moving originals or their download checkpoints.
+    with tempfile.TemporaryDirectory(prefix="manual-", dir=work) as temporary:
+        staging = Path(temporary)
+        for task in members:
+            source = inside(root, str(Path(task["path"]).relative_to(root)))
+            os.link(source, staging / task["filename"])
+        return await extract_archive(staging / members[0]["filename"], passwords, members[0]["filename"],
+                                     allow_volumes=split or bool(volume), output_directory=root)
