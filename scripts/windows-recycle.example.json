@@ -1,7 +1,0 @@
-{
-  "container": "tg-collector-watcher-1",
-  "mounts": {
-    "/downloads": "D:\\TG-Resources",
-    "/backups": "D:\\照片备份"
-  }
-}

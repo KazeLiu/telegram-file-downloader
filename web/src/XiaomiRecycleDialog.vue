@@ -89,7 +89,7 @@ onUnmounted(() => { disposed = true })
   <dialog ref="dialog" class="task-dialog linked-recycle" aria-labelledby="linked-recycle-title" @cancel="(model.loading || model.running) && $event.preventDefault()">
     <div class="section-heading"><h2 id="linked-recycle-title">回收云端及对应本地文件</h2><button class="icon-button" aria-label="关闭回收确认" :disabled="model.loading || model.running" @click="dialog?.close()"><Icon name="close" /></button></div>
     <p class="mt-3">云端成功后，唯一的同名同大小本地文件才会移入项目回收站。重名或不匹配的本地文件保留。</p>
-    <p class="muted mt-2">云端删除会同步到开启相册同步的设备。本地文件静置满 15 天后，由 Windows 宿主机任务转入系统回收站。</p>
+    <p class="muted mt-2">云端删除会同步到开启相册同步的设备。本地文件在项目回收站保留 15 天后，由容器自动永久删除，不进入系统回收站。</p>
     <p v-if="model.loading" class="mt-4" role="status">正在核对本地文件…</p>
     <ul v-else class="my-4 max-h-72 list-none space-y-3 overflow-auto p-0">
       <li v-for="item in model.items" :key="item.token" class="break-all">

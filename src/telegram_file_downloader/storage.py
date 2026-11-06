@@ -1,14 +1,12 @@
 """Download-mount path boundaries and a persistent, recoverable application recycle bin."""
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
 import sqlite3
 import time
 from pathlib import Path
-from uuid import uuid4
 
 LOGGER = logging.getLogger(__name__)
 TRASH_DIRECTORY = ".tg-trash"
@@ -73,14 +71,10 @@ class RecycleBin:
         target = inside(self.root, f"{TRASH_DIRECTORY}/files/{record['id']}")
         return original, target
 
-    def _state(self, record_id, state):
-        with self.db:
-            self.db.execute("UPDATE items SET state=? WHERE id=?", (state, record_id))
-
     def _recover(self):
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            for record in self.db.execute("SELECT * FROM items WHERE state IN ('pending','restoring')").fetchall():
+            for record in self.db.execute("SELECT * FROM items WHERE state IN ('pending','restoring','purging','exporting','windows')").fetchall():
                 original, target = self._paths(record)
                 if record["state"] == "pending" and target.is_file():
                     if original.exists() and original.samefile(target):
@@ -92,6 +86,10 @@ class RecycleBin:
                             continue
                         target.unlink()
                     self.db.execute("UPDATE items SET state='restored' WHERE id=?", (record["id"],))
+                elif record["state"] == "purging" and not target.exists():
+                    self.db.execute("UPDATE items SET state='purged' WHERE id=?", (record["id"],))
+                elif record["state"] in {"exporting", "windows"} and target.is_file():
+                    self.db.execute("UPDATE items SET state='trashed',created=? WHERE id=?", (time.time(), record["id"]))
 
     def move(self, file, record_id, reason):
         if not re.fullmatch(r"[a-f0-9]{32}(?:-[0-9]+)?", record_id):
@@ -104,7 +102,7 @@ class RecycleBin:
         if record:
             if record["original"] != relative:
                 raise ValueError("回收记录与源文件不一致")
-            if record["state"] == "restored":
+            if record["state"] in {"restored", "purged"}:
                 return record_id  # A replay must not undo the user's subsequent restoration.
         else:
             if not file.is_file():
@@ -115,7 +113,7 @@ class RecycleBin:
             record = self.db.execute("SELECT * FROM items WHERE id=?", (record_id,)).fetchone()
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            if self.db.execute("SELECT state FROM items WHERE id=?", (record_id,)).fetchone()[0] == "restored":
+            if self.db.execute("SELECT state FROM items WHERE id=?", (record_id,)).fetchone()[0] in {"restored", "purged"}:
                 return record_id
             _, target = self._paths(record)
             if file.exists():
@@ -133,8 +131,8 @@ class RecycleBin:
         LOGGER.info("recycle moved id=%s source=%s reason=%s", record_id, relative, reason)
         return record_id
 
-    def listing(self, page=1, windows=False):
-        states = "('windows')" if windows else "('trashed','restoring','exporting')"
+    def listing(self, page=1):
+        states = "('trashed','restoring','purging','exporting')"
         total = self.db.execute(f"SELECT COUNT(*) FROM items WHERE state IN {states}").fetchone()[0]
         rows = self.db.execute(f"SELECT * FROM items WHERE state IN {states} ORDER BY created DESC,id LIMIT 50 OFFSET ?",
                                ((page - 1) * 50,)).fetchall()
@@ -144,11 +142,11 @@ class RecycleBin:
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             record = self.db.execute("SELECT * FROM items WHERE id=?", (record_id,)).fetchone()
-            if not record or record["state"] not in {"trashed", "restoring", "windows"}:
-                raise ValueError("回收文件不存在、已还原或正在转入 Windows 回收站")
+            if not record or record["state"] not in {"trashed", "restoring", "purging"}:
+                raise ValueError("回收文件不存在、已还原或已永久删除")
             original, target = self._paths(record)
             if not target.is_file():
-                raise ValueError("找不到回收文件；已转入 Windows 的文件需先从系统回收站还原，再恢复原路径")
+                raise ValueError("找不到回收文件，可能已永久删除或被移走")
             if target.stat().st_size != record["size"]:
                 raise ValueError("回收文件大小已变化，已停止还原")
             if original.exists() and not original.samefile(target):
@@ -169,45 +167,44 @@ class RecycleBin:
         LOGGER.info("recycle restored id=%s target=%s", record_id, record["original"])
         return record["original"]
 
-    def prepare_windows(self, record_id):
-        if not re.fullmatch(r"[a-f0-9]{32}(?:-[0-9]+)?", record_id):
-            raise ValueError("无效的回收记录")
-        with self.db:
-            self.db.execute("BEGIN IMMEDIATE")
-            record = self.db.execute("SELECT * FROM items WHERE id=?", (record_id,)).fetchone()
-            if not record or record["state"] not in {"trashed", "exporting"}:
-                raise ValueError("文件已还原或不再等待转移")
-            _, source = self._paths(record)
-            ticket_file = inside(self.root, f"{TRASH_DIRECTORY}/handoff/{record_id}.json")
-            if record["state"] == "trashed":
-                info = source.stat()
-                if max(record["created"], info.st_mtime) > time.time() - RETENTION_SECONDS:
-                    raise ValueError("文件在回收站内尚未静置满 15 天")
-                ticket_file.parent.mkdir(parents=True, exist_ok=True)
-                ticket = dict(nonce=uuid4().hex, id=record_id, original=record["original"], created=record["created"],
-                              path=source.relative_to(self.root).as_posix(), size=info.st_size, mtime=info.st_mtime)
-                temporary = inside(self.root, f"{TRASH_DIRECTORY}/handoff/{record_id}.tmp")
-                temporary.write_text(json.dumps(ticket, ensure_ascii=False), encoding="utf-8")
-                temporary.replace(ticket_file)
-                self.db.execute("UPDATE items SET state='exporting' WHERE id=?", (record_id,))
-            return json.loads(ticket_file.read_text(encoding="utf-8"))
-
-    def finish_windows(self, record_id, success):
-        with self.db:
-            self.db.execute("BEGIN IMMEDIATE")
-            record = self.db.execute("SELECT * FROM items WHERE id=?", (record_id,)).fetchone()
-            if not record or record["state"] != "exporting":
-                raise ValueError("文件不在 Windows 交接状态")
-            _, file = self._paths(record)
-            if success:
-                if file.exists():
-                    raise ValueError("回收文件仍在原处，不能确认转移成功")
-                ticket = json.loads(inside(self.root, f"{TRASH_DIRECTORY}/handoff/{record_id}.json").read_text(encoding="utf-8"))
-                receipt = json.loads(inside(self.root, f"{TRASH_DIRECTORY}/handoff/{record_id}.receipt.json").read_text(encoding="utf-8"))
-                if receipt.get("nonce") != ticket["nonce"] or not receipt.get("destination"):
-                    raise ValueError("Windows 交接凭据不匹配，不能确认转移成功")
-                self.db.execute("UPDATE items SET state='windows' WHERE id=?", (record_id,))
-            else:
-                if not file.is_file():
-                    raise ValueError("转移结果未确认，文件不在原处；请检查 Windows 回收站和交接凭据")
-                self.db.execute("UPDATE items SET state='trashed' WHERE id=?", (record_id,))
+    def purge_expired(self, after=None):
+        cutoff = time.time() - RETENTION_SECONDS
+        query = "SELECT * FROM items WHERE state IN ('trashed','purging') AND created<=?"
+        parameters = [cutoff]
+        if after:
+            query += " AND (created,id)>(?,?)"
+            parameters.extend(after)
+        records = self.db.execute(query + " ORDER BY created,id LIMIT 100", parameters).fetchall()
+        removed, errors = 0, []
+        for record in records:
+            try:
+                with self.db:
+                    self.db.execute("BEGIN IMMEDIATE")
+                    current = self.db.execute("SELECT * FROM items WHERE id=?", (record["id"],)).fetchone()
+                    if current["state"] not in {"trashed", "purging"} or current["created"] > cutoff:
+                        continue
+                    _, file = self._paths(current)
+                    info = file.stat()
+                    if not file.is_file() or info.st_size != current["size"]:
+                        raise ValueError("回收文件大小或类型已变化，已停止清理")
+                    if info.st_mtime > cutoff:
+                        continue
+                    self.db.execute("UPDATE items SET state='purging' WHERE id=?", (record["id"],))
+                with self.db:
+                    self.db.execute("BEGIN IMMEDIATE")
+                    state = self.db.execute("SELECT state FROM items WHERE id=?", (record["id"],)).fetchone()[0]
+                    if state != "purging":
+                        continue
+                    _, file = self._paths(current)
+                    info = file.stat()
+                    if info.st_mtime > cutoff or info.st_size != current["size"]:
+                        self.db.execute("UPDATE items SET state='trashed' WHERE id=?", (record["id"],))
+                        continue
+                    file.unlink()
+                    self.db.execute("UPDATE items SET state='purged' WHERE id=?", (record["id"],))
+                removed += 1
+                LOGGER.info("recycle permanently deleted id=%s original=%s", record["id"], record["original"])
+            except (OSError, ValueError, sqlite3.Error) as exc:
+                errors.append(dict(id=record["id"], error=str(exc)))
+        cursor = (records[-1]["created"], records[-1]["id"]) if len(records) == 100 else None
+        return dict(removed=removed, errors=errors, after=cursor)

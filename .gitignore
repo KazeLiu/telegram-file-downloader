@@ -20,7 +20,6 @@ web/.output/
 src/telegram_file_downloader/static/
 .preview/
 web-data/
-windows-recycle.json
 build/
 /references/XiaomiAlbumSyncer/source/
 /references/XiaomiAlbumSyncer/source.zip

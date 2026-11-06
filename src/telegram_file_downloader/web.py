@@ -28,6 +28,7 @@ from .diagnostics import configure_logs, read_log
 from .organizer import browse, plan_counts
 from .image_library import ImageLibrary
 from .linked_recycle import LinkedRecycle
+from .recycle_cleanup import RecycleCleaner
 from .storage import RecycleBin, inside
 from .xiaomi_batch import XiaomiBatch, local_media
 from .xiaomi_local import XiaomiLocalIndex
@@ -189,15 +190,18 @@ def create_app():
         or bool(runtime.local_jobs) or bool(runtime.processor and runtime.processor.running)
         or bool(runtime.manual_task and not runtime.manual_task.done())))
     linked_recycle = LinkedRecycle(store, xiaomi, local_index)
+    recycle_cleaner = RecycleCleaner(local_index, download_dir, runtime.operation_lock)
     failures: dict[str, list[float]] = {}
 
     @asynccontextmanager
     async def lifespan(app):
         await runtime.start()
         local_index.start()
+        recycle_cleaner.start()
         try:
             yield
         finally:
+            await recycle_cleaner.close()
             await local_index.close()
             await batch.close()
             await xiaomi.close()
@@ -643,7 +647,7 @@ def create_app():
 
     def ensure_library_idle():
         if runtime.operation_lock.locked() or store.get("manual_job", {}).get("status") in {"running", "failed", "interrupted"}:
-            raise ValueError("请先完成正在执行或尚未完成的文件整理，再回收或还原文件")
+            raise ValueError("请等待当前文件操作结束；存在未完成的手动整理时，请先完成该任务")
 
     @app.post("/api/images/recycle")
     async def recycle_images(body: ImagesSelection):
@@ -667,17 +671,17 @@ def create_app():
         return {"items": local_index.recycle_roots(download_dir)}
 
     @app.get("/api/recycle")
-    async def recycle_items(page: int = 1, root: str = "downloads", windows: bool = False):
+    async def recycle_items(page: int = 1, root: str = "downloads"):
         if page < 1:
             raise ValueError("无效的回收站页码")
         if runtime.operation_lock.locked():
-            raise ValueError("文件整理正在进行，请结束后再查看回收站")
+            raise ValueError("文件整理或回收站清理正在进行，请稍后再查看")
         async with runtime.operation_lock:
             directory = local_index.recycle_root(root, download_dir)
             if not directory.is_dir():
                 raise ValueError("回收目录不可访问，请检查挂载")
             with RecycleBin(directory) as recycle:
-                return recycle.listing(page, windows)
+                return dict(recycle.listing(page), cleanup=dict(recycle_cleaner.state))
 
     @app.post("/api/recycle/{record_id}/restore")
     async def restore_item(record_id: str, root: str = "downloads"):

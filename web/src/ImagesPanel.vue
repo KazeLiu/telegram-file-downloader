@@ -8,7 +8,8 @@ import { formatNames } from './xiaomiMedia'
 interface Recycled { id: string; original: string; size: number; created: number; reason: string; state: string }
 type View = 'all' | 'candidates' | 'recycle'
 const imageModel = reactive({ view: 'all' as View, organizing: false, items: [] as Picture[], trash: [] as Recycled[], page: 1,
-  total: 0, pageSize: 50, nextCursor: null as number | null, recycleRoot: 'downloads', windows: false, roots: [] as { id: string; path: string }[],
+  total: 0, pageSize: 50, nextCursor: null as number | null, recycleRoot: 'downloads', roots: [] as { id: string; path: string }[],
+  cleanup: { running: false, checked: 0, removed: 0, failed: 0 },
   counts: { total: 0, candidates: 0, errors: 0 }, scan: { running: false, done: 0, total: 0, error: '' },
   search: '', appliedSearch: '', loading: false, loadingMore: false, busy: false, error: '', selected: new Map<number, Picture>(),
   confirmation: [] as Picture[], picture: null as Picture | null, broken: {} as Record<number, boolean> })
@@ -51,10 +52,11 @@ async function load({ poll = false, append = false } = {}) {
   try {
     if (imageModel.view === 'recycle') {
       imageModel.roots = (await api<{ items: typeof imageModel.roots }>('/recycle/roots')).items
-      const query = new URLSearchParams({ page: String(imageModel.page), root: imageModel.recycleRoot, windows: String(imageModel.windows) })
+      const query = new URLSearchParams({ page: String(imageModel.page), root: imageModel.recycleRoot })
       const result = await api(`/recycle?${query}`)
       if (revision !== loadRevision) return
       imageModel.trash = result.items; imageModel.total = result.total; imageModel.pageSize = result.page_size
+      imageModel.cleanup = result.cleanup
     } else {
       const result = await listImages(append ? imageModel.nextCursor : null)
       if (revision !== loadRevision) return
@@ -270,12 +272,14 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
       <button v-if="imageModel.organizing && selectedCount" class="danger recycle-selection" :disabled="blocked" @click="confirm()"><Icon name="trash" :size="16" />移入回收站 · {{ selectedCount }} 张</button>
     </template>
     <template v-else>
-      <p class="muted recycle-help">文件保存在各自目录的项目回收站中，可还原到原路径且不覆盖同名文件。静置满 15 天后由 Windows 宿主机任务转入系统回收站；未配置任务或转移失败时继续保留。</p>
+      <p class="muted recycle-help">文件在项目回收站保留 15 天，期间可还原到原路径且不覆盖同名文件。到期后由容器自动永久删除，不进入 Windows 回收站，也无法再从这里恢复。</p>
+      <p v-if="imageModel.cleanup.running" class="muted mt-2" role="status">正在检查到期文件…</p>
+      <p v-else-if="imageModel.cleanup.checked" class="muted mt-2">最近检查：{{ new Date(imageModel.cleanup.checked * 1000).toLocaleString('zh-CN') }} · 本轮已永久清理 {{ imageModel.cleanup.removed }} 项</p>
+      <p v-if="imageModel.cleanup.failed" class="notice error" role="alert">自动清理有 {{ imageModel.cleanup.failed }} 项异常，请查看运行日志。</p>
       <div class="my-3 flex flex-wrap items-end gap-4">
         <label v-if="imageModel.roots.length > 1">回收目录<select v-model="imageModel.recycleRoot" :disabled="blocked" @change="imageModel.page = 1; load()"><option v-for="root in imageModel.roots" :key="root.id" :value="root.id">{{ root.path }}</option></select></label>
-        <label class="flex flex-row items-center gap-2"><input v-model="imageModel.windows" type="checkbox" :disabled="blocked" @change="imageModel.page = 1; load()" />查看已转入 Windows 的记录</label>
       </div>
-      <div class="recycle-list"><article v-for="item in imageModel.trash" :key="item.id"><span class="file-icon"><Icon :name="['image', 'xiaomi_upload', 'xiaomi_cloud'].includes(item.reason) ? 'photo' : 'file'" /></span><div><strong>{{ item.original }}</strong><p>{{ bytes(item.size) }} · {{ new Date(item.created * 1000).toLocaleString('zh-CN') }} · {{ item.reason === 'xiaomi_cloud' ? '云端联动回收' : item.reason === 'xiaomi_upload' ? '小米云上传后回收' : item.reason === 'image' ? '图片快筛' : '整理清理' }}</p><p v-if="['windows', 'exporting'].includes(item.state)" class="break-all">{{ item.state === 'windows' ? 'Windows 回收站内文件名：' : '交接待确认，请查看宿主机日志。记录：' }}{{ item.id }}</p></div><button v-if="item.state !== 'exporting'" class="secondary" :disabled="blocked" @click="restore(item)"><Icon name="restore" :size="16" />{{ item.state === 'windows' ? '系统还原后恢复原路径' : '还原' }}</button></article></div><div v-if="!imageModel.trash.length" class="empty-list tall"><Icon name="trash" :size="38" /><h2>{{ imageModel.windows ? '暂无 Windows 交接记录' : '回收站是空的' }}</h2><p>移入回收站的文件会出现在这里。</p></div>
+      <div class="recycle-list"><article v-for="item in imageModel.trash" :key="item.id"><span class="file-icon"><Icon :name="['image', 'xiaomi_upload', 'xiaomi_cloud'].includes(item.reason) ? 'photo' : 'file'" /></span><div><strong>{{ item.original }}</strong><p>{{ bytes(item.size) }} · {{ new Date(item.created * 1000).toLocaleString('zh-CN') }} · {{ item.reason === 'xiaomi_cloud' ? '云端联动回收' : item.reason === 'xiaomi_upload' ? '小米云上传后回收' : item.reason === 'image' ? '图片快筛' : '整理清理' }}</p><p v-if="item.state === 'exporting'" class="break-all">文件已移出项目回收站，需手动核对。记录：{{ item.id }}</p></div><button v-if="item.state !== 'exporting'" class="secondary" :disabled="blocked" @click="restore(item)"><Icon name="restore" :size="16" />还原</button></article></div><div v-if="!imageModel.trash.length" class="empty-list tall"><Icon name="trash" :size="38" /><h2>回收站是空的</h2><p>移入回收站的文件会出现在这里。</p></div>
     </template>
     <div v-if="imageModel.view === 'recycle'" class="pagination"><span>第 {{ imageModel.page }} / {{ Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize)) }} 页</span><button class="secondary" :disabled="blocked || imageModel.page === 1" @click="page(-1)">上一页</button><button class="secondary" :disabled="blocked || imageModel.page * imageModel.pageSize >= imageModel.total" @click="page(1)">下一页</button></div>
     <ImageReviewDialog ref="reviewDialog" :load-page="listImages" @finish="finishReview" />
@@ -296,7 +300,7 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
     </dialog>
     <dialog ref="confirmDialog" class="task-dialog recycle-dialog" @cancel="imageModel.busy && $event.preventDefault()">
       <div class="section-heading"><h2>移入回收站？</h2><button class="icon-button" :disabled="imageModel.busy" aria-label="取消回收" @click="confirmDialog?.close()"><Icon name="close" /></button></div>
-      <p>将选中的 {{ imageModel.confirmation.length }} 张图片移出根目录，可在回收站中还原。</p>
+      <p>将选中的 {{ imageModel.confirmation.length }} 张图片移入项目回收站，保留 15 天后自动永久删除。</p>
       <div class="recycle-confirm-list"><p v-for="item in imageModel.confirmation" :key="item.id">{{ item.name }}</p></div>
       <p v-if="imageModel.error" class="notice error" role="alert">{{ imageModel.error }}</p>
       <div class="dialog-actions"><button class="secondary" :disabled="imageModel.busy" @click="confirmDialog?.close()">取消</button><button class="danger" :disabled="toolbarBlocked" @click="recycle"><Icon :name="imageModel.busy ? 'loader' : 'trash'" :class="{ 'loading-icon': imageModel.busy }" :size="16" />{{ imageModel.busy ? '正在移入…' : '确认移入回收站' }}</button></div>

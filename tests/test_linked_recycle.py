@@ -1,6 +1,5 @@
 """Isolated recycle checks; never use a live cloud account or the system Recycle Bin."""
 import asyncio
-import json
 import os
 import tempfile
 import time
@@ -99,31 +98,52 @@ class LinkedRecycleChecks(unittest.TestCase):
         self.assertFalse(result["local_done"])
         self.assertEqual(self.file.read_bytes(), b"changed")
 
-    def test_retention_handoff_and_windows_return(self):
+    def test_retention_purge_and_replay(self):
         record_id = "a" * 32
         with RecycleBin(self.root) as recycle:
             recycle.move(self.file, record_id, "image")
-            with self.assertRaises(ValueError):
-                recycle.prepare_windows(record_id)
+            self.assertEqual(recycle.purge_expired()["removed"], 0)
             old = time.time() - RETENTION_SECONDS - 5
             with recycle.db:
                 recycle.db.execute("UPDATE items SET created=? WHERE id=?", (old, record_id))
             hidden = recycle.files / record_id
+            self.assertEqual(recycle.purge_expired()["removed"], 0)
             os.utime(hidden, (old, old))
-            ticket = recycle.prepare_windows(record_id)
+            self.file.write_bytes(b"keep")
             with self.assertRaises(ValueError):
                 recycle.restore(record_id)
-            recycle.finish_windows(record_id, False)
-            ticket = recycle.prepare_windows(record_id)
-            returned = self.root / "simulated-windows-bin"
-            hidden.rename(returned)
-            receipt = self.root / f".tg-trash/handoff/{record_id}.receipt.json"
-            receipt.write_text(json.dumps({"nonce": ticket["nonce"], "destination": str(returned)}), encoding="utf-8")
-            recycle.finish_windows(record_id, True)
-            self.assertEqual(recycle.listing(windows=True)["total"], 1)
-            returned.rename(hidden)
-            recycle.restore(record_id)
-            self.assertEqual(self.file.read_bytes(), b"123")
+            self.file.unlink()
+            self.assertEqual(recycle.purge_expired()["removed"], 1)
+            self.assertFalse(hidden.exists())
+            self.assertEqual(recycle.listing()["total"], 0)
+            with self.assertRaises(ValueError):
+                recycle.restore(record_id)
+            self.file.write_bytes(b"new")
+            recycle.move(self.file, record_id, "image")
+            self.assertEqual(self.file.read_bytes(), b"new")
+
+    def test_purge_boundary_and_interruption_recovery(self):
+        record_id = "b" * 32
+        now = 2_000_000_000
+        cutoff = now - RETENTION_SECONDS
+        with RecycleBin(self.root) as recycle:
+            recycle.move(self.file, record_id, "image")
+            hidden = recycle.files / record_id
+            with recycle.db:
+                recycle.db.execute("UPDATE items SET created=? WHERE id=?", (cutoff + 1, record_id))
+            os.utime(hidden, (cutoff, cutoff))
+            with patch("telegram_file_downloader.storage.time.time", return_value=now):
+                self.assertEqual(recycle.purge_expired()["removed"], 0)
+                with recycle.db:
+                    recycle.db.execute("UPDATE items SET created=? WHERE id=?", (cutoff, record_id))
+                with patch.object(Path, "unlink", side_effect=OSError("busy")):
+                    result = recycle.purge_expired()
+                self.assertEqual(len(result["errors"]), 1)
+                self.assertTrue(hidden.exists())
+            hidden.unlink()
+        with RecycleBin(self.root) as recycle:
+            state = recycle.db.execute("SELECT state FROM items WHERE id=?", (record_id,)).fetchone()[0]
+            self.assertEqual(state, "purged")
 
 
 if __name__ == "__main__":
