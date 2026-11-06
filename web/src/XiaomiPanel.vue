@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { api, bytes } from './api'
 import Icon from './Icon.vue'
+import XiaomiBatchUpload from './XiaomiBatchUpload.vue'
 
 type Account = { connection: string; label: string }
 type Album = { id: string; name: string }
@@ -102,6 +103,10 @@ function changeAlbum() {
   return run('正在读取云相册…', () => loadMedia())
 }
 
+function batchFinished(album: string) {
+  if (album === cloud.album && !cloud.busy) void run('正在刷新云相册…', () => loadMedia())
+}
+
 async function confirmRecycle(item: Media) {
   selected.value = item
   await nextTick(); recycleDialog.value?.showModal()
@@ -193,7 +198,9 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
           </select></label>
           <div class="cloud-actions">
             <button class="secondary" :disabled="!!cloud.busy" @click="run('正在刷新云相册…', loadAccount)"><Icon name="refresh" :size="17" />刷新</button>
-            <button class="primary" :disabled="!!cloud.busy || !albumName || cloud.album === '1000'" @click="openUpload">上传图片或视频</button>
+            <button class="secondary" :disabled="!!cloud.busy || !albumName || cloud.album === '1000'" @click="openUpload">从此设备上传</button>
+            <XiaomiBatchUpload :key="cloud.account.connection" :connection="cloud.account.connection" :album="cloud.album" :albums="cloud.albums" :disabled="!!cloud.busy || !albumName"
+              @message="emit('message', $event)" @finished="batchFinished" />
           </div>
         </div>
         <p v-if="cloud.busy" class="cloud-status muted" role="status">{{ cloud.busy }}</p>

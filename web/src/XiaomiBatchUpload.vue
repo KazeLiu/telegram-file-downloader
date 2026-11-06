@@ -1,0 +1,181 @@
+<script setup lang="ts">
+import { computed, onUnmounted, reactive, ref } from 'vue'
+import { api, bytes } from './api'
+import Icon from './Icon.vue'
+
+type LocalFile = { name: string; kind: 'image' | 'video'; size: number; version: string }
+type ItemState = 'waiting' | 'uploaded' | 'verified' | 'failed' | 'recycled' | 'kept'
+type Job = { id: string; album: string; state: 'uploading' | 'verifying' | 'complete'; current: string; error: string;
+  total: number; done: number; eligible: number; revision: number; page_size: number; counts: Partial<Record<ItemState, number>>;
+  items: { name: string; status: ItemState; error: string }[] }
+
+const props = defineProps<{ connection: string; album: string; albums: { id: string; name: string }[]; disabled: boolean }>()
+const emit = defineEmits<{ message: [text: string]; finished: [album: string] }>()
+const dialog = ref<HTMLDialogElement>()
+const model = reactive({ files: [] as LocalFile[], selected: new Set<string>(), job: null as Job | null,
+  selecting: false, confirming: false, page: 1, busy: false, error: '', note: '' })
+const running = computed(() => !!model.job && model.job.state !== 'complete')
+const albumName = computed(() => {
+  const id = model.selecting ? props.album : model.job?.album
+  return props.albums.find(album => album.id === id)?.name || id || ''
+})
+const pageSize = computed(() => model.selecting ? 60 : model.job?.page_size || 60)
+const pages = computed(() => Math.max(1, Math.ceil((model.selecting ? model.files.length : model.job?.total || 0) / pageSize.value)))
+const filesOnPage = computed(() => model.files.slice((model.page - 1) * pageSize.value, model.page * pageSize.value))
+const allSelected = computed(() => model.files.length > 0 && model.selected.size === model.files.length)
+const labels: Record<ItemState, string> = { waiting: '未上传', uploaded: '尚未确认', verified: '云端已确认', failed: '上传未完成', recycled: '已回收本地图片', kept: '本地未回收' }
+let timer: ReturnType<typeof setTimeout>
+let disposed = false
+
+async function run(action: () => Promise<void>) {
+  if (model.busy) return
+  model.busy = true; model.error = ''; model.note = ''
+  try { await action() }
+  catch (error) { model.error = (error as Error).message; model.note = '' }
+  finally { model.busy = false }
+}
+
+async function loadFiles() {
+  model.selecting = true; model.confirming = false; model.page = 1
+  model.files = []; model.selected.clear()
+  model.files = (await api<{ items: LocalFile[] }>(`/xiaomi/local-media?connection=${props.connection}`)).items
+}
+
+async function loadJob() {
+  clearTimeout(timer)
+  const wasRunning = running.value
+  model.job = (await api<{ job: Job | null }>(`/xiaomi/batch?connection=${props.connection}&page=${model.page}`)).job
+  if (wasRunning && model.job?.state === 'complete') emit('finished', model.job.album)
+  if (!disposed && dialog.value?.open && running.value) timer = setTimeout(() => void run(loadJob), 1500)
+}
+
+async function loadDialog() {
+  model.selecting = false; model.confirming = false; model.page = 1
+  await loadJob()
+  if (!model.job) await loadFiles()
+}
+
+function open() {
+  dialog.value?.showModal()
+  void run(loadDialog)
+}
+
+function stopPolling() { clearTimeout(timer) }
+
+function selectAll() {
+  if (allSelected.value) model.selected.clear()
+  else model.selected = new Set(model.files.map(file => file.name))
+}
+
+function select(name: string, event: Event) {
+  if ((event.target as HTMLInputElement).checked) model.selected.add(name)
+  else model.selected.delete(name)
+}
+
+function start() {
+  return run(async () => {
+    const items = model.files.filter(item => model.selected.has(item.name)).map(({ name, version }) => ({ name, version }))
+    await api('/xiaomi/batch', { connection: props.connection, album: props.album, items })
+    model.selecting = false; model.job = null; model.page = 1
+    await loadJob()
+  })
+}
+
+function page(delta: number) {
+  if (model.selecting) { model.page += delta; return }
+  return run(async () => {
+    const previous = model.page
+    model.page += delta
+    try { await loadJob() } catch (error) { model.page = previous; throw error }
+  })
+}
+
+function verify() {
+  return run(async () => {
+    await api('/xiaomi/batch/verify', { connection: props.connection, job: model.job!.id })
+    await loadJob()
+  })
+}
+
+function recycle() {
+  model.confirming = false
+  return run(async () => {
+    model.note = '正在重新核对云端并回收本地图片…'
+    const { moved } = await api<{ moved: number }>('/xiaomi/batch/recycle', {
+      connection: props.connection, job: model.job!.id, revision: model.job!.revision,
+    })
+    await loadJob()
+    if (moved) emit('message', `已将 ${moved} 张图片移入本地回收站`)
+    model.note = moved ? `已回收 ${moved} 张本地图片。` : '本次没有移动图片，请查看下方逐项结果。'
+  })
+}
+
+onUnmounted(() => { disposed = true; clearTimeout(timer) })
+</script>
+
+<template>
+  <button class="primary" :disabled="disabled || model.busy" @click="open">上传下载目录文件</button>
+  <dialog ref="dialog" class="task-dialog batch-dialog" @close="stopPolling">
+    <div class="section-heading"><h2>批量上传{{ albumName ? `到「${albumName}」` : '' }}</h2><button class="icon-button" aria-label="关闭批量上传" :disabled="model.busy" @click="dialog?.close()"><Icon name="close" /></button></div>
+    <p v-if="model.error" class="notice error" role="alert">{{ model.error }}<button class="text-button" :disabled="model.busy" @click="run(loadDialog)">刷新</button></p>
+
+    <template v-if="model.selecting">
+      <p class="muted">只显示下载根目录中符合上传大小限制的图片和视频。已回收的文件不会出现。</p>
+      <div class="section-heading batch-tools"><button class="secondary" :disabled="model.busy || !model.files.length" @click="selectAll">{{ allSelected ? '取消全选' : '全选全部页面' }}</button><span class="muted">已选 {{ model.selected.size }} / {{ model.files.length }} 个文件</span></div>
+      <ul v-if="filesOnPage.length" class="batch-list">
+        <li v-for="item in filesOnPage" :key="item.name"><label><input type="checkbox" :checked="model.selected.has(item.name)" :disabled="model.busy" @change="select(item.name, $event)" /><Icon :name="item.kind === 'video' ? 'video' : 'photo'" :size="17" /><span>{{ item.name }}</span><small class="muted">{{ bytes(item.size) }}</small></label></li>
+      </ul>
+      <p v-else-if="!model.error" class="empty-list">{{ model.busy ? '正在读取下载目录…' : '没有可上传的图片或视频' }}</p>
+      <p v-if="album === '1000'" class="muted">隐私相册请在小米云网页版上传。</p>
+      <p v-if="model.job?.eligible" class="muted">开始新批次会替换上批结果，未回收的图片会留在原处。</p>
+    </template>
+
+    <template v-else-if="model.job">
+      <p v-if="model.job.error" class="notice" role="status">{{ model.job.error }}</p>
+      <template v-if="running">
+        <p class="batch-progress" role="status">{{ model.job.state === 'verifying' ? '正在核对目标相册中的文件…' : `已处理 ${model.job.done} / ${model.job.total} · ${model.job.current || '正在准备'}` }}</p>
+        <progress :value="model.job.done" :max="model.job.total" aria-label="批量上传处理进度" />
+        <p class="muted batch-tools">关闭窗口后上传仍会继续。再次打开可查看进度。</p>
+      </template>
+      <template v-else>
+        <p class="batch-progress" role="status">云端已确认 {{ (model.job.counts.verified || 0) + (model.job.counts.recycled || 0) + (model.job.counts.kept || 0) }} / {{ model.job.total }} 个文件。{{ model.job.eligible }} 张图片可回收，视频保留在本地。</p>
+        <p v-if="model.note" class="notice" role="status">{{ model.note }}</p>
+        <ul class="batch-list">
+          <li v-for="item in model.job.items" :key="item.name" class="batch-result"><span>{{ item.name }}</span><span class="badge" :class="{ completed: item.status === 'verified' || item.status === 'recycled', failed: item.status === 'failed' || item.error }">{{ labels[item.status] }}</span><small v-if="item.error" class="danger-text">{{ item.error }}</small></li>
+        </ul>
+      </template>
+    </template>
+    <p v-else-if="model.busy" class="empty-list" role="status">正在读取批次…</p>
+
+    <div v-if="!running && pages > 1" class="pagination">
+      <span>第 {{ model.page }} / {{ pages }} 页</span><button class="secondary" :disabled="model.busy || model.page === 1" @click="page(-1)">上一页</button><button class="secondary" :disabled="model.busy || model.page >= pages" @click="page(1)">下一页</button>
+    </div>
+    <div v-if="model.selecting" class="dialog-actions">
+      <button v-if="model.job" class="secondary" :disabled="model.busy" @click="run(async () => { model.selecting = false; model.page = 1; await loadJob() })">返回上批结果</button>
+      <button class="primary" :disabled="model.busy || !model.selected.size || !album || album === '1000'" @click="start">上传所选 {{ model.selected.size }} 个文件</button>
+    </div>
+    <template v-else-if="model.job && !running">
+      <p v-if="model.confirming" class="notice" role="status">将重新核对目标相册。仍在云端、且本地未变化的图片才会移入「图片管理 → 回收站」。</p>
+      <div class="dialog-actions" v-if="model.confirming"><button class="secondary" @click="model.confirming = false">取消</button><button class="danger" @click="recycle">确认回收本地图片</button></div>
+      <div class="dialog-actions" v-else>
+        <button class="secondary" :disabled="model.busy" @click="run(loadFiles)">选择下一批</button>
+        <button v-if="model.job.counts.uploaded" class="secondary" :disabled="model.busy" @click="verify">重新核对云端</button>
+        <button v-if="model.job.eligible" class="primary" :disabled="model.busy" @click="model.confirming = true">回收已确认的 {{ model.job.eligible }} 张图片</button>
+      </div>
+    </template>
+  </dialog>
+</template>
+
+<style scoped lang="scss">
+.batch-dialog { width: min(740px, calc(100% - 32px)); }
+.batch-dialog > .section-heading { margin-bottom: 14px; }
+.batch-dialog h2, .batch-progress { overflow-wrap: anywhere; }
+.batch-tools, .batch-progress { margin: 14px 0; }
+.batch-list { max-height: min(42vh, 460px); overflow: auto; list-style: none; margin: 0; padding: 0; }
+.batch-list li { border-top: 1px solid var(--soft); padding: 10px 4px; }
+.batch-list label, .batch-result { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 30px; }
+.batch-result { grid-template-columns: minmax(0, 1fr) auto; }
+.batch-result small { grid-column: 1 / -1; }
+.batch-list span, .batch-result small { overflow-wrap: anywhere; }
+.batch-dialog .notice { margin: 12px 0; }
+</style>

@@ -26,6 +26,7 @@ STORAGE_HOSTS = ("i.mi.com", "mi-fds.com", "fds.api.xiaomi.com", "mi-img.com", "
 ID_PATTERN = r"^[0-9]{1,32}$"
 CONNECTION_PATTERN = r"^[a-f0-9]{32}$"
 BLOCK_SIZE = 4 * 1024 * 1024
+UPLOAD_LIMIT = {"image": 100 * 1024**2, "video": 4 * 1024**3}
 ALBUM_NAMES = {"1": "相机", "2": "屏幕截图", "1000": "隐私相册"}
 
 
@@ -84,7 +85,7 @@ def upload_media(name):
     if not name.strip() or name != name.strip() or re.search(r"[\\/\x00-\x1f\x7f]", name):
         raise XiaomiError("请输入有效的云端文件名", 400)
     suffix = PurePath(name).suffix.lower()
-    mime = {".heic": "image/heic", ".heif": "image/heif", ".avci": "image/avci"}.get(suffix)
+    mime = {".jfif": "image/jpeg", ".heic": "image/heic", ".heif": "image/heif", ".avci": "image/avci"}.get(suffix)
     mime = mime or mimetypes.guess_type("file" + suffix)[0] or ""
     kind = mime.split("/", 1)[0]
     if kind not in {"image", "video"}:
@@ -147,7 +148,7 @@ class XiaomiCloud:
         except httpx.TimeoutException:
             raise XiaomiError("连接小米超时，请刷新确认结果后再试", 504) from None
         except (httpx.RequestError, httpx.InvalidURL):
-            raise XiaomiError("无法连接小米，请检查运行工作台的设备能否访问小米云") from None
+            raise XiaomiError("无法连接小米，请检查运行工作台的设备能否访问小米云", 503) from None
         finally:
             self.http.cookies.clear()
 
@@ -330,12 +331,15 @@ class XiaomiCloud:
                 raise XiaomiError("小米云相册未返回完整列表")
             page += 1
 
-    async def media(self, connection, album_id, page):
+    async def media_page(self, connection, album_id, page, size):
         account, service = await self.auth(connection)
         data = await self.gallery(account, service, "/gallery/user/galleries", query={
-            "albumId": album_id, "pageNum": page, "pageSize": 30, "isShared": "false",
+            "albumId": album_id, "pageNum": page, "pageSize": size, "isShared": "false",
         })
-        entries, last = page_data(data, "galleries")
+        return page_data(data, "galleries")
+
+    async def media(self, connection, album_id, page):
+        entries, last = await self.media_page(connection, album_id, page, 30)
         items = [{"id": remote_id(item.get("id")), "name": item.get("fileName") or "未命名",
                   "kind": item["type"], "size": item.get("size"), "taken_at": item.get("dateTaken")}
                  for item in entries if item.get("type") in {"image", "video"}]
@@ -351,7 +355,7 @@ class XiaomiCloud:
 
     async def upload(self, connection, album, name, kind, mime, size, file):
         account, service = await self.auth(connection)
-        digest, blocks = await asyncio.to_thread(upload_blocks, file)
+        digest, blocks = await asyncio.to_thread(upload_blocks, file, size)
         content = {"type": kind, "groupId": album, "mimeType": mime, "fileName": name,
                    "title": PurePath(name).stem, "sha1": digest, "size": size, "dateModified": milliseconds()}
         data = await self.gallery(account, service, "/gallery/user/full", form={
@@ -362,7 +366,7 @@ class XiaomiCloud:
             raise XiaomiError("小米未返回上传记录，请先在相册中确认结果")
         media_id = remote_id(data["content"].get("id"))
         if data.get("fileExists") is True:
-            return {"id": media_id, "exists": True}
+            return {"id": media_id, "exists": True, "sha1": digest}
         kss = data.get("kss")
         if (not isinstance(kss, dict) or not isinstance(kss.get("node_urls"), list) or not kss["node_urls"]
                 or not isinstance(kss.get("block_metas"), list) or len(kss["block_metas"]) != len(blocks)
@@ -398,17 +402,23 @@ class XiaomiCloud:
         await self.gallery(account, service, f"/gallery/user/full/{media_id}/storage", form={
             "data": json.dumps({"kss": {"file_meta": file_meta, "commit_metas": commits}}),
         })
-        return {"id": media_id, "exists": False}
+        return {"id": media_id, "exists": False, "sha1": digest}
 
 
-def upload_blocks(file):
+def upload_blocks(file, size):
     # Xiaomi's upload protocol requires a file SHA-1 and SHA-1/MD5 per 4 MiB block.
     digest = hashlib.sha1(usedforsecurity=False)
     blocks = []
     file.seek(0)
-    while block := file.read(BLOCK_SIZE):
+    remaining = size
+    while remaining:
+        length = min(BLOCK_SIZE, remaining)
+        block = file.read(length)
+        if len(block) != length:
+            raise XiaomiError("文件读取不完整，请重新选择原文件", 400)
         digest.update(block)
-        blocks.append({"size": len(block), "sha1": hashlib.sha1(block, usedforsecurity=False).hexdigest(),
+        blocks.append({"size": length, "sha1": hashlib.sha1(block, usedforsecurity=False).hexdigest(),
                        "md5": hashlib.md5(block, usedforsecurity=False).hexdigest()})
+        remaining -= length
     file.seek(0)
     return digest.hexdigest(), blocks

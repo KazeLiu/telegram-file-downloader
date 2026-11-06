@@ -27,7 +27,8 @@ from .diagnostics import configure_logs, read_log
 from .organizer import browse, plan_counts
 from .image_library import ImageLibrary
 from .storage import RecycleBin, inside
-from .xiaomi_cloud import CONNECTION_PATTERN, ID_PATTERN, XiaomiCloud, XiaomiError, upload_media
+from .xiaomi_batch import XiaomiBatch, local_media
+from .xiaomi_cloud import CONNECTION_PATTERN, ID_PATTERN, UPLOAD_LIMIT, XiaomiCloud, XiaomiError, upload_media
 
 
 class Credentials(BaseModel):
@@ -123,6 +124,24 @@ class XiaomiRecycle(XiaomiConnection):
     id: str = Field(pattern=ID_PATTERN)
 
 
+class LocalMediaSelection(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    version: str = Field(min_length=1, max_length=128)
+
+
+class XiaomiBatchSelection(XiaomiConnection):
+    album: str = Field(pattern=ID_PATTERN)
+    items: list[LocalMediaSelection] = Field(min_length=1)
+
+
+class XiaomiBatchAction(XiaomiConnection):
+    job: str = Field(pattern=CONNECTION_PATTERN)
+
+
+class XiaomiBatchRecycle(XiaomiBatchAction):
+    revision: int = Field(ge=0)
+
+
 def create_app():
     data_dir = Path(os.environ.get("DATA_DIR", str(Path.cwd() / "data"))).resolve()
     download_dir = Path(os.environ.get("DOWNLOAD_DIR", str(Path.cwd() / "downloads"))).resolve()
@@ -131,6 +150,7 @@ def create_app():
     runtime = WebRuntime(store, data_dir, download_dir)
     library = ImageLibrary(download_dir, data_dir)
     xiaomi = XiaomiCloud(store)
+    batch = XiaomiBatch(xiaomi, download_dir)
     failures: dict[str, list[float]] = {}
 
     @asynccontextmanager
@@ -139,6 +159,7 @@ def create_app():
         try:
             yield
         finally:
+            await batch.close()
             await xiaomi.close()
             await library.close()
             await runtime.close()
@@ -370,6 +391,46 @@ def create_app():
         await xiaomi.recycle(body.connection, body.id)
         return {"ok": True}
 
+    @app.get("/api/xiaomi/local-media")
+    async def xiaomi_local_media(connection: str = Query(pattern=CONNECTION_PATTERN)):
+        batch.account(connection)
+        return {"items": await asyncio.to_thread(local_media, download_dir)}
+
+    @app.get("/api/xiaomi/batch")
+    async def xiaomi_batch(connection: str = Query(pattern=CONNECTION_PATTERN), page: int = Query(default=1, ge=1)):
+        return {"job": batch.view(connection, page)}
+
+    @app.post("/api/xiaomi/batch")
+    async def xiaomi_batch_start(body: XiaomiBatchSelection):
+        await batch.start(body.connection, body.album, [item.model_dump() for item in body.items])
+        return {"ok": True}
+
+    @app.post("/api/xiaomi/batch/verify")
+    async def xiaomi_batch_verify(body: XiaomiBatchAction):
+        job = batch.completed(body.connection, body.job)
+        async with xiaomi.write_lock:
+            await batch.verify(job)
+        return {"ok": True}
+
+    @app.post("/api/xiaomi/batch/recycle")
+    async def xiaomi_batch_recycle(body: XiaomiBatchRecycle):
+        job = batch.completed(body.connection, body.job)
+        if job["revision"] != body.revision:
+            raise XiaomiError("待回收清单已变化，请刷新后重新确认", 409)
+        candidates = [item for item in job["items"] if item["status"] == "verified" and item["kind"] == "image"]
+        if not candidates:
+            return {"moved": 0}
+        ensure_library_idle()
+        async with xiaomi.write_lock:
+            await batch.verify(job, candidates)
+            ensure_library_idle()
+            async with runtime.operation_lock:
+                moved = await batch.recycle_images(candidates)
+                job["revision"] += 1
+        if moved:
+            library.start_scan()
+        return {"moved": moved}
+
     @app.post("/api/xiaomi/upload")
     async def xiaomi_upload(request: Request, connection: str = Query(pattern=CONNECTION_PATTERN),
                             album: str = Query(pattern=ID_PATTERN), name: str = Query(min_length=1, max_length=255),
@@ -379,8 +440,7 @@ def create_app():
             raise XiaomiError("请在小米云网页版向隐私相册上传", 400)
         if xiaomi.write_lock.locked():
             raise XiaomiError("请等待当前云端操作结束", 409)
-        limit = 100 * 1024**2 if kind == "image" else 4 * 1024**3
-        if size >= limit:
+        if size >= UPLOAD_LIMIT[kind]:
             raise XiaomiError("图片需小于 100 MiB，视频需小于 4 GiB", 413)
         length = request.headers.get("content-length", "")
         if length.isdecimal() and int(length) != size:
@@ -403,7 +463,8 @@ def create_app():
                         await asyncio.to_thread(file.write, chunk)
                     if received != size:
                         raise XiaomiError("文件未传完整，请重新选择文件", 400)
-                    return await xiaomi.upload(connection, album, name, kind, mime, size, file)
+                    result = await xiaomi.upload(connection, album, name, kind, mime, size, file)
+                    return {"id": result["id"], "exists": result["exists"]}
             except OSError as exc:
                 if exc.errno != errno.ENOSPC:
                     raise
