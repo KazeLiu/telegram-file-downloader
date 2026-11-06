@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watchEffect } from 'vue'
-import { api, bytes } from './api'
+import { api, bytes, imageThumbnail as thumbnail, type LibraryPicture as Picture } from './api'
+import ImageReviewDialog from './ImageReviewDialog.vue'
 import Icon from './Icon.vue'
 
-interface Picture { id: number; name: string; size: number; width: number | null; height: number | null; version: string; monochrome: boolean | null; error: string }
 interface Recycled { id: string; original: string; size: number; created: number; reason: string }
 type View = 'all' | 'candidates' | 'recycle'
 const imageModel = reactive({ view: 'all' as View, organizing: false, items: [] as Picture[], trash: [] as Recycled[], page: 1,
@@ -14,6 +14,7 @@ const imageModel = reactive({ view: 'all' as View, organizing: false, items: [] 
 const emit = defineEmits<{ message: [value: string] }>()
 const confirmDialog = ref<HTMLDialogElement>()
 const pictureDialog = ref<HTMLDialogElement>()
+const reviewDialog = ref<InstanceType<typeof ImageReviewDialog>>()
 const moreButton = ref<HTMLButtonElement>()
 const selectedCount = computed(() => imageModel.selected.size)
 const blocked = computed(() => imageModel.loading || imageModel.busy)
@@ -25,9 +26,14 @@ let observer: IntersectionObserver | undefined
 let loadRevision = 0
 let polling = false
 
-function thumbnail(item: Picture) { return `/api/images/${item.id}/thumbnail?version=${encodeURIComponent(item.version)}` }
 function isSelected(item: Picture) { return imageModel.selected.get(item.id)?.version === item.version }
 function clearSelection() { imageModel.selected.clear() }
+function listImages(after?: number | null) {
+  const query = new URLSearchParams({ candidate: String(imageModel.view === 'candidates'), search: imageModel.appliedSearch })
+  if (after != null) query.set('after', String(after))
+  return api<{ items: Picture[]; total: number; next_cursor: number | null;
+    scan: typeof imageModel.scan; counts: typeof imageModel.counts }>(`/images?${query}`)
+}
 async function load({ poll = false, append = false } = {}) {
   if (imageModel.loading || imageModel.loadingMore || (poll && polling) || (append && (!canLoadMore.value || blocked.value))) return
   const revision = ++loadRevision
@@ -41,10 +47,7 @@ async function load({ poll = false, append = false } = {}) {
       if (revision !== loadRevision) return
       imageModel.trash = result.items; imageModel.total = result.total; imageModel.pageSize = result.page_size
     } else {
-      const query = new URLSearchParams({ candidate: String(imageModel.view === 'candidates'), search: imageModel.appliedSearch })
-      if (append && imageModel.nextCursor !== null) query.set('after', String(imageModel.nextCursor))
-      const result = await api<{ items: Picture[]; total: number; next_cursor: number | null;
-        scan: typeof imageModel.scan; counts: typeof imageModel.counts }>(`/images?${query}`)
+      const result = await listImages(append ? imageModel.nextCursor : null)
       if (revision !== loadRevision) return
       imageModel.scan = result.scan; imageModel.counts = result.counts
       if (append) {
@@ -99,6 +102,15 @@ function select(item: Picture, checked: boolean) {
   else imageModel.selected.delete(item.id)
 }
 async function preview(item: Picture) { imageModel.picture = item; await nextTick(); pictureDialog.value?.showModal() }
+function review(item: Picture) {
+  reviewDialog.value?.open(imageModel.items, item, imageModel.nextCursor, imageModel.total)
+}
+function finishReview(items: Picture[], submit: boolean) {
+  if (!items.length) return
+  imageModel.organizing = true
+  for (const item of items) select(item, true)
+  if (submit) void confirm(items)
+}
 async function confirm(items?: Picture[]) {
   if (!imageModel.organizing || blocked.value) return
   imageModel.confirmation = items || [...imageModel.selected.values()]
@@ -197,7 +209,7 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect() })
               <input type="checkbox" :checked="isSelected(item)" :aria-label="'选择 ' + item.name" :disabled="blocked" @change="select(item, ($event.target as HTMLInputElement).checked)" />
               <span class="image-check" aria-hidden="true"><Icon v-if="isSelected(item)" name="check" :size="12" /></span>
             </template>
-            <button v-else :aria-label="'查看 ' + item.name" @click="preview(item)"></button>
+            <button v-else :aria-label="'快速审阅 ' + item.name" :disabled="blocked" @click="review(item)"></button>
           </div>
           <button v-if="imageModel.organizing" class="image-details" :aria-label="'查看 ' + item.name + ' 的详情'" :disabled="blocked" @click="preview(item)">详情</button>
         </article>
@@ -215,6 +227,7 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect() })
       <div class="recycle-list"><article v-for="item in imageModel.trash" :key="item.id"><span class="file-icon"><Icon :name="['image', 'xiaomi_upload'].includes(item.reason) ? 'photo' : 'file'" /></span><div><strong>{{ item.original }}</strong><p>{{ bytes(item.size) }} · {{ new Date(item.created * 1000).toLocaleString('zh-CN') }} · {{ item.reason === 'xiaomi_upload' ? '小米云上传后回收' : item.reason === 'image' ? '图片管理' : '整理清理' }}</p></div><button class="secondary" :disabled="blocked" @click="restore(item)"><Icon name="restore" :size="16" />还原</button></article></div><div v-if="!imageModel.trash.length" class="empty-list tall"><Icon name="trash" :size="38" /><h2>回收站是空的</h2><p>移入回收站的文件会出现在这里。</p></div>
     </template>
     <div v-if="imageModel.view === 'recycle'" class="pagination"><span>第 {{ imageModel.page }} / {{ Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize)) }} 页</span><button class="secondary" :disabled="blocked || imageModel.page === 1" @click="page(-1)">上一页</button><button class="secondary" :disabled="blocked || imageModel.page * imageModel.pageSize >= imageModel.total" @click="page(1)">下一页</button></div>
+    <ImageReviewDialog ref="reviewDialog" :load-page="listImages" @finish="finishReview" />
     <dialog ref="pictureDialog" class="task-dialog image-dialog">
       <template v-if="imageModel.picture">
         <div class="section-heading"><h2>图片详情</h2><button class="icon-button" aria-label="关闭图片详情" @click="pictureDialog?.close()"><Icon name="close" /></button></div>

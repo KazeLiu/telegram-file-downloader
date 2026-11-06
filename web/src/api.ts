@@ -37,6 +37,13 @@ export interface Status {
   active_tasks: Task[]; queue_paused: boolean
   server_download_limits: { small?: number; large?: number }
 }
+export interface LibraryPicture {
+  id: number; name: string; size: number; width: number | null; height: number | null
+  version: string; monochrome: boolean | null; error: string
+}
+export function imageThumbnail(item: LibraryPicture) {
+  return `/api/images/${item.id}/thumbnail?version=${encodeURIComponent(item.version)}`
+}
 export const taskLabels: Record<string, string> = {
   queued: '等待下载', downloading: '下载中', downloaded: '下载完成', extracting: '解压中', completed: '已下载',
   extracted: '已解压', failed: '下载失败', extraction_failed: '待处理', interrupted: '等待恢复', waiting: '限流等待',
