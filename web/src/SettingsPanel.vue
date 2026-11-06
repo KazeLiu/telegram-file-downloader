@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, watch } from 'vue'
+import { useRoute, useRouter } from '#imports'
 import { api, type Settings, type Status } from './api'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ settings: Settings; status: Status }>()
 const emit = defineEmits<{ refresh: []; message: [value: string] }>()
-const settingsModel = reactive({ section: 'telegram', busy: '', error: '', dirty: false,
+const route = useRoute()
+const router = useRouter()
+const settingsModel = reactive({ get section() { const id = route.path.split('/')[2]; return sections.some(item => item.id === id) ? id : 'telegram' }, busy: '', error: '', dirty: false,
   form: {} as Record<string, any>, api_hash: '', proxy_password: '', archive_passwords: '', replace_passwords: false,
   dialogs: [] as { id: string; title: string }[], chat: '', phone: '', code: '', password: '',
   current_password: '', new_password: '', confirm_logout: false,
@@ -55,7 +58,7 @@ onBeforeUnmount(clearSecrets)
 </script>
 <template>
   <div class="settings-layout">
-    <nav class="section-nav" aria-label="设置分类"><button v-for="section in sections" :key="section.id" :class="{ selected: settingsModel.section === section.id }" @click="settingsModel.section = section.id">{{ section.title }}</button></nav>
+    <nav class="section-nav" aria-label="设置分类"><button v-for="section in sections" :key="section.id" :class="{ selected: settingsModel.section === section.id }" @click="router.push('/settings/' + section.id)">{{ section.title }}</button></nav>
     <div class="settings-content">
       <p v-if="settingsModel.error" class="notice error" role="alert">{{ settingsModel.error }}</p>
       <form @submit.prevent="save" @input="settingsModel.dirty = true" @change="settingsModel.dirty = true">

@@ -7,6 +7,7 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineNuxtConfig({
   compatibilityDate: '2026-11-06',
   ssr: false,
+  router: { options: { hashMode: true } },
   spaLoadingTemplate: false,
   features: { inlineStyles: false },
   experimental: { entryImportMap: false },

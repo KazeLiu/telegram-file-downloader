@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from '#imports'
+import { queryText, queryPage } from './routeState'
 import { api, bytes } from './api'
 import Icon from './Icon.vue'
 interface Entry { name: string; path: string; directory: boolean; size: number | null; modified: number }
+const route = useRoute()
+const router = useRouter()
 const filesModel = reactive({ path: '', root: '', items: [] as Entry[], total: 0, page: 1, search: '', appliedSearch: '', loading: false, previewing: false, organizing: false, polling: false, error: '', delete_psd: false,
   preview: null as null | { token: string; total: number; items: { source: string; target: string }[]; delete_total: number; delete_items: string[] },
   job: { status: '', total: 0, done: 0, error: '', moved_files: 0, cleanup_total: 0, cleanup_done: 0 } })
@@ -12,16 +16,28 @@ const crumbs = computed(() => filesModel.path.split('/').filter(p => p && p !== 
 const unfinishedJob = computed(() => ['running', 'interrupted', 'failed'].includes(filesModel.job.status))
 const busy = computed(() => filesModel.loading || filesModel.previewing || filesModel.organizing)
 let timer: ReturnType<typeof setInterval>
+let loadRevision = 0
 async function load(path = filesModel.path, page = filesModel.page) {
+  const revision = ++loadRevision
   filesModel.loading = true; filesModel.error = ''
   try {
     const result = await api(`/files?path=${encodeURIComponent(path)}&page=${page}&search=${encodeURIComponent(filesModel.appliedSearch)}`)
-    Object.assign(filesModel, result)
-  } catch (error) { filesModel.error = (error as Error).message }
-  finally { filesModel.loading = false }
+    if (revision === loadRevision) Object.assign(filesModel, result)
+  } catch (error) { if (revision === loadRevision) filesModel.error = (error as Error).message }
+  finally { if (revision === loadRevision) filesModel.loading = false }
 }
-async function open(path: string) { if (busy.value) return; filesModel.search = filesModel.appliedSearch = ''; filesModel.delete_psd = false; filesModel.preview = null; await load(path, 1) }
-async function search() { if (busy.value) return; filesModel.appliedSearch = filesModel.search; await load(filesModel.path, 1) }
+function browse(path = filesModel.path, page = 1, search = filesModel.appliedSearch) {
+  return router.push({ path: '/files', query: { path: path && path !== '.' ? path : undefined, page: page > 1 ? String(page) : undefined, search: search || undefined } })
+}
+async function open(path: string) { if (busy.value) return; filesModel.delete_psd = false; filesModel.preview = null; await browse(path, 1, '') }
+async function search() { if (!busy.value) await browse(filesModel.path, 1, filesModel.search) }
+function readRoute() {
+  filesModel.search = filesModel.appliedSearch = queryText(route.query.search)
+  filesModel.preview = null; filesModel.delete_psd = false
+  previewDialog.value?.close()
+  return load(queryText(route.query.path), queryPage(route.query.page))
+}
+watch(() => route.fullPath, () => { if (route.path === '/files') void readRoute() })
 async function preview() {
   if (busy.value) return
   filesModel.previewing = true; filesModel.error = ''
@@ -41,11 +57,11 @@ async function poll() {
   try {
     const previous = filesModel.job.status
     filesModel.job = await api('/files/job')
-    if (previous === 'running' && filesModel.job.status === 'completed') { await load('', 1); emit('message', `整理完成，移动 ${filesModel.job.moved_files} 个文件，清理 ${filesModel.job.cleanup_done} 个 PSD/TXT 文件`) }
+    if (previous === 'running' && filesModel.job.status === 'completed') { await browse('', 1, ''); await load('', 1); emit('message', `整理完成，移动 ${filesModel.job.moved_files} 个文件，清理 ${filesModel.job.cleanup_done} 个 PSD/TXT 文件`) }
   } catch (error) { filesModel.error = (error as Error).message }
   finally { filesModel.polling = false }
 }
-onMounted(() => { void load(); void poll(); timer = setInterval(() => { if (!document.hidden) void poll() }, 2000) })
+onMounted(() => { void readRoute(); void poll(); timer = setInterval(() => { if (!document.hidden) void poll() }, 2000) })
 onUnmounted(() => clearInterval(timer))
 </script>
 <template>
@@ -56,7 +72,7 @@ onUnmounted(() => clearInterval(timer))
     <label class="organize-option"><input v-model="filesModel.delete_psd" type="checkbox" :disabled="busy || unfinishedJob" @change="filesModel.preview = null" />同时回收此目录及子目录中的 PSD 和 TXT</label>
     <div class="files-toolbar"><nav class="breadcrumbs" aria-label="目录导航"><button :disabled="busy" @click="open('')"><Icon name="folder" :size="16" />根目录</button><template v-for="crumb in crumbs" :key="crumb.path"><span>/</span><button :disabled="busy" @click="open(crumb.path)">{{ crumb.name }}</button></template></nav><form class="search-box" @submit.prevent="search"><input v-model="filesModel.search" :disabled="busy" placeholder="搜索当前目录" aria-label="搜索文件" /><button class="text-button" :disabled="busy">搜索</button></form></div>
     <div class="files-list" :aria-busy="filesModel.loading"><div class="files-list-head"><span>名称</span><span>大小</span><span>修改时间</span></div><div v-for="entry in filesModel.items" :key="entry.path" class="files-row"><button :disabled="!entry.directory || busy" @click="open(entry.path)"><Icon :name="entry.directory ? 'folder' : 'file'" /><span>{{ entry.name }}</span><Icon v-if="entry.directory" name="chevron" :size="15" /></button><span>{{ entry.directory ? '文件夹' : bytes(entry.size || 0) }}</span><span>{{ new Date(entry.modified * 1000).toLocaleString('zh-CN') }}</span></div><div v-if="!filesModel.items.length" class="empty-list"><Icon name="folder" :size="32" /><p>{{ filesModel.loading ? '正在读取文件…' : '这个目录暂时没有文件' }}</p></div></div>
-    <div class="pagination"><span>{{ filesModel.total }} 项</span><button class="secondary" :disabled="filesModel.page === 1 || busy" @click="load(filesModel.path, filesModel.page - 1)">上一页</button><button class="secondary" :disabled="filesModel.page * 100 >= filesModel.total || busy" @click="load(filesModel.path, filesModel.page + 1)">下一页</button></div>
+    <div class="pagination"><span>{{ filesModel.total }} 项</span><button class="secondary" :disabled="filesModel.page === 1 || busy" @click="browse(filesModel.path, filesModel.page - 1)">上一页</button><button class="secondary" :disabled="filesModel.page * 100 >= filesModel.total || busy" @click="browse(filesModel.path, filesModel.page + 1)">下一页</button></div>
     <dialog ref="previewDialog" class="task-dialog organize-dialog">
       <div class="section-heading"><h2>确认文件整理</h2><button class="icon-button" aria-label="关闭预览" @click="previewDialog?.close()"><Icon name="close" /></button></div>
       <template v-if="filesModel.preview">

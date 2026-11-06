@@ -408,7 +408,8 @@ class XiaomiCloud:
     def public_media(self, item, connection=None):
         media_id = remote_id(item.get("id"))
         result = {"id": media_id, "name": item.get("fileName") or "未命名", "kind": item["type"],
-                  "size": item.get("size"), "taken_at": item.get("dateTaken")}
+                  "size": item.get("size"), "taken_at": item.get("dateTaken"),
+                  "sort_time": item.get("sortTime") or item.get("dateTaken") or item.get("dateModified") or item.get("createTime")}
         info = item.get("thumbnailInfo")
         # Thumbnail encryption is independent of the original file's encryption.
         if (connection and isinstance(info, dict) and not info.get("encryptInfo")

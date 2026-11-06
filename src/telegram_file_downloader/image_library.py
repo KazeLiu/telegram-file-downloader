@@ -7,6 +7,7 @@ import os
 import sqlite3
 import time
 import warnings
+from datetime import datetime
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps, UnidentifiedImageError
@@ -15,8 +16,37 @@ from .storage import inside, is_link
 
 LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif"}
-IMAGE_FIELDS = "id,name,size,mtime_ns,width,height,monochrome,error"
+IMAGE_FIELDS = "id,name,size,mtime_ns,width,height,monochrome,error,created_ms,sort_time,time_source"
 PAGE_SIZE = 60
+
+
+def image_time(image, record):
+    exif = image.getexif()
+    details = exif.get_ifd(34665)
+    for tag, offset_tag, fraction_tag, source in (
+        (36867, 36881, 37521, "taken"),
+        (36868, 36882, 37522, "digitized"),
+        (306, 36880, 37520, "image"),
+    ):
+        value = details.get(tag) or exif.get(tag)
+        if not isinstance(value, (str, bytes)) or not value:
+            continue
+        try:
+            value = value.decode("ascii").strip("\x00 ") if isinstance(value, bytes) else value.strip("\x00 ")
+            offset = details.get(offset_tag) or exif.get(offset_tag) or ""
+            if isinstance(offset, bytes):
+                offset = offset.decode("ascii").strip("\x00 ")
+            stamp = datetime.strptime(value + (offset or ""), "%Y:%m:%d %H:%M:%S" + ("%z" if offset else ""))
+            fraction = details.get(fraction_tag) or exif.get(fraction_tag)
+            if isinstance(fraction, bytes):
+                fraction = fraction.decode("ascii").strip("\x00 ")
+            if isinstance(fraction, str) and fraction.isascii() and fraction.isdigit():
+                stamp = stamp.replace(microsecond=int((fraction + "000000")[:6]))
+            # EXIF without an offset uses the container's configured local timezone.
+            return round(stamp.timestamp() * 1000), source
+        except (UnicodeError, TypeError, ValueError, OverflowError, OSError):
+            continue
+    return record["created_ms"] or record["mtime_ns"] // 1_000_000, "created" if record["created_ms"] else "modified"
 
 
 def is_monochrome(image):
@@ -36,6 +66,7 @@ def inspect_image(root, record, cache):
         warnings.simplefilter("error", Image.DecompressionBombWarning)
         with Image.open(file) as original:
             width, height = original.size
+            sort_time, time_source = image_time(original, record)
             if original.getexif().get(274) in {5, 6, 7, 8}:
                 width, height = height, width
             original.draft("RGB", (640, 640))
@@ -53,7 +84,7 @@ def inspect_image(root, record, cache):
             temporary = cache / f"{record['id']}.tmp"
             rgb.save(temporary, format="JPEG", quality=82)
             os.replace(temporary, target)
-    return dict(width=width, height=height, monochrome=monochrome)
+    return dict(width=width, height=height, monochrome=monochrome, sort_time=sort_time, time_source=time_source)
 
 
 def root_images(root):
@@ -66,7 +97,9 @@ def root_images(root):
                 stat = entry.stat(follow_symlinks=False)
             except FileNotFoundError:
                 continue
-            records.append((entry.name, stat.st_size, stat.st_mtime_ns))
+            created = getattr(stat, "st_birthtime", None)
+            created_ms = round(created * 1000) if created else None
+            records.append((entry.name, stat.st_size, stat.st_mtime_ns, created_ms, created_ms or stat.st_mtime_ns // 1_000_000))
     return records
 
 
@@ -83,11 +116,18 @@ class ImageLibrary:
                 id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, size INTEGER NOT NULL,
                 mtime_ns INTEGER NOT NULL, width INTEGER, height INTEGER, score INTEGER,
                 features TEXT, monochrome INTEGER, error TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1);
-            CREATE INDEX IF NOT EXISTS images_active_name ON images(active,name COLLATE NOCASE);
         """)
         # NULL distinguishes unclassified images from cached color results, including indexes from older releases.
         if not any(column["name"] == "monochrome" for column in self.db.execute("PRAGMA table_info(images)")):
             self.db.execute("ALTER TABLE images ADD COLUMN monochrome INTEGER")
+        columns = {column["name"] for column in self.db.execute("PRAGMA table_info(images)")}
+        for name, kind in (("created_ms", "INTEGER"), ("sort_time", "INTEGER"), ("time_source", "TEXT")):
+            if name not in columns:
+                self.db.execute(f"ALTER TABLE images ADD COLUMN {name} {kind}")
+        self.db.execute("UPDATE images SET sort_time=mtime_ns / 1000000 WHERE sort_time IS NULL")
+        self.db.execute("CREATE INDEX IF NOT EXISTS images_active_time ON images(active,sort_time DESC,id DESC)")
+        self.db.execute("DROP INDEX IF EXISTS images_active_name")
+        self.db.commit()
         self.task = None
         self.state = dict(running=False, done=0, total=0, error="", last_scan=None)
 
@@ -103,7 +143,7 @@ class ImageLibrary:
             records = await asyncio.to_thread(root_images, self.root)
             with self.db:
                 self.db.execute("UPDATE images SET active=0")
-                self.db.executemany("""INSERT INTO images(name,size,mtime_ns) VALUES (?,?,?)
+                self.db.executemany("""INSERT INTO images(name,size,mtime_ns,created_ms,sort_time) VALUES (?,?,?,?,?)
                     ON CONFLICT(name) DO UPDATE SET active=1,
                     width=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.width END,
                     height=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.height END,
@@ -111,10 +151,12 @@ class ImageLibrary:
                     features=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.features END,
                     monochrome=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.monochrome END,
                     error=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.error ELSE '' END,
-                    size=excluded.size,mtime_ns=excluded.mtime_ns""", records)
+                    sort_time=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns AND images.time_source IS NOT NULL THEN images.sort_time ELSE excluded.sort_time END,
+                    time_source=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns AND images.created_ms IS excluded.created_ms THEN images.time_source END,
+                    created_ms=excluded.created_ms,size=excluded.size,mtime_ns=excluded.mtime_ns""", records)
             cached = await asyncio.to_thread(lambda: {file.name for file in self.cache.iterdir()})
             active = self.db.execute(f"SELECT {IMAGE_FIELDS} FROM images WHERE active=1").fetchall()
-            pending = [dict(row) for row in active if row["monochrome"] is None or row["error"] or f"{row['id']}.jpg" not in cached]
+            pending = [dict(row) for row in active if row["time_source"] is None or row["monochrome"] is None or row["error"] or f"{row['id']}.jpg" not in cached]
             self.state.update(total=len(active), done=len(active) - len(pending))
             iterator = iter(pending)
             async def worker():
@@ -130,8 +172,8 @@ class ImageLibrary:
                             self.db.execute("UPDATE images SET error=?,monochrome=NULL WHERE id=?", (str(exc), record["id"]))
                     else:
                         with self.db:
-                            self.db.execute("UPDATE images SET width=?,height=?,monochrome=?,error='' WHERE id=? AND active=1 AND size=? AND mtime_ns=?",
-                                (result["width"], result["height"], result["monochrome"], record["id"], record["size"], record["mtime_ns"]))
+                            self.db.execute("UPDATE images SET width=?,height=?,monochrome=?,sort_time=?,time_source=?,error='' WHERE id=? AND active=1 AND size=? AND mtime_ns=?",
+                                (result["width"], result["height"], result["monochrome"], result["sort_time"], result["time_source"], record["id"], record["size"], record["mtime_ns"]))
                     self.state["done"] += 1
             await worker()
             self.state["last_scan"] = time.time()
@@ -149,13 +191,13 @@ class ImageLibrary:
         offset = (page - 1) * PAGE_SIZE
         if after is not None:
             # Recycled images keep their index row, so removing one never shifts the next batch.
-            anchor = self.db.execute("SELECT name FROM images WHERE id=?", (after,)).fetchone()
+            anchor = self.db.execute("SELECT sort_time FROM images WHERE id=?", (after,)).fetchone()
             if not anchor:
                 raise ValueError("图片列表已变化，请重新加载")
-            condition += " AND (name COLLATE NOCASE,id) > (?,?)"
-            args = (*args, anchor["name"], after)
+            condition += " AND (sort_time,id) < (?,?)"
+            args = (*args, anchor["sort_time"], after)
             offset = 0
-        rows = self.db.execute(f"SELECT {IMAGE_FIELDS} FROM images WHERE {condition} ORDER BY name COLLATE NOCASE,id LIMIT ? OFFSET ?",
+        rows = self.db.execute(f"SELECT {IMAGE_FIELDS} FROM images WHERE {condition} ORDER BY sort_time DESC,id DESC LIMIT ? OFFSET ?",
                                (*args, PAGE_SIZE + 1, offset)).fetchall()
         items = [self.public(dict(row)) for row in rows[:PAGE_SIZE]]
         counts = self.db.execute("SELECT COUNT(*) AS total,SUM(monochrome=1) AS candidates,SUM(error<>'') AS errors FROM images WHERE active=1").fetchone()
@@ -179,6 +221,13 @@ class ImageLibrary:
         if version != record["version"] or (stat.st_size, stat.st_mtime_ns) != (record["size"], record["mtime_ns"]):
             raise ValueError("图片已发生变化，请刷新后重新选择")
         return record, file
+
+    def picture(self, image_id):
+        row = self.db.execute(f"SELECT {IMAGE_FIELDS} FROM images WHERE id=? AND active=1", (image_id,)).fetchone()
+        if not row:
+            raise ValueError("图片已移走或不存在，请刷新")
+        record = self.public(dict(row))
+        return self.selected(image_id, record["version"])[0]
 
     def remove(self, image_id):
         with self.db:

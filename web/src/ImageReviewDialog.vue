@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { animate, AnimatePresence, MotionConfig, motion, useMotionValue, useReducedMotion } from 'motion-v'
-import { computed, reactive, ref, shallowRef } from 'vue'
+import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { bytes, imageThumbnail, type LibraryPicture as Picture } from './api'
 import Icon from './Icon.vue'
 
@@ -10,7 +10,7 @@ type Pan = { offset: { x: number; y: number } }
 const props = defineProps<{
   loadPage: (after: number) => Promise<{ items: Picture[]; next_cursor: number | null; total: number }>
 }>()
-const emit = defineEmits<{ finish: [items: Picture[], submit: boolean] }>()
+const emit = defineEmits<{ finish: [items: Picture[], submit: boolean]; change: [id: number] }>()
 const dialog = ref<HTMLDialogElement>()
 const stage = ref<HTMLDivElement>()
 const queue = shallowRef<Picture[]>([])
@@ -28,6 +28,7 @@ const decisions = reactive(new Map<number, Decision>())
 const history = reactive<{ index: number; previous?: Decision }[]>([])
 const broken = reactive(new Set<number>())
 const current = computed<Picture | undefined>(() => queue.value[index.value])
+watch(current, item => { if (item && dialog.value?.open) emit('change', item.id) })
 const pending = computed(() => queue.value.filter((_, i) => needsRecycle(i)))
 const canAdvance = computed(() => index.value + 1 < queue.value.length || cursor.value !== null)
 const filmstrip = computed(() => {
@@ -63,7 +64,7 @@ function open(items: Picture[], item: Picture, nextCursor: number | null, count:
   dialog.value!.returnValue = ''
   dialog.value!.showModal()
 }
-defineExpose({ open })
+defineExpose({ open, close: () => dialog.value?.close() })
 
 function finish() {
   emit('finish', pending.value, dialog.value?.returnValue === 'recycle')

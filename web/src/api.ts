@@ -44,6 +44,7 @@ export interface Status {
 export interface LibraryPicture {
   id: number; name: string; size: number; width: number | null; height: number | null
   version: string; monochrome: boolean | null; error: string
+  sort_time: number; time_source: 'taken' | 'digitized' | 'image' | 'created' | 'modified' | null
 }
 export function imageThumbnail(item: LibraryPicture) {
   return `/api/images/${item.id}/thumbnail?version=${encodeURIComponent(item.version)}`

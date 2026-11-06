@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watchEffect } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
+import { useRoute, useRouter } from '#imports'
+import { queryPage } from './routeState'
 import { api, bytes } from './api'
 import Icon from './Icon.vue'
 import XiaomiBatchUpload from './XiaomiBatchUpload.vue'
@@ -8,10 +10,12 @@ import XiaomiRecycleDialog from './XiaomiRecycleDialog.vue'
 import XiaomiThumbnail from './XiaomiThumbnail.vue'
 import XiaomiLocalBinding from './XiaomiLocalBinding.vue'
 import XiaomiLocalIndicator from './XiaomiLocalIndicator.vue'
-import { takenAt, type CloudMedia as Media, type LocalFileState } from './xiaomiMedia'
+import { photoDay, takenAt, type CloudMedia as Media, type LocalFileState } from './xiaomiMedia'
 
 type Account = { connection: string; label: string }
 type Album = { id: string; name: string; cover?: string }
+const route = useRoute()
+const router = useRouter()
 const props = defineProps<{ lastLocalRecycle: string[] }>()
 const emit = defineEmits<{ message: [text: string] }>()
 const cloud = reactive({ account: null as Account | null, albums: [] as Album[], album: '', items: [] as Media[],
@@ -30,6 +34,21 @@ const allSelected = computed(() => cloud.items.length > 0 && cloud.items.every(i
 let pollTimer: ReturnType<typeof setTimeout>
 let disposed = false
 let wallObserver: IntersectionObserver | undefined
+let loadedRoute = ''
+
+function albumRoute(album = cloud.album, wall = cloud.wall, page = 0) {
+  return router.push({ path: album ? `/xiaomi/albums/${encodeURIComponent(album)}` : '/xiaomi', query: album ? { wall: wall ? '1' : undefined, page: !wall && page ? String(page + 1) : undefined } : {} })
+}
+watch(() => [route.fullPath, cloud.account?.connection, cloud.busy], () => {
+  if (!cloud.account || cloud.busy || disposed || !route.path.startsWith('/xiaomi')) return
+  const key = `${cloud.account.connection}:${route.fullPath}`
+  if (key === loadedRoute) return
+  loadedRoute = key
+  const album = /^\/xiaomi\/albums\/([^/]+)$/.exec(route.path)?.[1] || ''
+  if (cloud.album !== album) { cloud.organizing = false; cloud.bound = false }
+  cloud.album = album; cloud.wall = route.query.wall === '1'; resetMedia()
+  if (album) void run('正在读取相册内容…', () => loadMedia(cloud.wall ? 0 : queryPage(route.query.page) - 1))
+})
 
 function params(values: Record<string, string>) {
   return new URLSearchParams({ connection: cloud.account!.connection, ...values })
@@ -75,8 +94,7 @@ function toggleOrganizing() {
   cloud.organizing = !cloud.organizing
   cloud.selected.clear()
   if (cloud.organizing && !cloud.wall) {
-    cloud.wall = true; resetMedia()
-    return run('正在读取图片墙…', () => loadMedia())
+    return albumRoute(cloud.album, true)
   }
 }
 
@@ -103,6 +121,7 @@ async function loadAccount() {
   const result = await api<{ account: Account | null }>('/xiaomi/account')
   cloud.account = result.account; cloud.initialized = true
   if (!cloud.account || cloud.account.connection !== previous) {
+    loadedRoute = ''
     cloud.organizing = false
     cloud.albums = []; cloud.album = ''; resetMedia()
   }
@@ -158,21 +177,17 @@ function disconnect() {
 }
 
 async function openAlbum(album: string) {
-  cloud.organizing = false
-  cloud.album = album; cloud.wall = false; cloud.bound = false; resetMedia()
-  void run('正在读取相册内容…', () => loadMedia())
+  await albumRoute(album, false)
   await nextTick(); albumHeading.value?.focus()
 }
 
 function toggleWall(event: Event) {
-  cloud.wall = (event.target as HTMLInputElement).checked
-  resetMedia()
-  return run('正在读取相册内容…', () => loadMedia())
+  return albumRoute(cloud.album, (event.target as HTMLInputElement).checked)
 }
 
 async function backToAlbums() {
   const previous = cloud.album
-  cloud.album = ''; cloud.error = ''; cloud.organizing = false; resetMedia()
+  cloud.error = ''; await albumRoute('')
   await nextTick(); document.getElementById(`xiaomi-album-${previous}`)?.focus()
 }
 
@@ -302,7 +317,9 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
           <button class="text-button" :disabled="!!cloud.busy || !cloud.items.length" @click="selectLoaded">{{ allSelected ? '取消已加载选择' : '全选已加载' }}</button>
         </div>
         <ul v-if="cloud.wall && cloud.items.length" class="cloud-wall">
-          <li v-for="item in cloud.items" :key="item.id" class="relative min-w-0">
+          <template v-for="(item, index) in cloud.items" :key="item.id">
+          <li v-if="index === 0 || photoDay(item.sort_time) !== photoDay(cloud.items[index - 1]!.sort_time)" class="col-span-full pt-3 pb-1"><h3 class="text-sm font-medium">{{ photoDay(item.sort_time) }}</h3></li>
+          <li class="relative min-w-0">
             <div class="relative">
               <button v-if="cloud.organizing" type="button" class="image-preview rounded-lg" :aria-label="'选择 ' + item.name" :aria-pressed="cloud.selected.has(item.id)" :disabled="!!cloud.busy" @click="select(item)"><span class="image-thumb"><XiaomiThumbnail :item="item" /></span></button>
               <XiaomiThumbnail v-else :item="item" />
@@ -311,13 +328,14 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
             <button v-if="!cloud.organizing" class="wall-recycle" :aria-label="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="15" /></button>
             <p class="truncate text-xs text-muted" :title="item.name">{{ item.name }}</p>
           </li>
+          </template>
         </ul>
         <ul v-else-if="cloud.items.length" class="cloud-files">
           <li v-for="item in cloud.items" :key="item.id" :class="{ 'is-selected': cloud.organizing && cloud.selected.has(item.id) }">
             <component :is="cloud.organizing ? 'button' : 'div'" class="cloud-file" :class="{ 'cloud-file-select': cloud.organizing }" :type="cloud.organizing ? 'button' : undefined"
               :aria-label="cloud.organizing ? '选择 ' + item.name : undefined" :aria-pressed="cloud.organizing ? cloud.selected.has(item.id) : undefined" :disabled="cloud.organizing ? !!cloud.busy : undefined" @click="cloud.organizing && select(item)">
               <strong class="cloud-file-name" :title="item.name"><Icon :name="item.kind === 'video' ? 'video' : 'photo'" :size="15" /><span class="truncate">{{ item.name }}</span></strong>
-              <p class="cloud-file-meta"><time class="min-w-0 flex-1 truncate" :title="takenAt(item.taken_at)">{{ takenAt(item.taken_at) }}</time><span class="shrink-0">{{ item.size === null ? '大小未知' : bytes(item.size) }}</span><XiaomiLocalIndicator v-if="cloud.bound" :state="cloud.localStates[item.id] || 'unknown'" /></p>
+              <p class="cloud-file-meta"><time class="min-w-0 flex-1 truncate" :title="takenAt(item.sort_time)">{{ takenAt(item.sort_time) }}</time><span class="shrink-0">{{ item.size === null ? '大小未知' : bytes(item.size) }}</span><XiaomiLocalIndicator v-if="cloud.bound" :state="cloud.localStates[item.id] || 'unknown'" /></p>
             </component>
             <Icon v-if="cloud.organizing && cloud.selected.has(item.id)" name="check" class="cloud-file-check" :size="17" />
             <button v-if="!cloud.organizing" class="cloud-file-delete" :aria-label="'移入回收站：' + item.name" :title="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="15" /></button>
@@ -332,8 +350,8 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
         </div>
         <div v-if="!cloud.wall && cloud.ready && (cloud.page > 0 || !cloud.last)" class="pagination">
           <span>第 {{ cloud.page + 1 }} 页</span>
-          <button class="secondary" :disabled="!!cloud.busy || cloud.page === 0" @click="run('正在读取…', () => loadMedia(cloud.page - 1))">上一页</button>
-          <button class="secondary" :disabled="!!cloud.busy || cloud.last" @click="run('正在读取…', () => loadMedia(cloud.page + 1))">下一页</button>
+          <button class="secondary" :disabled="!!cloud.busy || cloud.page === 0" @click="albumRoute(cloud.album, false, cloud.page - 1)">上一页</button>
+          <button class="secondary" :disabled="!!cloud.busy || cloud.last" @click="albumRoute(cloud.album, false, cloud.page + 1)">下一页</button>
         </div>
         <button v-if="cloud.organizing && selectedCount" class="danger recycle-selection" :disabled="!!cloud.busy" @click="confirmSelected"><Icon name="trash" :size="16" />回收所选云端文件 · {{ selectedCount }} 项</button>
       </section>

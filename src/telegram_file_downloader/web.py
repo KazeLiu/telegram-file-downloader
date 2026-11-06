@@ -637,6 +637,10 @@ def create_app():
             raise ValueError("无效的图片查询")
         return library.listing(page, candidate, search, after)
 
+    @app.get("/api/images/{image_id}")
+    async def image_details(image_id: int):
+        return library.picture(image_id)
+
     @app.get("/api/images/{image_id}/thumbnail")
     async def image_thumbnail(image_id: int, version: str):
         record, _ = library.selected(image_id, version)
