@@ -10,10 +10,11 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import Literal
+from typing import Annotated, Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import Path as FastAPIPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -123,6 +124,12 @@ class XiaomiConnection(BaseModel):
 
 class XiaomiRecycle(XiaomiConnection):
     id: str = Field(pattern=ID_PATTERN)
+
+
+class XiaomiNameMatch(XiaomiConnection):
+    album: str = Field(pattern=ID_PATTERN)
+    page: int = Field(ge=0)
+    names: list[Annotated[str, Field(min_length=1, max_length=255)]] = Field(min_length=1, max_length=2000)
 
 
 class LocalMediaSelection(BaseModel):
@@ -384,8 +391,18 @@ def create_app():
 
     @app.get("/api/xiaomi/media")
     async def xiaomi_media(connection: str = Query(pattern=CONNECTION_PATTERN),
-                           album: str = Query(pattern=ID_PATTERN), page: int = Query(default=0, ge=0)):
-        return await xiaomi.media(connection, album, page)
+                           album: str = Query(pattern=ID_PATTERN), page: int = Query(default=0, ge=0), wall: bool = False):
+        return await xiaomi.media(connection, album, page, wall)
+
+    @app.post("/api/xiaomi/media/match")
+    async def xiaomi_match(body: XiaomiNameMatch):
+        return await xiaomi.match_media(body.connection, body.album, body.page, set(body.names))
+
+    @app.get("/api/xiaomi/thumbnail/{media_id}")
+    async def xiaomi_thumbnail(media_id: Annotated[str, FastAPIPath(pattern=ID_PATTERN)],
+                               connection: str = Query(pattern=CONNECTION_PATTERN)):
+        data, media_type = await xiaomi.thumbnail(connection, media_id)
+        return Response(data, media_type=media_type)
 
     @app.post("/api/xiaomi/recycle")
     async def xiaomi_recycle(body: XiaomiRecycle):

@@ -127,7 +127,7 @@ class XiaomiBatch:
                     item.update(kind=kind, status="uploaded", receipt=(result["id"], result["sha1"], str(info.st_size)))
                 except XiaomiError as exc:
                     item.update(status="failed", error=str(exc))
-                    if exc.status in {409, 503, 504}:
+                    if exc.status in {409, 429, 503, 504}:
                         job["error"] = "已停止后续上传：" + str(exc)
                         break
                 except (OSError, ValueError) as exc:

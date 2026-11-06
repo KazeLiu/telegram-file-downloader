@@ -16,6 +16,7 @@ const appModel = reactive({ booting: true, page: 'overview', status: null as Sta
 const authModel = reactive({ initialized: false, authenticated: false, password: '', confirm: '', busy: false, error: '' })
 const historyModel = reactive({ items: [] as Task[], total: 0, page: 1, status: '', search: '', appliedSearch: '', selected: null as Task | null, busy: false })
 const dialog = ref<HTMLDialogElement>()
+const lastLocalRecycle = ref<string[]>([])
 const archiveDialog = ref<HTMLDialogElement>()
 const archiveConfirm = reactive({ action: 'extract_only' as 'extract_only' | 'mark_manual_extracted', taskId: 0,
   members: [] as { id: number; filename: string }[], busy: false, error: '' })
@@ -46,7 +47,9 @@ async function refresh() {
     appModel.status = status; appModel.settings = settings
     await loadHistory(); appModel.error = ''
   } catch (error) {
-    if (error instanceof ApiError && error.status === 401) authModel.authenticated = false
+    if (error instanceof ApiError && error.status === 401) {
+      authModel.authenticated = false; lastLocalRecycle.value = []
+    }
     else appModel.error = (error as Error).message
   } finally { appModel.refreshing = false }
 }
@@ -67,7 +70,7 @@ async function toggleWatcher() {
   finally { appModel.busy = false }
 }
 async function logout() {
-  try { await api('/auth/logout', {}); authModel.authenticated = false; appModel.status = null; appModel.settings = null; historyModel.items = []; archiveDialog.value?.close(); dialog.value?.close() }
+  try { await api('/auth/logout', {}); authModel.authenticated = false; lastLocalRecycle.value = []; appModel.status = null; appModel.settings = null; historyModel.items = []; archiveDialog.value?.close(); dialog.value?.close() }
   catch (error) { appModel.error = (error as Error).message }
 }
 async function openTask(task: Task) {
@@ -154,7 +157,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
         <header class="page-heading"><h1>{{ title }}</h1><div v-if="appModel.page === 'overview'" class="flex flex-wrap items-center justify-end gap-2 sm:gap-4"><span class="connection"><span class="status-dot" :class="{ online: running }"></span>{{ phase }}</span><button v-if="appModel.status?.account && appModel.settings?.chat" :class="appModel.settings.enabled ? 'secondary' : 'primary'" :disabled="appModel.busy || appModel.status.pending" @click="toggleWatcher"><Icon :name="appModel.settings.enabled ? 'pause' : 'play'" :size="17" />{{ appModel.settings.enabled ? '暂停收集' : '开始收集' }}</button></div></header>
         <p v-if="appModel.error && appModel.page !== 'xiaomi'" class="notice error" role="alert">{{ appModel.error }}<button class="text-button" @click="refresh">重试</button></p>
         <p v-if="appModel.status?.error && !['history', 'xiaomi'].includes(appModel.page)" class="notice error" role="alert">{{ appModel.status.error }}</p>
-        <XiaomiPanel v-if="appModel.page === 'xiaomi'" @message="message" />
+        <XiaomiPanel v-if="appModel.page === 'xiaomi'" :last-local-recycle="lastLocalRecycle" @message="message" />
         <template v-else-if="appModel.settings && appModel.status">
           <template v-if="appModel.page === 'overview'">
             <WorkflowSteps :task="workflowTask" :settings="appModel.settings" />
@@ -171,7 +174,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
             <div v-if="historyModel.total > 25" class="pagination"><span>第 {{ historyModel.page }} / {{ Math.ceil(historyModel.total / 25) }} 页</span><button class="secondary" :disabled="historyModel.page === 1" @click="pageHistory(-1)">上一页</button><button class="secondary" :disabled="historyModel.page * 25 >= historyModel.total" @click="pageHistory(1)">下一页</button></div>
           </template>
           <FilesPanel v-else-if="appModel.page === 'files'" @message="message" />
-          <ImagesPanel v-else-if="appModel.page === 'images'" @message="message" />
+          <ImagesPanel v-else-if="appModel.page === 'images'" :last-local-recycle="lastLocalRecycle" @recycled="lastLocalRecycle = $event" @message="message" />
           <LogsPanel v-else-if="appModel.page === 'logs'" />
           <SettingsPanel v-else :settings="appModel.settings" :status="appModel.status" @refresh="refresh" @message="message" />
         </template>

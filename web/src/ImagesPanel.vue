@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watchEffect 
 import { api, bytes, imageThumbnail as thumbnail, type LibraryPicture as Picture } from './api'
 import ImageReviewDialog from './ImageReviewDialog.vue'
 import Icon from './Icon.vue'
+import { formatNames } from './xiaomiMedia'
 
 interface Recycled { id: string; original: string; size: number; created: number; reason: string }
 type View = 'all' | 'candidates' | 'recycle'
@@ -11,8 +12,12 @@ const imageModel = reactive({ view: 'all' as View, organizing: false, items: [] 
   counts: { total: 0, candidates: 0, errors: 0 }, scan: { running: false, done: 0, total: 0, error: '' },
   search: '', appliedSearch: '', loading: false, loadingMore: false, busy: false, error: '', selected: new Map<number, Picture>(),
   confirmation: [] as Picture[], picture: null as Picture | null, broken: {} as Record<number, boolean> })
-const emit = defineEmits<{ message: [value: string] }>()
+const props = defineProps<{ lastLocalRecycle: string[] }>()
+const emit = defineEmits<{ message: [value: string]; recycled: [names: string[]] }>()
 const confirmDialog = ref<HTMLDialogElement>()
+const namesDialog = ref<HTMLDialogElement>()
+const namesField = ref<HTMLTextAreaElement>()
+const canCopy = typeof navigator !== 'undefined' && !!navigator.clipboard
 const pictureDialog = ref<HTMLDialogElement>()
 const reviewDialog = ref<InstanceType<typeof ImageReviewDialog>>()
 const moreButton = ref<HTMLButtonElement>()
@@ -166,6 +171,7 @@ async function recycle() {
     if (moved.size) {
       confirmDialog.value?.close(); pictureDialog.value?.close()
       const removed = targets.filter(item => moved.has(item.id))
+      emit('recycled', removed.map(item => item.name))
       moved.forEach(id => imageModel.selected.delete(id))
       imageModel.items = imageModel.items.filter(item => !moved.has(item.id))
       imageModel.total = Math.max(0, imageModel.total - moved.size)
@@ -176,6 +182,17 @@ async function recycle() {
     }
     imageModel.error = failures.join('；'); imageModel.busy = false
   }
+}
+async function copyRecycledNames() {
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(formatNames(props.lastLocalRecycle))
+      emit('message', '已复制最近回收的文件名')
+      return
+    } catch { /* Clipboard access can be unavailable on a local HTTP address. */ }
+  }
+  namesField.value?.focus()
+  namesField.value?.select()
 }
 async function restore(item: Recycled) {
   imageModel.busy = true; imageModel.error = ''
@@ -216,6 +233,7 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
           <button :class="imageModel.organizing ? 'primary' : 'secondary'" :disabled="blocked" @click="toggleOrganizing">{{ imageModel.organizing ? '完成' : '整理' }}</button>
         </template>
         <button v-else class="secondary" :disabled="blocked" @click="load()"><Icon name="refresh" :size="16" />刷新</button>
+        <button v-if="lastLocalRecycle.length" class="text-button" @click="namesDialog?.showModal()">最近回收清单</button>
       </div>
     </div>
     <p v-if="imageModel.error" class="notice error" role="alert">{{ imageModel.error }}</p>
@@ -255,6 +273,11 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
     </template>
     <div v-if="imageModel.view === 'recycle'" class="pagination"><span>第 {{ imageModel.page }} / {{ Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize)) }} 页</span><button class="secondary" :disabled="blocked || imageModel.page === 1" @click="page(-1)">上一页</button><button class="secondary" :disabled="blocked || imageModel.page * imageModel.pageSize >= imageModel.total" @click="page(1)">下一页</button></div>
     <ImageReviewDialog ref="reviewDialog" :load-page="listImages" @finish="finishReview" />
+    <dialog ref="namesDialog" class="task-dialog" aria-labelledby="local-recycle-names">
+      <div class="section-heading"><h2 id="local-recycle-names">最近回收 · {{ lastLocalRecycle.length }} 张</h2><button class="icon-button" aria-label="关闭清单" @click="namesDialog?.close()"><Icon name="close" /></button></div>
+      <textarea ref="namesField" class="my-4" readonly rows="6" aria-label="实际回收的文件名" :value="formatNames(lastLocalRecycle)" />
+      <div class="dialog-actions"><button class="secondary" @click="copyRecycledNames">{{ canCopy ? '复制文件名' : '选中文件名' }}</button></div>
+    </dialog>
     <dialog ref="pictureDialog" class="task-dialog image-dialog">
       <template v-if="imageModel.picture">
         <div class="section-heading"><h2>图片详情</h2><button class="icon-button" aria-label="关闭图片详情" @click="pictureDialog?.close()"><Icon name="close" /></button></div>

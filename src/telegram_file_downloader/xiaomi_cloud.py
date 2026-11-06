@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import mimetypes
 import re
 import sqlite3
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import PurePath
 from urllib.parse import quote, urljoin, urlsplit
@@ -28,6 +31,8 @@ CONNECTION_PATTERN = r"^[a-f0-9]{32}$"
 BLOCK_SIZE = 4 * 1024 * 1024
 UPLOAD_LIMIT = {"image": 100 * 1024**2, "video": 4 * 1024**3}
 ALBUM_NAMES = {"1": "相机", "2": "屏幕截图", "1000": "隐私相册"}
+THUMBNAIL_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"}
+THUMBNAIL_LIMIT = 512 * 1024
 
 
 class XiaomiError(Exception):
@@ -114,6 +119,10 @@ class XiaomiCloud:
         self.ticket: tuple[str, str, float] | None = None
         self.token_lock = asyncio.Lock()
         self.write_lock = asyncio.Lock()
+        self.thumbnail_slots = asyncio.Semaphore(4)
+        self.thumbnail_sources = OrderedDict()
+        self.thumbnail_source_size = 0
+        self.thumbnail_pause_until = 0.0
 
     async def close(self):
         task = self.qr_task
@@ -136,15 +145,18 @@ class XiaomiCloud:
             raise XiaomiError("小米账号连接已变化，请刷新页面", 409)
         self.store.put("xiaomi_account", None)
         self.ticket = None
+        self.thumbnail_sources.clear()
+        self.thumbnail_source_size = 0
+        self.thumbnail_pause_until = 0.0
 
-    async def request(self, method, url, *, cookies=None, headers=None, timeout=20, **kwargs):
+    async def request(self, method, url, *, cookies=None, headers=None, timeout=20, stream=False, **kwargs):
         # Construct the request directly: redirects and the client's cookie jar must not forward credentials.
         try:
             request = httpx.Request(method, url, cookies=cookies, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
                 **(headers or {}),
             }, extensions={"timeout": httpx.Timeout(timeout, connect=15).as_dict()}, **kwargs)
-            return await self.http.send(request)
+            return await self.http.send(request, stream=stream)
         except httpx.TimeoutException:
             raise XiaomiError("连接小米超时，请刷新确认结果后再试", 504) from None
         except (httpx.RequestError, httpx.InvalidURL):
@@ -154,6 +166,8 @@ class XiaomiCloud:
 
     @staticmethod
     def check_http(response):
+        if response.status_code == 429:
+            raise XiaomiError("小米云暂时限制请求，请稍后再试", 429)
         if response.status_code in {401, 403}:
             data = response_json(response) if "json" in response.headers.get("content-type", "") else {}
             if data.get("isSecondValidation"):
@@ -338,12 +352,96 @@ class XiaomiCloud:
         })
         return page_data(data, "galleries")
 
-    async def media(self, connection, album_id, page):
-        entries, last = await self.media_page(connection, album_id, page, 30)
-        items = [{"id": remote_id(item.get("id")), "name": item.get("fileName") or "未命名",
-                  "kind": item["type"], "size": item.get("size"), "taken_at": item.get("dateTaken")}
+    def public_media(self, item, connection=None):
+        media_id = remote_id(item.get("id"))
+        result = {"id": media_id, "name": item.get("fileName") or "未命名", "kind": item["type"],
+                  "size": item.get("size"), "taken_at": item.get("dateTaken")}
+        info = item.get("thumbnailInfo")
+        source = info.get("data") if isinstance(info, dict) and not info.get("encryptInfo") else None
+        if connection and isinstance(source, str) and not item.get("isEncryptMedia") and not item.get("encryptInfo"):
+            if source.startswith("data:"):
+                header, _, encoded = source.partition(",")
+                if not (header.removeprefix("data:").removesuffix(";base64") in THUMBNAIL_TYPES
+                        and header.endswith(";base64") and len(encoded) <= THUMBNAIL_LIMIT):
+                    return result
+            elif len(source) <= 4096 and source.startswith(("https://", "/")):
+                try:
+                    source = xiaomi_url(urljoin(CLOUD, source), STORAGE_HOSTS)
+                except XiaomiError:
+                    return result
+            else:
+                return result
+            key = (connection, media_id)
+            self.thumbnail_source_size += len(source) - len(self.thumbnail_sources.pop(key, ""))
+            self.thumbnail_sources[key] = source
+            while len(self.thumbnail_sources) > 4096 or self.thumbnail_source_size > 32 * 1024**2:
+                _, expired = self.thumbnail_sources.popitem(last=False)
+                self.thumbnail_source_size -= len(expired)
+            result["thumbnail"] = f"/api/xiaomi/thumbnail/{media_id}?connection={connection}"
+        return result
+
+    async def thumbnail(self, connection, media_id):
+        async with self.thumbnail_slots:
+            current = self.account()
+            if not current or current["connection"] != connection:
+                raise XiaomiError("小米账号连接已变化，请刷新页面", 409)
+            url = self.thumbnail_sources.get((connection, media_id))
+            if not url:
+                raise XiaomiError("缩略图不可用，请刷新相册", 404)
+            if url.startswith("data:"):
+                header, _, encoded = url.partition(",")
+                try:
+                    return base64.b64decode(encoded, validate=True), header[5:-7]
+                except (ValueError, binascii.Error):
+                    raise XiaomiError("小米未返回可显示的缩略图", 404) from None
+            if time.monotonic() < self.thumbnail_pause_until:
+                raise XiaomiError("小米云暂时限制缩略图请求，请稍后刷新", 429)
+            for _ in range(3):
+                cookies = None
+                if urlsplit(url).hostname == "i.mi.com":
+                    account, service = await self.auth(connection)
+                    cookies = {"userId": account["userId"], "serviceToken": service}
+                response = await self.request("GET", url, cookies=cookies, stream=True,
+                                              headers={"Referer": CLOUD + "/gallery/h5", "Accept-Encoding": "identity"})
+                try:
+                    if response.is_redirect and response.headers.get("location"):
+                        url = xiaomi_url(urljoin(url, response.headers["location"]), STORAGE_HOSTS)
+                        continue
+                    if response.status_code == 429:
+                        retry = response.headers.get("retry-after", "")
+                        delay = int(retry) if retry.isascii() and retry.isdigit() and len(retry) <= 9 else 30
+                        self.thumbnail_pause_until = time.monotonic() + max(30, delay)
+                        self.check_http(response)
+                    media_type = response.headers.get("content-type", "").partition(";")[0].lower()
+                    if (not response.is_success or media_type not in THUMBNAIL_TYPES
+                            or response.headers.get("content-encoding", "identity") != "identity"):
+                        raise XiaomiError("小米未返回可显示的缩略图", 404)
+                    data = bytearray()
+                    async for chunk in response.aiter_raw(chunk_size=64 * 1024):
+                        data.extend(chunk)
+                        if len(data) > THUMBNAIL_LIMIT:
+                            raise XiaomiError("缩略图超过大小限制", 413)
+                    return bytes(data), media_type
+                except httpx.RequestError:
+                    raise XiaomiError("缩略图连接中断，请刷新后重试", 503) from None
+                finally:
+                    await response.aclose()
+            raise XiaomiError("缩略图跳转未完成", 404)
+
+    async def media(self, connection, album_id, page, wall=False):
+        entries, last = await self.media_page(connection, album_id, page, 20 if wall else 30)
+        items = [self.public_media(item, connection if wall else None)
                  for item in entries if item.get("type") in {"image", "video"}]
         return {"items": items, "last": last}
+
+    async def match_media(self, connection, album_id, page, names):
+        entries, last = await self.media_page(connection, album_id, page, 200)
+        if not entries and not last:
+            raise XiaomiError("小米云未返回完整相册列表，请重新匹配")
+        matches = [self.public_media(item, connection) for item in entries
+                   if item.get("type") == "image" and isinstance(item.get("fileName"), str) and item["fileName"] in names
+                   and (item.get("groupId") is None or str(item["groupId"]) == album_id)]
+        return {"items": matches, "last": last, "marker": remote_id(entries[-1].get("id")) if entries else ""}
 
     async def recycle(self, connection, media_id):
         if self.write_lock.locked():
