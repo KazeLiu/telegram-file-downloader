@@ -22,7 +22,7 @@ const archiveConfirm = reactive({ action: 'extract_only' as 'extract_only' | 'ma
   members: [] as { id: number; filename: string }[], busy: false, error: '' })
 let timer: ReturnType<typeof setInterval>
 let toastTimer: ReturnType<typeof setTimeout>
-const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '多层路径打平', icon: 'folder' }, { id: 'images', title: '图片快筛', icon: 'photo' }, { id: 'xiaomi', title: '小米云相册', icon: 'cloud' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
+const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '多层路径打平', icon: 'folder' }, { id: 'images', title: '本地图片快筛', icon: 'photo' }, { id: 'xiaomi', title: '小米云相册', icon: 'cloud' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
 const title = computed(() => navigation.find(n => n.id === appModel.page)?.title)
 const running = computed(() => appModel.status?.phase === 'watching' && appModel.status?.connection === 'Connected')
 const completed = computed(() => (appModel.status?.counts.completed || 0) + (appModel.status?.counts.extracted || 0) + (appModel.status?.counts.organized || 0) + (appModel.status?.counts.manual_extracted || 0))
@@ -189,7 +189,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
         <TaskActions :task="historyModel.selected" :busy="appModel.busy" archive-controls @action="taskAction(historyModel.selected!, $event)" />
         <p v-if="historyModel.selected.archive_group_warning" class="notice">{{ historyModel.selected.archive_group_warning }}</p>
         <p v-if="historyModel.selected.manual_source === 'external'" class="notice">已按你的确认标记为手动解压；未检查原包，不会再自动处理这一组记录。</p>
-        <p v-else-if="historyModel.selected.manual_extract_only" class="notice">仅解压并保留原包，不自动平铺或清理。需要在图片快筛中处理时，先到多层路径打平整理此文件夹。</p>
+        <p v-else-if="historyModel.selected.manual_extract_only" class="notice">仅解压并保留原包，不自动平铺或清理。需要在本地图片快筛中处理时，先到多层路径打平整理此文件夹。</p>
         <progress :value="groupPercent(historyModel.selected)" max="100" aria-label="整组下载进度" />
         <p v-if="(historyModel.selected.group_count || 0) > 1" class="detail-member-label">以下为当前分卷：{{ historyModel.selected.filename }}<br />暂停、继续与下载重试只影响此分卷；手动解压操作作用于整组。</p>
         <dl class="detail-grid">

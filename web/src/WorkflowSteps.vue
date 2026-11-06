@@ -10,7 +10,7 @@ const cleanupDetail = computed(() => {
   const task = props.task
   if (legacyPdf.value) return `旧版记录：删除 ${task?.deleted_pdfs || 0} 个 PDF。当前保留 PDF。`
   if (legacyPsd.value) return `旧版记录：直接删除 ${task?.deleted_psds || 0} 个 PSD。`
-  if (task?.recycled_psds || task?.recycled_txts) return `已将 ${task.recycled_psds || 0} 个 PSD、${task.recycled_txts || 0} 个 TXT 移入回收站，可在图片快筛中还原。`
+  if (task?.recycled_psds || task?.recycled_txts) return `已将 ${task.recycled_psds || 0} 个 PSD、${task.recycled_txts || 0} 个 TXT 移入回收站，可在本地图片快筛中还原。`
   if (task?.deleted_psds || task?.deleted_txts) return `旧版记录：直接删除 ${task.deleted_psds || 0} 个 PSD、${task.deleted_txts || 0} 个 TXT。`
   return '将本次资源的 PSD、TXT 移入持久回收站，可还原；PDF 保留。'
 })

@@ -16,7 +16,8 @@ const props = defineProps<{ lastLocalRecycle: string[] }>()
 const emit = defineEmits<{ message: [text: string] }>()
 const cloud = reactive({ account: null as Account | null, albums: [] as Album[], album: '', items: [] as Media[],
   wall: false, page: 0, last: true, ready: false, busy: '', error: '', initialized: false, qr: '', verifying: false,
-  coverErrors: new Set<string>(), bound: false, localStates: {} as Record<string, LocalFileState> })
+  coverErrors: new Set<string>(), bound: false, localStates: {} as Record<string, LocalFileState>,
+  organizing: false, selected: new Map<string, Media>() })
 const upload = reactive({ file: null as File | null, name: '', error: '' })
 const recycleDialog = ref<InstanceType<typeof XiaomiRecycleDialog>>()
 const uploadDialog = ref<HTMLDialogElement>()
@@ -24,6 +25,8 @@ const fileInput = ref<HTMLInputElement>()
 const albumHeading = ref<HTMLHeadingElement>()
 const wallEnd = ref<HTMLDivElement>()
 const albumName = computed(() => cloud.albums.find(item => item.id === cloud.album)?.name || '')
+const selectedCount = computed(() => cloud.selected.size)
+const allSelected = computed(() => cloud.items.length > 0 && cloud.items.every(item => cloud.selected.has(item.id)))
 let pollTimer: ReturnType<typeof setTimeout>
 let disposed = false
 let wallObserver: IntersectionObserver | undefined
@@ -45,13 +48,40 @@ async function loadMedia(page = 0, append = false) {
   if (append) {
     const existing = new Set(cloud.items.map(item => item.id))
     cloud.items.push(...result.items.filter(item => !existing.has(item.id)))
-  } else cloud.items = result.items
+  } else { cloud.items = result.items; cloud.selected.clear() }
   cloud.last = result.last; cloud.page = page; cloud.ready = true
 }
 
 function resetMedia() {
   cloud.items = []; cloud.page = 0; cloud.last = true; cloud.ready = false
   cloud.localStates = {}
+  cloud.selected.clear()
+}
+
+function select(item: Media) {
+  if (cloud.selected.has(item.id)) cloud.selected.delete(item.id)
+  else cloud.selected.set(item.id, item)
+}
+
+function selectLoaded() {
+  const selecting = !allSelected.value
+  for (const item of cloud.items) {
+    if (selecting) cloud.selected.set(item.id, item)
+    else cloud.selected.delete(item.id)
+  }
+}
+
+function toggleOrganizing() {
+  cloud.organizing = !cloud.organizing
+  cloud.selected.clear()
+  if (cloud.organizing && !cloud.wall) {
+    cloud.wall = true; resetMedia()
+    return run('正在读取图片墙…', () => loadMedia())
+  }
+}
+
+function confirmSelected() {
+  if (!cloud.busy && selectedCount.value) return recycleDialog.value?.open([...cloud.selected.values()])
 }
 
 function localStatus(states: Record<string, LocalFileState>, bound: boolean) {
@@ -73,6 +103,7 @@ async function loadAccount() {
   const result = await api<{ account: Account | null }>('/xiaomi/account')
   cloud.account = result.account; cloud.initialized = true
   if (!cloud.account || cloud.account.connection !== previous) {
+    cloud.organizing = false
     cloud.albums = []; cloud.album = ''; resetMedia()
   }
   if (!cloud.account) return
@@ -127,6 +158,7 @@ function disconnect() {
 }
 
 async function openAlbum(album: string) {
+  cloud.organizing = false
   cloud.album = album; cloud.wall = false; cloud.bound = false; resetMedia()
   void run('正在读取相册内容…', () => loadMedia())
   await nextTick(); albumHeading.value?.focus()
@@ -140,7 +172,7 @@ function toggleWall(event: Event) {
 
 async function backToAlbums() {
   const previous = cloud.album
-  cloud.album = ''; cloud.error = ''; resetMedia()
+  cloud.album = ''; cloud.error = ''; cloud.organizing = false; resetMedia()
   await nextTick(); document.getElementById(`xiaomi-album-${previous}`)?.focus()
 }
 
@@ -154,6 +186,7 @@ async function confirmRecycle(item: Media) {
 
 function afterNameRecycle(ids: string[]) {
   const moved = new Set(ids)
+  ids.forEach(id => cloud.selected.delete(id))
   cloud.items = cloud.items.filter(item => !moved.has(item.id))
   if (!cloud.busy) void run('正在刷新相册内容…', () => loadMedia())
 }
@@ -205,7 +238,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
 </script>
 
 <template>
-  <div class="xiaomi-panel">
+  <div class="xiaomi-panel" :class="{ 'has-selection': cloud.organizing && selectedCount }">
     <p v-if="cloud.error" class="notice error" role="alert">{{ cloud.error }}
       <button v-if="!cloud.account" class="text-button" :disabled="!!cloud.busy" @click="run('正在刷新…', loadAccount)">刷新连接</button>
     </p>
@@ -253,30 +286,41 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
           <div class="cloud-actions">
             <label class="wall-toggle"><input type="checkbox" role="switch" :checked="cloud.wall" :disabled="!!cloud.busy" @change="toggleWall" />图片墙</label>
             <button class="secondary" :disabled="!!cloud.busy" @click="run('正在刷新相册内容…', () => loadMedia(cloud.wall ? 0 : cloud.page))"><Icon name="refresh" :size="17" />刷新</button>
+            <button :class="cloud.organizing ? 'primary' : 'secondary'" :disabled="!!cloud.busy || !cloud.ready" @click="toggleOrganizing">{{ cloud.organizing ? '完成' : '管理' }}</button>
             <XiaomiNameRecycle :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :album-name="albumName"
-              :last-local-recycle="props.lastLocalRecycle" :disabled="!!cloud.busy" @confirm="recycleDialog?.open($event)" />
-            <button class="secondary" :disabled="!!cloud.busy || !albumName || cloud.album === '1000'" @click="openUpload">从此设备上传</button>
-            <XiaomiBatchUpload :key="cloud.account.connection" :connection="cloud.account.connection" :album="cloud.album" :albums="cloud.albums" :disabled="!!cloud.busy || !albumName"
+              :last-local-recycle="props.lastLocalRecycle" :disabled="!!cloud.busy || cloud.organizing" @confirm="recycleDialog?.open($event)" />
+            <button class="secondary" :disabled="!!cloud.busy || cloud.organizing || !albumName || cloud.album === '1000'" @click="openUpload">从此设备上传</button>
+            <XiaomiBatchUpload :key="cloud.account.connection" :connection="cloud.account.connection" :album="cloud.album" :albums="cloud.albums" :disabled="!!cloud.busy || cloud.organizing || !albumName"
               @message="emit('message', $event)" @finished="batchFinished" />
           </div>
         </div>
         <XiaomiLocalBinding :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :items="cloud.items" @status="localStatus" />
         <XiaomiRecycleDialog :key="`recycle:${cloud.account.connection}:${cloud.album}`" ref="recycleDialog" :connection="cloud.account.connection" :album="cloud.album" @recycled="afterNameRecycle" @message="emit('message', $event)" />
         <p v-if="cloud.album === '1000'" class="cloud-status muted">隐私相册请在小米云网页版上传。</p>
+        <div v-if="cloud.organizing" class="cloud-selection-actions">
+          <span role="status">已选 {{ selectedCount }} 项</span>
+          <button class="text-button" :disabled="!!cloud.busy || !cloud.items.length" @click="selectLoaded">{{ allSelected ? '取消已加载选择' : '全选已加载' }}</button>
+        </div>
         <ul v-if="cloud.wall && cloud.items.length" class="cloud-wall">
           <li v-for="item in cloud.items" :key="item.id" class="relative min-w-0">
-            <div class="relative"><XiaomiThumbnail :item="item" /><XiaomiLocalIndicator v-if="cloud.bound" :state="cloud.localStates[item.id] || 'unknown'" dot /></div>
-            <button class="wall-recycle" :aria-label="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="15" /></button>
+            <div class="relative">
+              <button v-if="cloud.organizing" type="button" class="image-preview rounded-lg" :aria-label="'选择 ' + item.name" :aria-pressed="cloud.selected.has(item.id)" :disabled="!!cloud.busy" @click="select(item)"><span class="image-thumb"><XiaomiThumbnail :item="item" /></span></button>
+              <XiaomiThumbnail v-else :item="item" />
+              <XiaomiLocalIndicator v-if="cloud.bound" :state="cloud.localStates[item.id] || 'unknown'" dot />
+            </div>
+            <button v-if="!cloud.organizing" class="wall-recycle" :aria-label="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="15" /></button>
             <p class="truncate text-xs text-muted" :title="item.name">{{ item.name }}</p>
           </li>
         </ul>
         <ul v-else-if="cloud.items.length" class="cloud-files">
-          <li v-for="item in cloud.items" :key="item.id">
-            <div class="cloud-file">
+          <li v-for="item in cloud.items" :key="item.id" :class="{ 'is-selected': cloud.organizing && cloud.selected.has(item.id) }">
+            <component :is="cloud.organizing ? 'button' : 'div'" class="cloud-file" :class="{ 'cloud-file-select': cloud.organizing }" :type="cloud.organizing ? 'button' : undefined"
+              :aria-label="cloud.organizing ? '选择 ' + item.name : undefined" :aria-pressed="cloud.organizing ? cloud.selected.has(item.id) : undefined" :disabled="cloud.organizing ? !!cloud.busy : undefined" @click="cloud.organizing && select(item)">
               <strong class="cloud-file-name" :title="item.name"><Icon :name="item.kind === 'video' ? 'video' : 'photo'" :size="15" /><span class="truncate">{{ item.name }}</span></strong>
               <p class="cloud-file-meta"><time class="min-w-0 flex-1 truncate" :title="takenAt(item.taken_at)">{{ takenAt(item.taken_at) }}</time><span class="shrink-0">{{ item.size === null ? '大小未知' : bytes(item.size) }}</span><XiaomiLocalIndicator v-if="cloud.bound" :state="cloud.localStates[item.id] || 'unknown'" /></p>
-            </div>
-            <button class="cloud-file-delete" :aria-label="'移入回收站：' + item.name" :title="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="15" /></button>
+            </component>
+            <Icon v-if="cloud.organizing && cloud.selected.has(item.id)" name="check" class="cloud-file-check" :size="17" />
+            <button v-if="!cloud.organizing" class="cloud-file-delete" :aria-label="'移入回收站：' + item.name" :title="'移入回收站：' + item.name" :disabled="!!cloud.busy" @click="confirmRecycle(item)"><Icon name="trash" :size="15" /></button>
           </li>
         </ul>
         <div v-else-if="!cloud.busy && !cloud.error && cloud.last" class="empty-list">
@@ -291,6 +335,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
           <button class="secondary" :disabled="!!cloud.busy || cloud.page === 0" @click="run('正在读取…', () => loadMedia(cloud.page - 1))">上一页</button>
           <button class="secondary" :disabled="!!cloud.busy || cloud.last" @click="run('正在读取…', () => loadMedia(cloud.page + 1))">下一页</button>
         </div>
+        <button v-if="cloud.organizing && selectedCount" class="danger recycle-selection" :disabled="!!cloud.busy" @click="confirmSelected"><Icon name="trash" :size="16" />回收所选云端文件 · {{ selectedCount }} 项</button>
       </section>
     </template>
 
@@ -329,6 +374,8 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
 .album-label strong { @apply min-w-0; overflow-wrap: anywhere; }
 .album-label svg { @apply text-muted; }
 .cloud-library { @apply px-6 py-5; }
+.xiaomi-panel.has-selection { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+.cloud-selection-actions { @apply mb-4 flex flex-wrap items-center gap-4 text-sm; }
 .cloud-toolbar { @apply pb-4; }
 .cloud-detail-heading { @apply flex min-w-0 flex-wrap items-center gap-x-4; }
 .cloud-detail-heading h2 { overflow-wrap: anywhere; }
@@ -345,6 +392,9 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
 .wall-recycle { @apply absolute top-1 right-1 grid size-8 min-h-0 place-items-center rounded-full bg-canvas p-0 text-danger; }
 .cloud-files li { @apply relative min-w-0 rounded-lg border border-solid border-hairline py-2 pr-1 pl-2; }
 .cloud-file { @apply min-w-0; }
+.cloud-file-select { @apply min-h-11 w-full border-0 bg-transparent p-0 text-left; }
+.cloud-files li.is-selected { @apply border-blue bg-blue/5; }
+.cloud-file-check { @apply pointer-events-none absolute top-2 right-2 text-blue; }
 .cloud-file-name { @apply mr-7 flex min-w-0 items-center gap-1.5 text-sm font-normal; }
 .cloud-file-name svg { @apply text-muted; }
 .cloud-file-meta { @apply mt-2 flex items-center gap-1.5 text-xs text-muted; }
