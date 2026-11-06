@@ -181,7 +181,7 @@ async def extract_archive(archive: Path, passwords: list[str], source_name: str 
                         raise ExtractionError("组合压缩包没有唯一的 TAR 文件，已保留原包")
                     output = await _expand_tar(executable, inner, staging)
             stem = resource_name(format_name)
-            target = collision_safe_path(archive.parent, stem + "_解压")
+            target = collision_safe_path(archive.parent, stem)
             output.rename(target)
             return target
         finally:
