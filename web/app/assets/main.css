@@ -92,6 +92,7 @@
 .connection { @apply inline-flex items-center gap-2 whitespace-nowrap text-xs text-muted; }
 .status-dot { @apply size-1.5 rounded-full bg-muted; &.online { @apply bg-success; } }
 .page-content { --page-max-width: 1280px; --page-gutter: 48px; @apply mx-auto max-w-(--page-max-width) px-(--page-gutter) pt-9 pb-10; }
+.page-content.image-page { --page-max-width: 100%; }
 .page-heading { @apply mb-7 flex items-center justify-between gap-4 border-b border-solid border-hairline pb-4; border-width: 0 0 1px; }
 .section-heading { @apply flex items-center justify-between gap-4; }
 .welcome-panel { @apply flex flex-wrap items-center gap-4 rounded-panel border border-solid border-hairline bg-canvas p-5; }
@@ -280,7 +281,13 @@
   position: fixed; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 15; box-shadow: 0 4px 18px #0003;
   left: calc(var(--sidebar-width) + var(--page-gutter) + max(0px, (100% - var(--sidebar-width) - var(--page-max-width)) / 2));
 }
-.image-grid { @apply grid grid-cols-10 gap-[3px]; }
+.image-grid {
+  --image-gap: 3px;
+  @apply grid;
+  gap: var(--image-gap);
+  /* Keep thumbnails near 92px, bounded by 10 and 30 columns at every width. */
+  grid-template-columns: repeat(auto-fill, minmax(clamp(calc((100% - 29 * var(--image-gap)) / 30), 92px, calc((100% - 9 * var(--image-gap)) / 10)), 1fr));
+}
 .image-card { @apply min-w-0; }
 .image-preview {
   @apply grid aspect-square w-full min-h-0 touch-manipulation place-items-center bg-soft p-0 select-none;
@@ -301,7 +308,7 @@
 .recycle-list { @apply rounded-panel bg-canvas px-[22px]; article { @apply flex items-center gap-4 py-5; border-bottom: 1px solid var(--color-soft); &:last-child { border-bottom: 0; } > div { @apply min-w-0 flex-1; } strong { @apply text-sm; overflow-wrap: anywhere; } p { @apply mt-1.5 text-[13px] text-muted; } } }
 @media (max-width: 1100px) { .image-actions > .muted { display: none; } }
 @media (max-width: 700px) {
-  .image-grid { gap: 2px; }
+  .image-grid { --image-gap: 2px; }
   .image-tabs { width: 100%; button { flex: 1; justify-content: center; padding: 8px; font-size: 13px; } }
   .image-actions .search-box { width: 100%; max-width: none; }
   .recycle-selection { left: max(16px, env(safe-area-inset-left)); }
