@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import os
 import asyncio
+import errno
 import re
+import shutil
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from tempfile import TemporaryFile
 from typing import Literal
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,7 +26,8 @@ from .web_runtime import WebRuntime, telegram_proxy
 from .diagnostics import configure_logs, read_log
 from .organizer import browse, plan_counts
 from .image_library import ImageLibrary
-from .storage import RecycleBin
+from .storage import RecycleBin, inside
+from .xiaomi_cloud import CONNECTION_PATTERN, ID_PATTERN, XiaomiCloud, XiaomiError, upload_media
 
 
 class Credentials(BaseModel):
@@ -111,6 +115,14 @@ class ImagesSelection(BaseModel):
     items: list[ImageSelection] = Field(min_length=1, max_length=200)
 
 
+class XiaomiConnection(BaseModel):
+    connection: str = Field(pattern=CONNECTION_PATTERN)
+
+
+class XiaomiRecycle(XiaomiConnection):
+    id: str = Field(pattern=ID_PATTERN)
+
+
 def create_app():
     data_dir = Path(os.environ.get("DATA_DIR", str(Path.cwd() / "data"))).resolve()
     download_dir = Path(os.environ.get("DOWNLOAD_DIR", str(Path.cwd() / "downloads"))).resolve()
@@ -118,6 +130,7 @@ def create_app():
     store = ConsoleStore(data_dir)
     runtime = WebRuntime(store, data_dir, download_dir)
     library = ImageLibrary(download_dir, data_dir)
+    xiaomi = XiaomiCloud(store)
     failures: dict[str, list[float]] = {}
 
     @asynccontextmanager
@@ -126,6 +139,7 @@ def create_app():
         try:
             yield
         finally:
+            await xiaomi.close()
             await library.close()
             await runtime.close()
             store.close()
@@ -139,8 +153,10 @@ def create_app():
                 origin = request.headers.get("origin")
                 if origin != f"{request.url.scheme}://{request.headers.get('host')}":
                     return JSONResponse({"detail": "请从本页面操作"}, status_code=403)
-                if request.headers.get("content-type", "").split(";")[0] != "application/json":
-                    return JSONResponse({"detail": "请求需要 JSON 内容"}, status_code=415)
+                upload = request.method == "POST" and request.url.path == "/api/xiaomi/upload"
+                content_type = "application/octet-stream" if upload else "application/json"
+                if request.headers.get("content-type", "").split(";")[0] != content_type:
+                    return JSONResponse({"detail": "请选择要上传的文件" if upload else "请求需要 JSON 内容"}, status_code=415)
             public = {"/api/auth/status", "/api/auth/setup", "/api/auth/login"}
             if request.url.path not in public and not store.authorized(request.cookies.get("console_session", "")):
                 return JSONResponse({"detail": "请先登录管理页面"}, status_code=401)
@@ -156,6 +172,10 @@ def create_app():
     @app.exception_handler(ValueError)
     async def invalid(request, exc):
         return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    @app.exception_handler(XiaomiError)
+    async def xiaomi_error(request, exc):
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status)
 
     @app.exception_handler(RequestValidationError)
     async def malformed(request, exc):
@@ -302,6 +322,92 @@ def create_app():
             raise ValueError("请先暂停下载，并等待解压整理结束后再退出 Telegram")
         await runtime.logout_telegram()
         return {"ok": True}
+
+    @app.get("/api/xiaomi/account")
+    async def xiaomi_account():
+        return {"account": xiaomi.account()}
+
+    @app.post("/api/xiaomi/disconnect")
+    async def xiaomi_disconnect(body: XiaomiConnection):
+        xiaomi.disconnect(body.connection)
+        return {"ok": True}
+
+    @app.post("/api/xiaomi/qr")
+    async def xiaomi_qr(request: Request):
+        if xiaomi.write_lock.locked():
+            raise XiaomiError("请等待当前云端操作结束", 409)
+        async with xiaomi.write_lock:
+            return await xiaomi.start_qr(request.cookies["console_session"])
+
+    @app.get("/api/xiaomi/qr/{session_id}")
+    async def xiaomi_qr_status(session_id: str, request: Request):
+        qr = xiaomi.qr_session(session_id, request.cookies["console_session"])
+        return {"state": qr.state, "error": qr.error}
+
+    @app.get("/api/xiaomi/qr/{session_id}/image")
+    async def xiaomi_qr_image(session_id: str, request: Request):
+        qr = xiaomi.qr_session(session_id, request.cookies["console_session"])
+        if not qr.image:
+            raise XiaomiError("二维码已结束", 404)
+        return Response(qr.image, media_type=qr.media_type)
+
+    @app.post("/api/xiaomi/qr/{session_id}/cancel")
+    async def xiaomi_qr_cancel(session_id: str, request: Request):
+        xiaomi.cancel_qr(session_id, request.cookies["console_session"])
+        return {"ok": True}
+
+    @app.get("/api/xiaomi/albums")
+    async def xiaomi_albums(connection: str = Query(pattern=CONNECTION_PATTERN)):
+        return {"items": await xiaomi.albums(connection)}
+
+    @app.get("/api/xiaomi/media")
+    async def xiaomi_media(connection: str = Query(pattern=CONNECTION_PATTERN),
+                           album: str = Query(pattern=ID_PATTERN), page: int = Query(default=0, ge=0)):
+        return await xiaomi.media(connection, album, page)
+
+    @app.post("/api/xiaomi/recycle")
+    async def xiaomi_recycle(body: XiaomiRecycle):
+        await xiaomi.recycle(body.connection, body.id)
+        return {"ok": True}
+
+    @app.post("/api/xiaomi/upload")
+    async def xiaomi_upload(request: Request, connection: str = Query(pattern=CONNECTION_PATTERN),
+                            album: str = Query(pattern=ID_PATTERN), name: str = Query(min_length=1, max_length=255),
+                            size: int = Query(gt=0)):
+        kind, mime = upload_media(name)
+        if album == "1000":
+            raise XiaomiError("请在小米云网页版向隐私相册上传", 400)
+        if xiaomi.write_lock.locked():
+            raise XiaomiError("请等待当前云端操作结束", 409)
+        limit = 100 * 1024**2 if kind == "image" else 4 * 1024**3
+        if size >= limit:
+            raise XiaomiError("图片需小于 100 MiB，视频需小于 4 GiB", 413)
+        length = request.headers.get("content-length", "")
+        if length.isdecimal() and int(length) != size:
+            raise XiaomiError("上传内容与所选文件大小不符，请重新选择文件", 400)
+        async with xiaomi.write_lock:
+            account = xiaomi.account()
+            if not account or account["connection"] != connection:
+                raise XiaomiError("小米账号连接已变化，请刷新页面", 409)
+            staging = inside(download_dir, ".tg-work")
+            try:
+                staging.mkdir(parents=True, exist_ok=True)
+                if shutil.disk_usage(staging).free < size:
+                    raise XiaomiError("下载盘空间不足，无法暂存上传文件", 507)
+                with TemporaryFile(dir=staging) as file:
+                    received = 0
+                    async for chunk in request.stream():
+                        received += len(chunk)
+                        if received > size:
+                            raise XiaomiError("上传内容超过所选文件大小，请重新选择文件", 400)
+                        await asyncio.to_thread(file.write, chunk)
+                    if received != size:
+                        raise XiaomiError("文件未传完整，请重新选择文件", 400)
+                    return await xiaomi.upload(connection, album, name, kind, mime, size, file)
+            except OSError as exc:
+                if exc.errno != errno.ENOSPC:
+                    raise
+                raise XiaomiError("下载盘空间不足，无法暂存上传文件", 507) from None
 
     @app.post("/api/watcher")
     async def watcher(body: Enabled):

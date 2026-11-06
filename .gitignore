@@ -18,3 +18,5 @@ src/telegram_file_downloader/static/
 .preview/
 web-data/
 build/
+/references/XiaomiAlbumSyncer/source/
+/references/XiaomiAlbumSyncer/source.zip

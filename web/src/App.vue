@@ -8,6 +8,7 @@ import WorkflowSteps from './WorkflowSteps.vue'
 import TaskActions from './TaskActions.vue'
 import FilesPanel from './FilesPanel.vue'
 import ImagesPanel from './ImagesPanel.vue'
+import XiaomiPanel from './XiaomiPanel.vue'
 import LogsPanel from './LogsPanel.vue'
 
 const appModel = reactive({ booting: true, page: 'overview', status: null as Status | null,
@@ -17,14 +18,14 @@ const historyModel = reactive({ items: [] as Task[], total: 0, page: 1, status: 
 const dialog = ref<HTMLDialogElement>()
 let timer: ReturnType<typeof setInterval>
 let toastTimer: ReturnType<typeof setTimeout>
-const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '文件管理', icon: 'folder' }, { id: 'images', title: '图片管理', icon: 'photo' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
+const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '文件管理', icon: 'folder' }, { id: 'images', title: '图片管理', icon: 'photo' }, { id: 'xiaomi', title: '小米云相册', icon: 'cloud' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
 const title = computed(() => navigation.find(n => n.id === appModel.page)?.title)
 const running = computed(() => appModel.status?.phase === 'watching' && appModel.status?.connection === 'Connected')
 const completed = computed(() => (appModel.status?.counts.completed || 0) + (appModel.status?.counts.extracted || 0) + (appModel.status?.counts.organized || 0))
 const phase = computed(() => appModel.status?.pending ? '正在应用设置' : appModel.status?.phase === 'watching' && !running.value ? '正在连接' : phaseLabels[appModel.status?.phase || 'unconfigured'])
 const recent = computed(() => historyModel.items.slice(0, 5))
 const workflowTask = computed(() => appModel.status?.active_tasks.find(t => t.id === appModel.workflowTask) || appModel.status?.active)
-const pageDescriptions: Record<string, string> = { overview: '从接收、下载到整理，每一步都看得见。', history: '每一次下载，都有迹可循。', files: '把文件夹整理成一个平铺的资源库。', images: '只看根目录，留下你真正需要的图片。', logs: '查看任务进展、连接恢复与失败原因。', settings: '按你的习惯，安排每一份资源。' }
+const pageDescriptions: Record<string, string> = { overview: '从接收、下载到整理，每一步都看得见。', history: '每一次下载，都有迹可循。', files: '把文件夹整理成一个平铺的资源库。', images: '只看根目录，留下你真正需要的图片。', xiaomi: '浏览云端图片和视频，手动上传或移入回收站。', logs: '查看任务进展、连接恢复与失败原因。', settings: '按你的习惯，安排每一份资源。' }
 
 function message(value: string) {
   appModel.toast = value; clearTimeout(toastTimer)
@@ -128,11 +129,12 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
       <nav class="main-nav" aria-label="主导航"><button v-for="item in navigation" :key="item.id" :class="{ selected: appModel.page === item.id }" :aria-current="appModel.page === item.id ? 'page' : undefined" @click="navigate(item.id)"><Icon :name="item.icon" /><span>{{ item.title }}</span><span v-if="item.id === 'history' && completed" class="nav-count">{{ completed }}</span></button></nav>
       <div class="sidebar-bottom"><div class="storage-label"><Icon name="folder" :size="18" /><span>文件保存在你的设备<small>{{ appModel.status?.download_dir || '正在读取…' }}</small></span></div><button class="account-menu" aria-label="退出管理页面" @click="logout"><Icon name="lock" :size="18" /><span>退出管理页面</span><Icon name="logout" :size="17" /></button></div>
     </aside>
-    <div class="workspace"><header class="topbar"><span>我的资源库<span class="slash">/</span>{{ title }}</span><div class="connection"><span class="status-dot" :class="{ online: running }"></span>{{ phase }}</div></header>
+    <div class="workspace"><header class="topbar"><span>我的资源库<span class="slash">/</span>{{ title }}</span><div v-if="appModel.page !== 'xiaomi'" class="connection"><span class="status-dot" :class="{ online: running }"></span>{{ phase }}</div></header>
       <main class="page-content"><div class="page-heading"><div><h1>{{ title }}</h1><p>{{ pageDescriptions[appModel.page] }}</p></div><button v-if="appModel.page === 'overview' && appModel.status?.account && appModel.settings?.chat" :class="appModel.settings.enabled ? 'secondary' : 'primary'" :disabled="appModel.busy || appModel.status.pending" @click="toggleWatcher"><Icon :name="appModel.settings.enabled ? 'pause' : 'play'" :size="17" />{{ appModel.settings.enabled ? '暂停收集' : '开始收集' }}</button></div>
-        <p v-if="appModel.error" class="notice error" role="alert">{{ appModel.error }}<button class="text-button" @click="refresh">重试</button></p>
-        <p v-if="appModel.status?.error && appModel.page !== 'history'" class="notice error" role="alert">{{ appModel.status.error }}</p>
-        <template v-if="appModel.settings && appModel.status">
+        <p v-if="appModel.error && appModel.page !== 'xiaomi'" class="notice error" role="alert">{{ appModel.error }}<button class="text-button" @click="refresh">重试</button></p>
+        <p v-if="appModel.status?.error && !['history', 'xiaomi'].includes(appModel.page)" class="notice error" role="alert">{{ appModel.status.error }}</p>
+        <XiaomiPanel v-if="appModel.page === 'xiaomi'" @message="message" />
+        <template v-else-if="appModel.settings && appModel.status">
           <template v-if="appModel.page === 'overview'">
             <WorkflowSteps :task="workflowTask" :settings="appModel.settings" />
             <section v-if="appModel.status.active_tasks.length || appModel.status.account" class="queue-panel"><div class="section-heading"><div><h2>下载队列 <small class="muted">最多 {{ appModel.settings.parallel_files }} 个文件同时下载</small></h2><p class="muted">{{ appModel.status.queue_paused ? '下载已暂停，新转发仍会进入队列。' : `每个文件最多 ${appModel.settings.download_parallelism} 路，文件数遵守 Telegram 上限；限流统一等待。` }}</p><p v-if="appModel.status.server_download_limits.small || appModel.status.server_download_limits.large" class="muted">同一数据中心上限：小文件 {{ appModel.status.server_download_limits.small || '未下发' }} 个，大文件 {{ appModel.status.server_download_limits.large || '未下发' }} 个。</p></div><button class="secondary" :disabled="appModel.busy" @click="toggleQueue"><Icon :name="appModel.status.queue_paused ? 'play' : 'pause'" :size="16" />{{ appModel.status.queue_paused ? '继续下载' : '暂停下载' }}</button></div>

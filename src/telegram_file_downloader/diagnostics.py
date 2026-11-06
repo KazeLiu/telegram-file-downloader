@@ -31,6 +31,8 @@ def configure_logs(data_dir):
         stream.setFormatter(formatter)
         logger.addHandler(stream)
     logging.getLogger("telethon").setLevel(logging.WARNING)
+    # Xiaomi's QR and storage URLs contain access tickets in their query strings.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     return directory
 
 

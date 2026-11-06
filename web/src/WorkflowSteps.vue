@@ -22,7 +22,7 @@ const nodes = computed(() => [
   { id: 'extract', title: '完整解压', icon: 'folder', detail: props.settings?.extract === false ? '自动解压已关闭。' : '先无密码，再尝试保存的密码；失败保留原包。' },
   { id: 'organize', title: '平铺到根目录', icon: 'workflow', detail: props.task?.result_files ? `已整理 ${props.task.result_files} 个文件到下载根目录。` : '资源A/第一套/001.jpg → 资源A-第一套-001.jpg' },
   { id: legacyPdf.value ? 'pdf' : legacyPsd.value ? 'psd' : 'cleanup', title: legacyPdf.value ? '旧版 PDF 清理' : legacyPsd.value ? '旧版 PSD 清理' : '回收 PSD / TXT', icon: 'trash', detail: cleanupDetail.value },
-  { id: 'cloud', title: '小米云相册', icon: 'cloud', detail: '待接入' },
+  { id: 'cloud', title: '小米云相册', icon: 'cloud', detail: '在侧栏打开「小米云相册」手动上传；此工作流不自动上传。' },
 ])
 function state(id: string) {
   if (id === 'cloud') return 'pending'
@@ -33,7 +33,7 @@ function state(id: string) {
   if (props.task?.stage === id) return ['failed', 'extraction_failed', 'processing_failed'].includes(props.task.status) ? 'failed' : ['paused', 'waiting', 'waiting_volumes'].includes(props.task.status) ? 'waiting' : 'active'
   return 'idle'
 }
-const labels: Record<string, string> = { done: '完成', active: '进行中', failed: '需处理', waiting: '等待', skipped: '已跳过', idle: '待执行', pending: '待接入' }
+const labels: Record<string, string> = { done: '完成', active: '进行中', failed: '需处理', waiting: '等待', skipped: '已跳过', idle: '待执行', pending: '手动上传' }
 </script>
 <template>
   <section class="workflow-panel" aria-label="资源处理工作流">
