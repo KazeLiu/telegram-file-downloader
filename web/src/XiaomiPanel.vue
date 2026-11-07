@@ -254,7 +254,7 @@ async function uploadFile() {
   }
   upload.error = ''; cloud.error = ''; cloud.busy = '正在上传到小米云…'
   try {
-    const response = await fetch(`/api/xiaomi/upload?${params({ album: cloud.album, name, size: String(file.size) })}`, {
+    const response = await fetch(`/api/xiaomi/upload?${params({ album: cloud.album, name, size: String(file.size), modified_at: String(file.lastModified) })}`, {
       method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file,
     })
     if (!response.ok) {

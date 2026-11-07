@@ -14,7 +14,9 @@ RETENTION_SECONDS = 15 * 86400
 
 
 def file_version(stat):
-    return f"{stat.st_dev}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_ctime_ns}"
+    # Windows stat/fstat can disagree on ctime; birthtime preserves the existing creation-time contract.
+    changed = getattr(stat, "st_birthtime_ns", stat.st_ctime_ns) if os.name == "nt" else stat.st_ctime_ns
+    return f"{stat.st_dev}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{changed}"
 
 
 def internal_directory(name):

@@ -6,7 +6,9 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import mimetypes
+import os
 import re
 import sqlite3
 import time
@@ -17,16 +19,18 @@ from urllib.parse import quote, urljoin, urlsplit
 from uuid import uuid4
 
 import httpx
+from PIL import Image
 
 from .console_store import ConsoleStore
+from .image_library import image_time
 
 
 CLOUD = "https://i.mi.com"
 ACCOUNT = "https://account.xiaomi.com"
 ACCOUNT_HOSTS = ("account.xiaomi.com",)
 CLOUD_HOSTS = ("i.mi.com",)
-STORAGE_HOSTS = ("i.mi.com", "mi-fds.com", "fds.api.xiaomi.com", "mi-img.com", "ksyuncs.com", "ks-cdn.com", "ksyun.com")
-THUMBNAIL_HOSTS = (*STORAGE_HOSTS, "xmssdn.micloud.mi.com")
+STORAGE_HOSTS = ("i.mi.com", "mi-fds.com", "fds.api.xiaomi.com", "mi-img.com", "ksyuncs.com", "ks-cdn.com", "ksyun.com", "xmssdn.micloud.mi.com")
+THUMBNAIL_HOSTS = STORAGE_HOSTS
 ID_PATTERN = r"^[0-9]{1,32}$"
 CONNECTION_PATTERN = r"^[a-f0-9]{32}$"
 BLOCK_SIZE = 4 * 1024 * 1024
@@ -34,6 +38,7 @@ UPLOAD_LIMIT = {"image": 100 * 1024**2, "video": 4 * 1024**3}
 ALBUM_NAMES = {"1": "相机", "2": "屏幕截图", "1000": "隐私相册"}
 THUMBNAIL_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"}
 THUMBNAIL_LIMIT = 512 * 1024
+LOGGER = logging.getLogger(__name__)
 
 
 class XiaomiError(Exception):
@@ -97,6 +102,24 @@ def upload_media(name):
     if kind not in {"image", "video"}:
         raise XiaomiError("只能上传图片和视频，请保留文件扩展名", 400)
     return kind, mime
+
+
+def upload_dates(file, kind, modified_at=None):
+    info = os.fstat(file.fileno())
+    birth = getattr(info, "st_birthtime", None) if modified_at is None else None
+    created = round(birth * 1000) if birth is not None else None
+    modified = info.st_mtime_ns // 1_000_000 if modified_at is None else modified_at
+    taken = created if created is not None else modified
+    if kind == "image":
+        try:
+            file.seek(0)
+            with Image.open(file) as image:
+                taken, _ = image_time(image, {"created_ms": created, "mtime_ns": modified * 1_000_000})
+        except (OSError, ValueError, SyntaxError) as exc:
+            LOGGER.warning("Image date metadata unavailable; using file time: %s", type(exc).__name__)
+        finally:
+            file.seek(0)
+    return {"dateTaken": taken, "dateModified": modified}
 
 
 @dataclass
@@ -490,11 +513,12 @@ class XiaomiCloud:
             # The web gallery uses info/delete for trash and separate purge endpoints for permanent deletion.
             await self.gallery(account, service, "/gallery/info/delete", form={"id": media_id})
 
-    async def upload(self, connection, album, name, kind, mime, size, file):
+    async def upload(self, connection, album, name, kind, mime, size, file, *, modified_at=None):
         account, service = await self.auth(connection)
+        dates = await asyncio.to_thread(upload_dates, file, kind, modified_at)
         digest, blocks = await asyncio.to_thread(upload_blocks, file, size)
         content = {"type": kind, "groupId": album, "mimeType": mime, "fileName": name,
-                   "title": PurePath(name).stem, "sha1": digest, "size": size, "dateModified": milliseconds()}
+                   "title": PurePath(name).stem, "sha1": digest, "size": size, **dates}
         data = await self.gallery(account, service, "/gallery/user/full", form={
             "data": json.dumps({"content": content, "block_infos": blocks}, ensure_ascii=False),
             "isClientUploadThumbnail": "false",

@@ -537,7 +537,7 @@ def create_app():
     @app.post("/api/xiaomi/upload")
     async def xiaomi_upload(request: Request, connection: str = Query(pattern=CONNECTION_PATTERN),
                             album: str = Query(pattern=ID_PATTERN), name: str = Query(min_length=1, max_length=255),
-                            size: int = Query(gt=0)):
+                            size: int = Query(gt=0), modified_at: int | None = Query(default=None)):
         kind, mime = upload_media(name)
         if album == "1000":
             raise XiaomiError("请在小米云网页版向隐私相册上传", 400)
@@ -566,7 +566,7 @@ def create_app():
                         await asyncio.to_thread(file.write, chunk)
                     if received != size:
                         raise XiaomiError("文件未传完整，请重新选择文件", 400)
-                    result = await xiaomi.upload(connection, album, name, kind, mime, size, file)
+                    result = await xiaomi.upload(connection, album, name, kind, mime, size, file, modified_at=modified_at)
                     return {"id": result["id"], "exists": result["exists"]}
             except OSError as exc:
                 if exc.errno != errno.ENOSPC:

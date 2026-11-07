@@ -1,0 +1,109 @@
+"""Upload timestamp and storage-boundary checks; no cloud requests or original files."""
+import json
+import tempfile
+import unittest
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import httpx
+from PIL import Image
+
+from telegram_file_downloader.storage import file_version
+from telegram_file_downloader.xiaomi_cloud import STORAGE_HOSTS, XiaomiCloud, XiaomiError, upload_dates, xiaomi_url
+
+
+class UploadDatesChecks(unittest.TestCase):
+    def setUp(self):
+        self.file = tempfile.TemporaryFile()
+        self.addCleanup(self.file.close)
+        Image.new("RGB", (2, 2)).save(self.file, format="PNG")
+        self.info = SimpleNamespace(st_birthtime=1790152905.215, st_mtime_ns=1789887737000000000)
+
+    def test_original_file_times_and_browser_time_ignore_temporary_birth(self):
+        with patch("telegram_file_downloader.xiaomi_cloud.os.fstat", return_value=self.info):
+            dates = upload_dates(self.file, "image")
+            self.assertEqual(dates, {"dateTaken": 1790152905215, "dateModified": 1789887737000})
+            self.assertEqual(self.file.tell(), 0)
+            self.assertFalse(self.file.closed)
+            self.assertEqual(upload_dates(self.file, "image", 1609502400000),
+                             {"dateTaken": 1609502400000, "dateModified": 1609502400000})
+            del self.info.st_birthtime
+            self.assertEqual(upload_dates(self.file, "video"),
+                             {"dateTaken": 1789887737000, "dateModified": 1789887737000})
+
+    def test_exif_date_with_offset_wins_over_file_creation(self):
+        self.file.seek(0)
+        self.file.truncate()
+        exif = Image.Exif()
+        exif[36867] = "2020:01:02 12:00:00"
+        exif[36881] = "+08:00"
+        Image.new("RGB", (2, 2)).save(self.file, format="JPEG", exif=exif)
+        expected = round(datetime(2020, 1, 2, 4, tzinfo=timezone.utc).timestamp() * 1000)
+        with patch("telegram_file_downloader.xiaomi_cloud.os.fstat", return_value=self.info):
+            dates = upload_dates(self.file, "image")
+        self.assertEqual(dates["dateTaken"], expected)
+        self.assertEqual(dates["dateModified"], 1789887737000)
+        self.assertEqual(self.file.tell(), 0)
+
+    def test_unreadable_metadata_reports_file_time_fallback(self):
+        with patch("telegram_file_downloader.xiaomi_cloud.os.fstat", return_value=self.info), \
+                patch("telegram_file_downloader.xiaomi_cloud.Image.open", side_effect=OSError("unsupported image")), \
+                self.assertLogs("telegram_file_downloader.xiaomi_cloud", level="WARNING"):
+            self.assertEqual(upload_dates(self.file, "image")["dateTaken"], 1790152905215)
+
+    def test_official_storage_node_allowed_without_weakening_url_checks(self):
+        node = "https://kssh2.xmssdn.micloud.mi.com/2/1595215017082"
+        self.assertEqual(xiaomi_url(node, STORAGE_HOSTS), node)
+        for invalid in (node.replace("https:", "http:"),
+                        "https://xmssdn.micloud.mi.com.evil.test/upload",
+                        "https://user@kssh2.xmssdn.micloud.mi.com/upload",
+                        "https://kssh2.xmssdn.micloud.mi.com:80/upload"):
+            with self.subTest(invalid=invalid), self.assertRaises(XiaomiError):
+                xiaomi_url(invalid, STORAGE_HOSTS)
+
+    def test_windows_path_and_handle_versions_keep_same_birthtime(self):
+        path = SimpleNamespace(st_dev=1, st_ino=2, st_size=3, st_mtime_ns=4, st_ctime_ns=5, st_birthtime_ns=5)
+        handle = SimpleNamespace(**{**vars(path), "st_ctime_ns": 6})
+        with patch("telegram_file_downloader.storage.os.name", "nt"):
+            self.assertEqual(file_version(path), file_version(handle))
+        with patch("telegram_file_downloader.storage.os.name", "posix"):
+            self.assertNotEqual(file_version(path), file_version(handle))
+
+
+class UploadPayloadChecks(unittest.IsolatedAsyncioTestCase):
+    async def test_dates_reach_create_request_and_dedup_does_not_need_storage_url(self):
+        cloud = XiaomiCloud.__new__(XiaomiCloud)
+        cloud.auth = AsyncMock(return_value=({}, "test-session"))
+        cloud.gallery = AsyncMock(return_value={"content": {"id": "1"}, "fileExists": True})
+        with tempfile.TemporaryFile() as file:
+            Image.new("RGB", (2, 2)).save(file, format="PNG")
+            size = file.tell()
+            result = await cloud.upload("connection", "1", "photo.png", "image", "image/png", size, file,
+                                        modified_at=1609502400000)
+            content = json.loads(cloud.gallery.call_args.kwargs["form"]["data"])["content"]
+        self.assertEqual(content["dateTaken"], 1609502400000)
+        self.assertEqual(content["dateModified"], 1609502400000)
+        self.assertTrue(result["exists"])
+
+    async def test_new_upload_uses_official_node_and_commits_without_account_cookies(self):
+        cloud = XiaomiCloud.__new__(XiaomiCloud)
+        cloud.auth = AsyncMock(return_value=({}, "test-session"))
+        cloud.gallery = AsyncMock(side_effect=[{
+            "content": {"id": "1"}, "kss": {
+                "node_urls": ["https://kssh2.xmssdn.micloud.mi.com/2/1595215017082"],
+                "file_meta": "file", "block_metas": [{"block_meta": "block", "is_existed": 0}],
+            },
+        }, {}])
+        cloud.request = AsyncMock(return_value=httpx.Response(200, json={"commit_meta": "commit"}))
+        with tempfile.TemporaryFile() as file:
+            Image.new("RGB", (2, 2)).save(file, format="PNG")
+            result = await cloud.upload("connection", "1", "photo.png", "image", "image/png", file.tell(), file)
+        self.assertFalse(result["exists"])
+        self.assertTrue(cloud.request.call_args.args[1].startswith("https://kssh2.xmssdn.micloud.mi.com/"))
+        self.assertNotIn("cookies", cloud.request.call_args.kwargs)
+        self.assertEqual(cloud.gallery.call_args.args[2], "/gallery/user/full/1/storage")
+
+
+if __name__ == "__main__":
+    unittest.main()
