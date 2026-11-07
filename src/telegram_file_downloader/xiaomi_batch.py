@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 from stat import S_ISREG
 from uuid import uuid4
@@ -15,6 +15,7 @@ from .xiaomi_cloud import UPLOAD_LIMIT, XiaomiError, upload_media
 
 LOGGER = logging.getLogger(__name__)
 PAGE_SIZE = 60
+UPLOAD_CONCURRENCY = 3
 
 
 def local_media(root):
@@ -75,7 +76,7 @@ class XiaomiBatch:
             raise ValueError("上传清单中有重复文件，请重新选择")
         await self.cloud.write_lock.acquire()
         job = self.job = dict(id=uuid4().hex, connection=connection, album=album, state="uploading",
-                              current="", error="", done=0, revision=0,
+                              error="", done=0, revision=0,
                               gate=asyncio.Event(),
                               items=[dict(item, status="waiting", error="") for item in selected])
         job["gate"].set()
@@ -108,7 +109,8 @@ class XiaomiBatch:
         counts = Counter(item["status"] for item in items)
         eligible = sum(item["status"] == "verified" and item.get("kind") == "image" for item in items)
         offset = (page - 1) * PAGE_SIZE
-        return dict(id=job["id"], album=job["album"], state=job["state"], current=job["current"],
+        current = "、".join(item["name"] for item in items if item["status"] == "uploading")
+        return dict(id=job["id"], album=job["album"], state=job["state"], current=current,
                     error=job["error"], done=job["done"], total=len(items), page_size=PAGE_SIZE,
                     counts=counts, eligible=eligible, revision=job["revision"],
                     items=[{key: item[key] for key in ("name", "status", "error")}
@@ -123,39 +125,25 @@ class XiaomiBatch:
         return job
 
     async def run(self, job):
+        pending = deque(job["items"])
+
+        async def worker():
+            while pending:
+                await job["gate"].wait()
+                if job["state"] == "stopping" or job["error"] or not pending:
+                    return
+                await self.upload_item(job, pending.popleft())
+                if (job["state"] == "pausing" and pending
+                        and not any(item["status"] == "uploading" for item in job["items"])):
+                    job["state"] = "paused"
+
         try:
             if not any(album["id"] == job["album"] for album in await self.cloud.albums(job["connection"])):
                 raise XiaomiError("目标相册已不存在或不可访问，未上传任何文件", 409)
-            for item in job["items"]:
-                if job["state"] == "pausing":
-                    job.update(state="paused", current="")
-                await job["gate"].wait()
-                if job["state"] == "stopping":
-                    break
-                job["current"] = item["name"]
-                try:
-                    path, info = selected_file(self.root, item)
-                    kind, mime = upload_media(item["name"])
-                    if not 0 < info.st_size < UPLOAD_LIMIT[kind]:
-                        raise ValueError("文件为空或超过小米云上传大小限制")
-                    with path.open("rb") as file:
-                        if file_version(os.fstat(file.fileno())) != item["version"]:
-                            raise ValueError("本地文件已变化，请刷新后重新选择")
-                        result = await self.cloud.upload(job["connection"], job["album"], item["name"],
-                                                         kind, mime, info.st_size, file)
-                        if file_version(os.fstat(file.fileno())) != item["version"]:
-                            raise ValueError("上传期间本地文件已变化，已保留原文件")
-                    item.update(kind=kind, status="uploaded", receipt=(result["id"], result["sha1"], str(info.st_size)))
-                except XiaomiError as exc:
-                    item.update(status="failed", error=str(exc))
-                    if exc.status in {409, 429, 503, 504}:
-                        job["error"] = "已停止后续上传：" + str(exc)
-                        break
-                except (OSError, ValueError) as exc:
-                    item.update(status="failed", error=str(exc))
-                finally:
-                    job["done"] += 1
-            job.update(state="stopping" if job["state"] == "stopping" else "verifying", current="")
+            async with asyncio.TaskGroup() as workers:
+                for _ in range(UPLOAD_CONCURRENCY):
+                    workers.create_task(worker())
+            job["state"] = "stopping" if job["state"] == "stopping" else "verifying"
             try:
                 await self.verify(job)
             except XiaomiError as exc:
@@ -166,8 +154,35 @@ class XiaomiBatch:
             LOGGER.error("Xiaomi batch upload interrupted: %s", type(exc).__name__)
             job["error"] = "批量上传中断，未确认的文件仍保留在本地"
         finally:
-            job.update(state="stopped" if job["state"] == "stopping" else "complete", current="")
+            job["state"] = "stopped" if job["state"] == "stopping" else "complete"
             self.cloud.write_lock.release()
+
+    async def upload_item(self, job, item):
+        item["status"] = "uploading"
+        try:
+            path, info = selected_file(self.root, item)
+            kind, mime = upload_media(item["name"])
+            if not 0 < info.st_size < UPLOAD_LIMIT[kind]:
+                raise ValueError("文件为空或超过小米云上传大小限制")
+            with path.open("rb") as file:
+                if file_version(os.fstat(file.fileno())) != item["version"]:
+                    raise ValueError("本地文件已变化，请刷新后重新选择")
+                result = await self.cloud.upload(job["connection"], job["album"], item["name"],
+                                                 kind, mime, info.st_size, file)
+                if file_version(os.fstat(file.fileno())) != item["version"]:
+                    raise ValueError("上传期间本地文件已变化，已保留原文件")
+            item.update(kind=kind, status="uploaded", receipt=(result["id"], result["sha1"], str(info.st_size)))
+        except XiaomiError as exc:
+            item.update(status="failed", error=str(exc))
+            if exc.status in {409, 429, 503, 504}:
+                job["error"] = "已停止后续上传：" + str(exc)
+                job["gate"].set()
+        except (OSError, ValueError) as exc:
+            item.update(status="failed", error=str(exc))
+        finally:
+            if item["status"] == "uploading":
+                item.update(status="failed", error="上传中断，请核对云端后再试")
+            job["done"] += 1
 
     async def verify(self, job, candidates=None):
         if candidates is None:

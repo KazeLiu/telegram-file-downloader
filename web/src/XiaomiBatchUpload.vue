@@ -4,7 +4,7 @@ import { api, bytes } from './api'
 import Icon from './Icon.vue'
 
 type LocalFile = { name: string; kind: 'image' | 'video'; size: number; version: string }
-type ItemState = 'waiting' | 'uploaded' | 'verified' | 'failed' | 'recycled' | 'kept'
+type ItemState = 'waiting' | 'uploading' | 'uploaded' | 'verified' | 'failed' | 'recycled' | 'kept'
 type Job = { id: string; album: string; state: 'uploading' | 'pausing' | 'paused' | 'verifying' | 'stopping' | 'stopped' | 'complete'; current: string; error: string;
   total: number; done: number; eligible: number; revision: number; page_size: number; counts: Partial<Record<ItemState, number>>;
   items: { name: string; status: ItemState; error: string }[] }
@@ -19,10 +19,10 @@ const progressText = computed(() => {
   const job = model.job
   if (!job) return ''
   if (job.state === 'paused') return `已暂停 · 已处理 ${job.done} / ${job.total}`
-  if (job.state === 'pausing') return `正在暂停，等待当前文件完成 · ${job.current || '正在准备'}`
-  if (job.state === 'stopping') return job.current ? `正在停止，等待当前文件完成 · ${job.current}` : '正在停止，核对已上传的文件…'
+  if (job.state === 'pausing') return `正在暂停，等待在途文件完成 · ${job.current || '正在准备'}`
+  if (job.state === 'stopping') return job.current ? `正在停止，等待在途文件完成 · ${job.current}` : '正在停止，核对已上传的文件…'
   if (job.state === 'verifying') return '正在核对目标相册中的文件…'
-  return `已处理 ${job.done} / ${job.total} · ${job.current || '正在准备'}`
+  return `已处理 ${job.done} / ${job.total} · 正在上传 ${job.counts.uploading || 0} / 3 个文件 · ${job.current || '正在准备'}`
 })
 const albumName = computed(() => {
   const id = model.selecting ? props.album : model.job?.album
@@ -32,7 +32,7 @@ const pageSize = computed(() => model.selecting ? 60 : model.job?.page_size || 6
 const pages = computed(() => Math.max(1, Math.ceil((model.selecting ? model.files.length : model.job?.total || 0) / pageSize.value)))
 const filesOnPage = computed(() => model.files.slice((model.page - 1) * pageSize.value, model.page * pageSize.value))
 const allSelected = computed(() => model.files.length > 0 && model.selected.size === model.files.length)
-const labels: Record<ItemState, string> = { waiting: '未上传', uploaded: '尚未确认', verified: '云端已确认', failed: '上传未完成', recycled: '已回收本地图片', kept: '本地未回收' }
+const labels: Record<ItemState, string> = { waiting: '未上传', uploading: '正在上传', uploaded: '尚未确认', verified: '云端已确认', failed: '上传未完成', recycled: '已回收本地图片', kept: '本地未回收' }
 let timer: ReturnType<typeof setTimeout>
 let disposed = false
 let promptedJob = ''
@@ -162,7 +162,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
           <button v-if="model.job.state === 'pausing' || model.job.state === 'paused'" class="primary" :disabled="model.busy" @click="control('resume')"><Icon name="play" :size="17" />继续上传</button>
           <button v-if="model.job.state !== 'stopping'" class="secondary danger-text" :disabled="model.busy" @click="control('stop')"><Icon name="close" :size="17" />停止</button>
         </div>
-        <p class="muted batch-tools">暂停、停止会等待当前文件完成，不再开始下一项。关闭窗口不等于停止；批次结束后，有可回收图片时会再次询问。</p>
+        <p class="muted batch-tools">最多同时上传 3 个文件。暂停、停止会等待在途文件完成，不再开始新文件。关闭窗口不等于停止；批次结束后，有可回收图片时会再次询问。</p>
         <p v-if="model.job.state === 'paused'" class="muted">暂停保留本批次的云端写操作，继续或停止后才能进行其他上传或云端回收。</p>
       </template>
       <template v-else>
