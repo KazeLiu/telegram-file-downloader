@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { animate, AnimatePresence, MotionConfig, motion, useMotionValue, useReducedMotion } from 'motion-v'
+import { animate, AnimatePresence, MotionConfig, motion, useMotionValue, useReducedMotion, useTransform } from 'motion-v'
 import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { bytes, imageThumbnail, type LibraryPicture as Picture } from './api'
 import { takenAt } from './xiaomiMedia'
 import { reviewNeedsRecycle, type ReviewDecision as Decision } from './reviewSelection'
+import { reviewAxis, reviewDrag, type ReviewAxis } from './reviewGestures'
 import { useBeforeUnload } from './useBeforeUnload'
 import Icon from './Icon.vue'
 
-type Direction = 'previous' | 'next' | Decision
+type Navigation = 'previous' | 'next'
+type ExitAction = { decision: Decision; edge: -1 | 1 }
+type SlideTransition = { way: Navigation; action?: ExitAction }
 type Pan = { offset: { x: number; y: number } }
 const props = defineProps<{
   loadPage: (after: number) => Promise<{ items: Picture[]; next_cursor: number | null; total: number }>
@@ -20,13 +23,19 @@ const queue = shallowRef<Picture[]>([])
 const index = ref(0)
 const total = ref(0)
 const cursor = ref<number | null>(null)
-const direction = ref<Direction>('next')
+const direction = shallowRef<SlideTransition>({ way: 'next' })
+const step = ref<Navigation>('next')
 const loading = ref(false)
 const error = ref('')
 const reducedMotion = useReducedMotion()
-const centeredPosition = () => ({ x: useMotionValue(0), y: useMotionValue(0) })
+const centeredPosition = () => ({ y: useMotionValue(0) })
 const position = shallowRef(centeredPosition())
-let panning: typeof position.value | undefined
+const topProgress = useMotionValue(0)
+const bottomProgress = useMotionValue(0)
+const topOffset = useTransform(topProgress, [0, 1], [-24, 0])
+const bottomOffset = useTransform(bottomProgress, [0, 1], [24, 0])
+const armedEdge = ref<-1 | 0 | 1>(0)
+let panning: { position: typeof position.value; axis: ReviewAxis; height: number; marked: boolean; origin: number } | undefined
 const decisions = reactive(new Map<number, Decision>())
 const history = reactive<{ index: number; previous?: Decision }[]>([])
 const broken = reactive(new Set<number>())
@@ -34,6 +43,7 @@ const current = computed<Picture | undefined>(() => queue.value[index.value])
 const timeSources = { taken: '拍摄时间', digitized: '数字化时间', image: '图片日期', created: '文件创建时间', modified: '修改时间' }
 watch(current, item => { if (item && dialog.value?.open) emit('change', item.id) })
 const pending = computed(() => queue.value.filter((_, i) => needsRecycle(i)))
+const currentMarked = computed(() => needsRecycle(index.value))
 useBeforeUnload(() => pending.value.length > 0)
 const canAdvance = computed(() => index.value + 1 < queue.value.length || cursor.value !== null)
 const filmstrip = computed(() => {
@@ -41,17 +51,13 @@ const filmstrip = computed(() => {
   return Array.from({ length: 7 }, (_, slot) => center + slot - 3)
 })
 const slide = {
-  enter: (way: Direction) => way === 'keep' || way === 'recycle'
-    ? { opacity: 0, scale: .93 }
-    : { opacity: 0, x: way === 'previous' ? -32 : 32 },
+  enter: ({ way }: SlideTransition) => ({ opacity: 0, x: way === 'previous' ? -32 : 32, y: 0, scale: 1 }),
   visible: { opacity: 1, x: 0, y: 0, scale: 1 },
-  exit: (way: Direction) => {
-    const width = stage.value?.clientWidth ?? 0
+  exit: ({ way, action }: SlideTransition) => {
     const height = stage.value?.clientHeight ?? 0
-    const outgoing = { opacity: 0, zIndex: 1, transition: { duration: .24, zIndex: { duration: 0 } } }
-    if (way === 'recycle') return { ...outgoing, x: 0, y: height * .4, scale: .14, rotate: -8 }
-    if (way === 'keep') return { ...outgoing, x: 0, y: -height, scale: .96 }
-    return { ...outgoing, x: way === 'previous' ? width : -width, y: 0 }
+    const outgoing = { opacity: 0, zIndex: 1, transition: { duration: reducedMotion.value ? 0 : .2, zIndex: { duration: 0 } } }
+    if (action) return { ...outgoing, x: 0, y: action.edge * height * .2, scale: action.decision === 'recycle' ? .25 : .92 }
+    return { ...outgoing, x: way === 'previous' ? 80 : -80, y: 0 }
   },
 }
 
@@ -60,9 +66,9 @@ function open(items: Picture[], item: Picture, nextCursor: number | null, count:
   index.value = items.indexOf(item)
   cursor.value = nextCursor
   total.value = count
-  direction.value = 'next'
+  direction.value = { way: 'next' }
   position.value = centeredPosition()
-  panning = undefined
+  resetPan()
   loading.value = false
   error.value = ''
   decisions.clear(); history.length = 0; broken.clear()
@@ -72,19 +78,21 @@ function open(items: Picture[], item: Picture, nextCursor: number | null, count:
 defineExpose({ open, close: () => dialog.value?.close() })
 
 function finish() {
+  resetPan()
   const kept = queue.value.filter((_, i) => decisions.get(i) === 'keep')
   emit('finish', pending.value, dialog.value?.returnValue === 'recycle', kept)
   queue.value = []
 }
-function go(target: number, way: Direction) {
-  if (target === index.value) return
-  direction.value = way
+function go(target: number, action?: ExitAction) {
+  if (target === index.value) { centerSlide(); return }
+  direction.value = { way: target < index.value ? 'previous' : 'next', action }
   position.value = centeredPosition()
+  resetPan()
   index.value = target
 }
-async function advance(way: 'next' | Decision) {
+async function advance(action?: ExitAction) {
   if (loading.value || !current.value) return
-  if (index.value + 1 < queue.value.length) { go(index.value + 1, way); return }
+  if (index.value + 1 < queue.value.length) { go(index.value + 1, action); return }
   if (cursor.value !== null) {
     const batch = queue.value
     centerSlide()
@@ -104,19 +112,23 @@ async function advance(way: 'next' | Decision) {
     cursor.value = page.next_cursor
     total.value = page.total
   }
-  if (index.value + 1 < queue.value.length || way !== 'next') go(index.value + 1, way)
+  if (index.value + 1 < queue.value.length || action) go(index.value + 1, action)
 }
-function previous() {
-  if (!loading.value && index.value > 0) go(index.value - 1, 'previous')
+function previous(action?: ExitAction) {
+  if (loading.value) return
+  if (index.value > 0) go(index.value - 1, action)
+  else centerSlide()
 }
-function decide(decision: Decision) {
+function decide(decision: Decision, edge: -1 | 1 = 1) {
   if (loading.value || !current.value) return
-  const previous = decisions.get(index.value)
-  if (previous !== decision) {
-    history.push({ index: index.value, previous })
+  const before = decisions.get(index.value)
+  if (before !== decision) {
+    history.push({ index: index.value, previous: before })
     decisions.set(index.value, decision)
   }
-  void advance(decision)
+  const action = { decision, edge }
+  if (step.value === 'previous') previous(action)
+  else void advance(action)
 }
 function undo() {
   if (loading.value) return
@@ -124,37 +136,53 @@ function undo() {
   if (!last) return
   if (last.previous) decisions.set(last.index, last.previous)
   else decisions.delete(last.index)
-  go(last.index, 'previous')
+  go(last.index)
+}
+function resetPan() {
+  panning = undefined
+  armedEdge.value = 0
+  for (const value of [topProgress, bottomProgress]) {
+    value.stop()
+    if (reducedMotion.value) value.jump(0)
+    else animate(value, 0, { duration: .16 })
+  }
 }
 function centerSlide() {
-  for (const value of [position.value.x, position.value.y]) {
-    if (reducedMotion.value) value.jump(0)
-    else if (value.get()) animate(value, 0, { type: 'spring', stiffness: 480, damping: 36 })
-  }
+  resetPan()
+  const value = position.value.y
+  if (reducedMotion.value) value.jump(0)
+  else animate(value, 0, { type: 'spring', stiffness: 480, damping: 36 })
 }
 function startPan() {
   if (!current.value || loading.value) return
-  panning = position.value
-  panning.x.stop()
-  panning.y.stop()
+  topProgress.jump(0); bottomProgress.jump(0)
+  armedEdge.value = 0
+  position.value.y.stop()
+  panning = { position: position.value, axis: null, height: stage.value!.clientHeight, marked: currentMarked.value, origin: position.value.y.get() }
 }
 function trackPan(_: PointerEvent, { offset: { x, y } }: Pan) {
-  if (panning !== position.value || loading.value || !dialog.value?.open) return
-  panning.x.set(x)
-  panning.y.set(y)
+  if (!panning || panning.position !== position.value || loading.value || !dialog.value?.open) return
+  panning.axis = reviewAxis(panning.axis, x, y)
+  if (panning.axis === 'horizontal') { position.value.y.jump(0); return }
+  if (panning.axis !== 'vertical') return
+  const drag = reviewDrag(panning.origin + y, panning.height, panning.marked)
+  position.value.y.set(drag.y)
+  topProgress.set(drag.top); bottomProgress.set(drag.bottom)
+  armedEdge.value = drag.edge
 }
 function panEnd(event: PointerEvent, info: Pan) {
-  if (panning !== position.value || !dialog.value?.open) return
+  if (!panning || panning.position !== position.value || !dialog.value?.open) return
   if (event.type === 'pointerup') trackPan(event, info)
+  const { axis, marked } = panning
+  const edge = armedEdge.value
   panning = undefined
   if (event.type !== 'pointerup' || loading.value) { centerSlide(); return }
-  const { x, y } = info.offset
-  const horizontal = Math.abs(x), vertical = Math.abs(y)
-  if (horizontal >= 56 && horizontal > vertical * 1.25) {
+  const { x } = info.offset
+  if (axis === 'horizontal' && Math.abs(x) >= 56) {
     if (x > 0 && index.value > 0) { previous(); return }
-    if (x < 0 && canAdvance.value) { void advance('next'); return }
-  } else if (vertical >= 56 && vertical > horizontal * 1.25) {
-    decide(y < 0 ? 'keep' : 'recycle')
+    if (x < 0 && canAdvance.value) { void advance(); return }
+  } else if (axis === 'vertical' && edge) {
+    decide(marked ? 'keep' : 'recycle', edge)
     return
   }
   centerSlide()
@@ -172,8 +200,8 @@ function keys(event: KeyboardEvent) {
   event.preventDefault()
   if (event.repeat) return
   if (event.key === 'ArrowLeft') previous()
-  else if (event.key === 'ArrowRight') void advance('next')
-  else decide(event.key === 'ArrowUp' ? 'keep' : 'recycle')
+  else if (event.key === 'ArrowRight') void advance()
+  else decide(currentMarked.value ? 'keep' : 'recycle', event.key === 'ArrowUp' ? -1 : 1)
 }
 function hasPreview(item: Picture) { return !!item.width && !item.error && !broken.has(item.id) }
 function markBroken(event: Event) { broken.add(Number((event.currentTarget as HTMLImageElement).dataset.imageId)) }
@@ -192,23 +220,26 @@ function needsRecycle(i: number) {
         <button class="icon-button" autofocus aria-label="关闭快速审阅" @click="dialog?.close()"><Icon name="close" /></button>
       </header>
 
-      <MotionConfig reduced-motion="user" :transition="{ duration: .2 }">
+      <MotionConfig reduced-motion="user" :transition="{ duration: reducedMotion ? 0 : .2 }">
         <div ref="stage" class="review-stage">
           <motion.div class="review-swipe" @panStart="startPan" @pan="trackPan" @panEnd="panEnd">
             <AnimatePresence :initial="false" :custom="direction">
-              <motion.div v-if="current" :key="current.id" class="review-slide" :style="position" :custom="direction" :variants="slide" initial="enter" animate="visible" exit="exit">
+              <motion.div v-if="current" :key="current.id" class="review-slide" :custom="direction" :variants="slide" initial="enter" animate="visible" exit="exit">
+                <motion.div class="review-drag" :style="position"><div class="review-picture" :class="{ 'in-recycle-zone': armedEdge !== 0 && !currentMarked }">
                 <img v-if="hasPreview(current)" :src="imageThumbnail(current)" :alt="current.name" :data-image-id="current.id" draggable="false" @error="markBroken" />
                 <p v-else class="review-empty"><Icon name="photo" :size="34" />{{ current.error || (broken.has(current.id) ? '图片预览加载失败' : '图片预览尚未生成') }}</p>
+                </div></motion.div>
               </motion.div>
               <motion.div v-else-if="queue.length" key="end" class="review-slide review-empty" :custom="direction" :variants="slide" initial="enter" animate="visible" exit="exit">
                 已到队列末尾
               </motion.div>
             </AnimatePresence>
-            <motion.span v-if="direction === 'recycle'" :key="index" class="review-bin" aria-hidden="true" :initial="{ opacity: 0 }"
-              :animate="{ opacity: [0, 1, 1, 0] }" :transition="{ duration: .4 }"><Icon name="trash" :size="22" /></motion.span>
+            <motion.div class="review-drop-zone top" :class="{ armed: armedEdge === -1 }" :style="{ opacity: topProgress, y: topOffset }" aria-hidden="true"><Icon name="trash" :size="26" /><span>{{ armedEdge === -1 ? '松手标记回收' : '拖入回收区' }}</span></motion.div>
+            <motion.div class="review-drop-zone bottom" :class="{ armed: armedEdge === 1 }" :style="{ opacity: bottomProgress, y: bottomOffset }" aria-hidden="true"><Icon name="trash" :size="26" /><span>{{ armedEdge === 1 ? '松手标记回收' : '拖入回收区' }}</span></motion.div>
           </motion.div>
-          <button class="icon-button review-arrow review-previous" :disabled="!index || loading" aria-label="上一张" @click="previous"><Icon name="chevron" /></button>
-          <button class="icon-button review-arrow review-next" :disabled="!canAdvance || loading" aria-label="下一张" @click="advance('next')"><Icon name="chevron" /></button>
+          <span v-if="currentMarked" class="review-mark" :class="{ releasing: armedEdge !== 0 }"><Icon :name="armedEdge ? 'restore' : 'trash'" :size="18" />{{ armedEdge ? '松手取消回收' : '已标记回收' }}</span>
+          <button class="icon-button review-arrow review-previous" :disabled="!index || loading" aria-label="上一张" @click="previous()"><Icon name="chevron" /></button>
+          <button class="icon-button review-arrow review-next" :disabled="!canAdvance || loading" aria-label="下一张" @click="advance()"><Icon name="chevron" /></button>
         </div>
       </MotionConfig>
 
@@ -225,7 +256,7 @@ function needsRecycle(i: number) {
         <div v-for="(position, slot) in filmstrip" :key="slot" class="review-slot">
           <button v-if="queue[position]" :key="queue[position].id" :aria-current="position === index ? 'true' : undefined" :disabled="loading"
             :aria-label="queue[position].name + (needsRecycle(position) ? '，待回收' : '')"
-            @click="go(position, position < index ? 'previous' : 'next')">
+            @click="go(position)">
             <img v-if="hasPreview(queue[position])" :src="imageThumbnail(queue[position])" :data-image-id="queue[position].id" alt="" draggable="false" decoding="async" @error="markBroken" />
             <Icon v-else name="photo" :size="17" />
             <span v-if="needsRecycle(position)" class="review-stamp"><Icon name="trash" :size="13" /></span>
@@ -235,9 +266,16 @@ function needsRecycle(i: number) {
 
       <p v-if="error" class="notice error review-status" role="alert">加载下一批图片失败：{{ error }}</p>
       <p v-else-if="loading" class="muted review-status" role="status">正在加载下一批图片…</p>
+      <div class="review-options">
+        <span class="text-sm text-muted">操作后</span>
+        <div class="review-order" role="group" aria-label="标记或取消回收后的跳转方向">
+          <button type="button" :aria-pressed="step === 'previous'" :disabled="loading" @click="step = 'previous'"><Icon name="chevron" class="rotate-180" :size="14" />上一张</button>
+          <button type="button" :aria-pressed="step === 'next'" :disabled="loading" @click="step = 'next'">下一张<Icon name="chevron" :size="14" /></button>
+        </div>
+      </div>
+      <p class="review-hint">{{ step === 'previous' && index === 0 ? '已到第一张，操作后停留在当前图片' : currentMarked ? '左右滑切图，上下滑取消回收' : '左右滑切图，上下拖入回收区后松手标记' }}</p>
       <footer class="review-actions">
-        <button class="secondary" :disabled="!current || loading" aria-keyshortcuts="ArrowUp" @click="decide('keep')">保留 <kbd>↑</kbd></button>
-        <button class="secondary recycle" :disabled="!current || loading" aria-keyshortcuts="ArrowDown" @click="decide('recycle')"><Icon name="trash" :size="17" />标记回收 <kbd>↓</kbd></button>
+        <button class="secondary recycle" :disabled="!current || loading" aria-keyshortcuts="ArrowUp ArrowDown" @click="decide(currentMarked ? 'keep' : 'recycle')"><Icon :name="currentMarked ? 'restore' : 'trash'" :size="17" />{{ currentMarked ? '取消回收' : '标记回收' }} <kbd>↑ / ↓</kbd></button>
         <button class="secondary" :disabled="!history.length || loading" aria-keyshortcuts="Control+Z Meta+Z" @click="undo">撤销</button>
         <button v-if="pending.length" class="danger" @click="dialog?.close('recycle')">移入回收站 · {{ pending.length }} 张</button>
       </footer>
@@ -252,18 +290,26 @@ function needsRecycle(i: number) {
   width: min(1020px, calc(100% - 32px)); height: min(830px, calc(100dvh - 32px)); max-height: none;
   @apply overscroll-contain bg-canvas p-0;
 }
-.review-layout { @apply flex h-full min-h-full flex-col gap-3 px-5 py-4; }
+.review-layout { @apply flex h-full min-h-full flex-col gap-3 overflow-y-auto px-5 py-4; }
 .review-heading { @apply grid grid-cols-[1fr_auto_1fr] items-center gap-2; }
 .review-heading button { @apply justify-self-end; }
 .review-count { @apply tabular-nums; }
-.review-stage { @apply relative min-h-[140px] flex-1 overflow-hidden rounded-xl bg-parchment; }
+.review-stage { @apply relative min-h-[140px] flex-1 shrink-0 overflow-hidden rounded-xl bg-parchment; }
 .review-swipe { @apply absolute inset-0 isolate cursor-grab touch-none select-none; }
 .review-swipe:active { @apply cursor-grabbing; }
 .review-slide { @apply pointer-events-none absolute inset-0 flex items-center justify-center px-[52px] py-2.5; }
 .review-slide img { @apply block size-full min-h-0 object-contain; }
+.review-drag, .review-picture { @apply flex size-full min-h-0 items-center justify-center; }
+.review-picture { transition: transform .14s ease-out, filter .14s ease-out, opacity .14s ease-out; }
+.review-picture.in-recycle-zone { transform: scale(.78); filter: grayscale(1); opacity: .55; }
 .review-empty { @apply flex flex-col items-center justify-center gap-2.5 text-center text-muted; }
-.review-bin { @apply pointer-events-none absolute bottom-[10%] left-1/2 z-[2] -translate-x-1/2 translate-y-1/2 rounded-full bg-danger p-2.5 text-white; }
-.review-arrow { @apply absolute top-1/2 -translate-y-1/2 bg-canvas shadow-sm; }
+.review-drop-zone { height: min(25%, 120px); @apply pointer-events-none absolute inset-x-2 z-[2] flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-danger/30 bg-danger/10 text-xs text-danger; }
+.review-drop-zone.top { @apply top-0; }
+.review-drop-zone.bottom { @apply bottom-0; }
+.review-drop-zone.armed { @apply border-danger bg-danger/20; }
+.review-mark { @apply pointer-events-none absolute bottom-3 left-3 z-[3] inline-flex items-center gap-1.5 rounded-full bg-canvas/95 px-3 py-2 text-xs text-danger shadow-sm; }
+.review-mark.releasing { @apply text-success; }
+.review-arrow { @apply absolute top-1/2 z-[4] -translate-y-1/2 bg-canvas shadow-sm; }
 .review-previous { @apply left-1.5; }
 .review-previous svg { rotate: 180deg; }
 .review-next { @apply right-1.5; }
@@ -279,6 +325,11 @@ function needsRecycle(i: number) {
 .review-slot img { @apply absolute inset-0 size-full object-cover; border-radius: inherit; }
 .review-stamp { @apply absolute right-[3px] bottom-[3px] grid size-5 place-items-center rounded-full bg-danger text-white; }
 .review-status { @apply text-center; }
+.review-options { @apply flex shrink-0 items-center justify-center gap-3; }
+.review-order { @apply inline-flex gap-0.5 rounded-lg bg-soft p-0.5; }
+.review-order button { @apply inline-flex min-h-11 items-center justify-center gap-1 rounded-md px-3 text-sm text-muted; }
+.review-order button[aria-pressed=true] { @apply bg-canvas text-blue shadow-xs; }
+.review-hint { @apply text-center text-[13px] leading-normal text-muted; }
 .review-actions { @apply flex flex-wrap justify-center gap-2; }
 .review-actions button { @apply gap-1.5 px-3 py-2; }
 .review-actions kbd { @apply text-muted; }

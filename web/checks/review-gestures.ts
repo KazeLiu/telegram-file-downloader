@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict'
+import { reviewAxis, reviewDrag } from '../src/reviewGestures.ts'
+
+assert.equal(reviewAxis(null, 3, 3), null)
+assert.equal(reviewAxis(null, 30, 30), null)
+assert.equal(reviewAxis(null, 40, 10), 'horizontal')
+assert.equal(reviewAxis('horizontal', 5, 120), 'horizontal')
+assert.equal(reviewAxis(null, 10, -40), 'vertical')
+assert.equal(reviewAxis('vertical', 120, 5), 'vertical')
+assert.deepEqual(reviewDrag(50, 400, false), { y: 50, edge: 0, top: 0, bottom: .5 })
+assert.equal(reviewDrag(100, 400, false).edge, 1)
+assert.equal(reviewDrag(-100, 400, false).edge, -1)
+assert.equal(reviewDrag(80, 400, false).edge, 0)
+assert.equal(reviewDrag(500, 400, false).y, 200)
+assert.equal(reviewDrag(55, 400, true).edge, 0)
+assert.deepEqual(reviewDrag(-56, 400, true), { y: -56, edge: -1, top: 0, bottom: 0 })
+assert.equal(reviewDrag(56, 140, false).edge, 1)
+assert.equal(reviewDrag(1, 400, false).edge, 0)
