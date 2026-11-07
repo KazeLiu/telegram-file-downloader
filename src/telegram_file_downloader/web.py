@@ -172,6 +172,10 @@ class XiaomiBatchAction(XiaomiConnection):
     job: str = Field(pattern=CONNECTION_PATTERN)
 
 
+class XiaomiBatchControl(XiaomiBatchAction):
+    action: Literal["pause", "resume", "stop"]
+
+
 class XiaomiBatchRecycle(XiaomiBatchAction):
     revision: int = Field(ge=0)
 
@@ -504,6 +508,11 @@ def create_app():
         job = batch.completed(body.connection, body.job)
         async with xiaomi.write_lock:
             await batch.verify(job)
+        return {"ok": True}
+
+    @app.post("/api/xiaomi/batch/control")
+    async def xiaomi_batch_control(body: XiaomiBatchControl):
+        batch.control(body.connection, body.job, body.action)
         return {"ok": True}
 
     @app.post("/api/xiaomi/batch/recycle")

@@ -217,7 +217,7 @@ async function backToAlbums() {
 }
 
 function batchFinished(album: string) {
-  if (album === cloud.album && !cloud.busy && !cloud.recycleActive) void run('正在刷新云相册…', () => loadMedia())
+  if (album === cloud.album && !cloud.busy && !cloud.recycleActive && !cloud.organizing) void run('正在刷新云相册…', () => loadMedia())
 }
 
 async function confirmRecycle(item: Media) {

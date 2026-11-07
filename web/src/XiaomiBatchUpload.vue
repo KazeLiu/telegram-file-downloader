@@ -5,7 +5,7 @@ import Icon from './Icon.vue'
 
 type LocalFile = { name: string; kind: 'image' | 'video'; size: number; version: string }
 type ItemState = 'waiting' | 'uploaded' | 'verified' | 'failed' | 'recycled' | 'kept'
-type Job = { id: string; album: string; state: 'uploading' | 'verifying' | 'complete'; current: string; error: string;
+type Job = { id: string; album: string; state: 'uploading' | 'pausing' | 'paused' | 'verifying' | 'stopping' | 'stopped' | 'complete'; current: string; error: string;
   total: number; done: number; eligible: number; revision: number; page_size: number; counts: Partial<Record<ItemState, number>>;
   items: { name: string; status: ItemState; error: string }[] }
 
@@ -14,7 +14,16 @@ const emit = defineEmits<{ message: [text: string]; finished: [album: string] }>
 const dialog = ref<HTMLDialogElement>()
 const model = reactive({ files: [] as LocalFile[], selected: new Set<string>(), job: null as Job | null,
   selecting: false, confirming: false, page: 1, busy: false, error: '', note: '' })
-const running = computed(() => !!model.job && model.job.state !== 'complete')
+const running = computed(() => !!model.job && !['complete', 'stopped'].includes(model.job.state))
+const progressText = computed(() => {
+  const job = model.job
+  if (!job) return ''
+  if (job.state === 'paused') return `已暂停 · 已处理 ${job.done} / ${job.total}`
+  if (job.state === 'pausing') return `正在暂停，等待当前文件完成 · ${job.current || '正在准备'}`
+  if (job.state === 'stopping') return job.current ? `正在停止，等待当前文件完成 · ${job.current}` : '正在停止，核对已上传的文件…'
+  if (job.state === 'verifying') return '正在核对目标相册中的文件…'
+  return `已处理 ${job.done} / ${job.total} · ${job.current || '正在准备'}`
+})
 const albumName = computed(() => {
   const id = model.selecting ? props.album : model.job?.album
   return props.albums.find(album => album.id === id)?.name || id || ''
@@ -26,6 +35,8 @@ const allSelected = computed(() => model.files.length > 0 && model.selected.size
 const labels: Record<ItemState, string> = { waiting: '未上传', uploaded: '尚未确认', verified: '云端已确认', failed: '上传未完成', recycled: '已回收本地图片', kept: '本地未回收' }
 let timer: ReturnType<typeof setTimeout>
 let disposed = false
+let promptedJob = ''
+let finishedJob = ''
 
 async function run(action: () => Promise<void>) {
   if (model.busy) return
@@ -43,10 +54,17 @@ async function loadFiles() {
 
 async function loadJob() {
   clearTimeout(timer)
-  const wasRunning = running.value
   model.job = (await api<{ job: Job | null }>(`/xiaomi/batch?connection=${props.connection}&page=${model.page}`)).job
-  if (wasRunning && model.job?.state === 'complete') emit('finished', model.job.album)
-  if (!disposed && dialog.value?.open && running.value) timer = setTimeout(() => void run(loadJob), 1500)
+  if (disposed) return
+  if (model.job && !running.value) {
+    if (finishedJob !== model.job.id) { finishedJob = model.job.id; emit('finished', model.job.album) }
+    if (model.job.eligible && promptedJob !== model.job.id) {
+      promptedJob = model.job.id
+      model.confirming = true
+      if (!dialog.value?.open) dialog.value?.showModal()
+    }
+  }
+  if (running.value) timer = setTimeout(() => void run(loadJob), 1500)
 }
 
 async function loadDialog() {
@@ -59,8 +77,6 @@ function open() {
   dialog.value?.showModal()
   void run(loadDialog)
 }
-
-function stopPolling() { clearTimeout(timer) }
 
 function selectAll() {
   if (allSelected.value) model.selected.clear()
@@ -97,6 +113,13 @@ function verify() {
   })
 }
 
+function control(action: 'pause' | 'resume' | 'stop') {
+  return run(async () => {
+    await api('/xiaomi/batch/control', { connection: props.connection, job: model.job!.id, action })
+    await loadJob()
+  })
+}
+
 function recycle() {
   model.confirming = false
   return run(async () => {
@@ -115,7 +138,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
 
 <template>
   <button class="primary" :disabled="disabled || model.busy" @click="open">从本地目录上传</button>
-  <dialog ref="dialog" class="task-dialog batch-dialog" @close="stopPolling">
+  <dialog ref="dialog" class="task-dialog batch-dialog">
     <div class="section-heading"><h2>批量上传{{ albumName ? `到「${albumName}」` : '' }}</h2><button class="icon-button" aria-label="关闭批量上传" :disabled="model.busy" @click="dialog?.close()"><Icon name="close" /></button></div>
     <p v-if="model.error" class="notice error" role="alert">{{ model.error }}<button class="text-button" :disabled="model.busy" @click="run(loadDialog)">刷新</button></p>
 
@@ -132,13 +155,25 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
     <template v-else-if="model.job">
       <p v-if="model.job.error" class="notice" role="status">{{ model.job.error }}</p>
       <template v-if="running">
-        <p class="batch-progress" role="status">{{ model.job.state === 'verifying' ? '正在核对目标相册中的文件…' : `已处理 ${model.job.done} / ${model.job.total} · ${model.job.current || '正在准备'}` }}</p>
+        <p class="batch-progress" role="status">{{ progressText }}</p>
         <progress :value="model.job.done" :max="model.job.total" aria-label="批量上传处理进度" />
-        <p class="muted batch-tools">关闭窗口后上传仍会继续。再次打开可查看进度。</p>
+        <div class="batch-controls">
+          <button v-if="model.job.state === 'uploading'" class="secondary" :disabled="model.busy" @click="control('pause')"><Icon name="pause" :size="17" />暂停</button>
+          <button v-if="model.job.state === 'pausing' || model.job.state === 'paused'" class="primary" :disabled="model.busy" @click="control('resume')"><Icon name="play" :size="17" />继续上传</button>
+          <button v-if="model.job.state !== 'stopping'" class="secondary danger-text" :disabled="model.busy" @click="control('stop')"><Icon name="close" :size="17" />停止</button>
+        </div>
+        <p class="muted batch-tools">暂停、停止会等待当前文件完成，不再开始下一项。关闭窗口不等于停止；批次结束后，有可回收图片时会再次询问。</p>
+        <p v-if="model.job.state === 'paused'" class="muted">暂停保留本批次的云端写操作，继续或停止后才能进行其他上传或云端回收。</p>
       </template>
       <template v-else>
-        <p class="batch-progress" role="status">云端已确认 {{ (model.job.counts.verified || 0) + (model.job.counts.recycled || 0) + (model.job.counts.kept || 0) }} / {{ model.job.total }} 个文件。{{ model.job.eligible }} 张图片可回收，视频保留在本地。</p>
+        <p class="batch-progress" role="status">{{ model.job.state === 'stopped' ? '批次已停止。' : '批次已结束。' }}云端已确认 {{ (model.job.counts.verified || 0) + (model.job.counts.recycled || 0) + (model.job.counts.kept || 0) }} / {{ model.job.total }} 个文件。{{ model.job.eligible }} 张图片可回收，视频保留在本地。</p>
         <p v-if="model.note" class="notice" role="status">{{ model.note }}</p>
+        <section v-if="model.confirming" class="batch-recycle-prompt" aria-labelledby="batch-recycle-question">
+          <h3 id="batch-recycle-question">是否回收已上传的本地照片？</h3>
+          <p>可回收 {{ model.job.eligible }} 张，移入项目回收站保留 15 天，之后自动永久清理。云端照片不删除；未上传、未确认和失败的本地文件保留。</p>
+          <p class="muted">执行前会再次核对云端记录和本地文件，已变化的文件不移动。</p>
+          <div class="dialog-actions"><button class="secondary" :disabled="model.busy" @click="model.confirming = false">暂时保留</button><button class="danger" :disabled="model.busy" @click="recycle">回收这 {{ model.job.eligible }} 张本地照片</button></div>
+        </section>
         <ul class="batch-list">
           <li v-for="item in model.job.items" :key="item.name" class="batch-result"><span>{{ item.name }}</span><span class="badge" :class="{ completed: item.status === 'verified' || item.status === 'recycled', failed: item.status === 'failed' || item.error }">{{ labels[item.status] }}</span><small v-if="item.error" class="danger-text">{{ item.error }}</small></li>
         </ul>
@@ -154,9 +189,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
       <button class="primary" :disabled="model.busy || !model.selected.size || !album || album === '1000'" @click="start">上传所选 {{ model.selected.size }} 个文件</button>
     </div>
     <template v-else-if="model.job && !running">
-      <p v-if="model.confirming" class="notice" role="status">将重新核对目标相册。仍在云端、且本地未变化的图片才会移入「本地图片快筛 → 回收站」。</p>
-      <div class="dialog-actions" v-if="model.confirming"><button class="secondary" @click="model.confirming = false">取消</button><button class="danger" @click="recycle">确认回收本地图片</button></div>
-      <div class="dialog-actions" v-else>
+      <div v-if="!model.confirming" class="dialog-actions">
         <button class="secondary" :disabled="model.busy" @click="run(loadFiles)">选择下一批</button>
         <button v-if="model.job.counts.uploaded" class="secondary" :disabled="model.busy" @click="verify">重新核对云端</button>
         <button v-if="model.job.eligible" class="primary" :disabled="model.busy" @click="model.confirming = true">回收已确认的 {{ model.job.eligible }} 张图片</button>
@@ -172,6 +205,10 @@ onUnmounted(() => { disposed = true; clearTimeout(timer) })
 .batch-dialog > .section-heading { @apply mb-3.5; }
 .batch-dialog h2, .batch-progress { overflow-wrap: anywhere; }
 .batch-tools, .batch-progress { @apply my-3.5; }
+.batch-controls { @apply my-3 flex flex-wrap gap-2; }
+.batch-recycle-prompt { @apply my-4 rounded-xl bg-soft p-4; }
+.batch-recycle-prompt h3 { @apply mb-2 text-base; }
+.batch-recycle-prompt p { @apply mt-2 text-sm; }
 .batch-list { @apply m-0 max-h-[min(42vh,460px)] list-none overflow-auto p-0; }
 .batch-list li { @apply px-1 py-2.5; border-top: 1px solid var(--color-soft); }
 .batch-list label, .batch-result { @apply grid min-h-[30px] items-center gap-2.5; }

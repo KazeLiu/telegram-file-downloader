@@ -76,8 +76,28 @@ class XiaomiBatch:
         await self.cloud.write_lock.acquire()
         job = self.job = dict(id=uuid4().hex, connection=connection, album=album, state="uploading",
                               current="", error="", done=0, revision=0,
+                              gate=asyncio.Event(),
                               items=[dict(item, status="waiting", error="") for item in selected])
+        job["gate"].set()
         self.task = asyncio.create_task(self.run(job), name="xiaomi-local-upload")
+
+    def control(self, connection, job_id, action):
+        self.account(connection)
+        job = self.job
+        if not job or job["id"] != job_id or job["connection"] != connection:
+            raise XiaomiError("上传批次已变化，请刷新后再操作", 409)
+        state = job["state"]
+        if action == "pause" and state == "uploading":
+            job["state"] = "pausing"
+            job["gate"].clear()
+        elif action == "resume" and state in {"pausing", "paused"}:
+            job["state"] = "uploading"
+            job["gate"].set()
+        elif action == "stop" and state in {"uploading", "pausing", "paused", "verifying"}:
+            job["state"] = "stopping"
+            job["gate"].set()
+        else:
+            raise XiaomiError("当前批次状态不支持此操作，请刷新后重试", 409)
 
     def view(self, connection, page):
         self.account(connection)
@@ -98,7 +118,7 @@ class XiaomiBatch:
         self.account(connection)
         self.idle()
         job = self.job
-        if not job or job["id"] != job_id or job["connection"] != connection or job["state"] != "complete":
+        if not job or job["id"] != job_id or job["connection"] != connection or job["state"] not in {"complete", "stopped"}:
             raise XiaomiError("上传批次已变化，请刷新后再操作", 409)
         return job
 
@@ -107,6 +127,11 @@ class XiaomiBatch:
             if not any(album["id"] == job["album"] for album in await self.cloud.albums(job["connection"])):
                 raise XiaomiError("目标相册已不存在或不可访问，未上传任何文件", 409)
             for item in job["items"]:
+                if job["state"] == "pausing":
+                    job.update(state="paused", current="")
+                await job["gate"].wait()
+                if job["state"] == "stopping":
+                    break
                 job["current"] = item["name"]
                 try:
                     path, info = selected_file(self.root, item)
@@ -130,7 +155,7 @@ class XiaomiBatch:
                     item.update(status="failed", error=str(exc))
                 finally:
                     job["done"] += 1
-            job.update(state="verifying", current="")
+            job.update(state="stopping" if job["state"] == "stopping" else "verifying", current="")
             try:
                 await self.verify(job)
             except XiaomiError as exc:
@@ -141,7 +166,7 @@ class XiaomiBatch:
             LOGGER.error("Xiaomi batch upload interrupted: %s", type(exc).__name__)
             job["error"] = "批量上传中断，未确认的文件仍保留在本地"
         finally:
-            job.update(state="complete", current="")
+            job.update(state="stopped" if job["state"] == "stopping" else "complete", current="")
             self.cloud.write_lock.release()
 
     async def verify(self, job, candidates=None):
