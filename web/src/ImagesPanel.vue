@@ -7,6 +7,7 @@ import ImageReviewDialog from './ImageReviewDialog.vue'
 import VirtualPhotoWall from './VirtualPhotoWall.vue'
 import Icon from './Icon.vue'
 import { formatNames, photoDay } from './xiaomiMedia'
+import { useBeforeUnload } from './useBeforeUnload'
 
 interface Recycled { id: string; original: string; size: number; created: number; reason: string; state: string }
 type View = 'all' | 'candidates' | 'recycle'
@@ -27,6 +28,7 @@ const canCopy = typeof navigator !== 'undefined' && !!navigator.clipboard
 const reviewDialog = ref<InstanceType<typeof ImageReviewDialog>>()
 const moreButton = ref<HTMLButtonElement>()
 const selectedCount = computed(() => imageModel.selected.size)
+useBeforeUnload(() => imageModel.organizing && selectedCount.value > 0)
 const blocked = computed(() => imageModel.loading || imageModel.busy)
 const toolbarBlocked = computed(() => blocked.value || imageModel.loadingMore)
 const canLoadMore = computed(() => imageModel.view !== 'recycle' && !imageModel.scan.running && imageModel.nextCursor !== null)

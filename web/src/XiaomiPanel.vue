@@ -12,6 +12,7 @@ import VirtualPhotoWall from './VirtualPhotoWall.vue'
 import XiaomiLocalBinding from './XiaomiLocalBinding.vue'
 import XiaomiLocalIndicator from './XiaomiLocalIndicator.vue'
 import { nextWallPage, photoDay, takenAt, type CloudMedia as Media, type LocalFileState } from './xiaomiMedia'
+import { useBeforeUnload } from './useBeforeUnload'
 
 type Account = { connection: string; label: string }
 type Album = { id: string; name: string; cover?: string }
@@ -31,6 +32,7 @@ const albumHeading = ref<HTMLHeadingElement>()
 const wallEnd = ref<HTMLDivElement>()
 const albumName = computed(() => cloud.albums.find(item => item.id === cloud.album)?.name || '')
 const selectedCount = computed(() => cloud.selected.size)
+useBeforeUnload(() => cloud.organizing && selectedCount.value > 0)
 const allSelected = computed(() => cloud.items.length > 0 && cloud.items.every(item => cloud.selected.has(item.id)))
 let pollTimer: ReturnType<typeof setTimeout>
 let disposed = false
