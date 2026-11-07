@@ -196,9 +196,11 @@ function activateImage(event: MouseEvent, item: Picture) {
 function review(item: Picture) {
   void router.push({ query: { ...route.query, photo: String(item.id) } })
 }
-function finishReview(items: Picture[], submit: boolean) {
+function finishReview(items: Picture[], submit: boolean, kept: Picture[]) {
+  if (activeReview === null || !route.path.startsWith('/images')) return
   activeReview = null
-  if (route.path.startsWith('/images') && route.query.photo) void router.replace({ query: { ...route.query, photo: undefined } })
+  if (route.query.photo) void router.replace({ query: { ...route.query, photo: undefined } })
+  for (const item of kept) select(item, false)
   if (!items.length) return
   imageModel.organizing = true
   for (const item of items) select(item, true)
@@ -341,7 +343,7 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
       <div class="recycle-list"><article v-for="item in imageModel.trash" :key="item.id"><span class="file-icon"><Icon :name="['image', 'xiaomi_upload', 'xiaomi_cloud'].includes(item.reason) ? 'photo' : 'file'" /></span><div><strong>{{ item.original }}</strong><p>{{ bytes(item.size) }} · {{ new Date(item.created * 1000).toLocaleString('zh-CN') }} · {{ item.reason === 'xiaomi_cloud' ? '云端联动回收' : item.reason === 'xiaomi_upload' ? '小米云上传后回收' : item.reason === 'image' ? '本地图片快筛' : '整理清理' }}</p><p v-if="item.state === 'exporting'" class="break-all">文件已移出项目回收站，需手动核对。记录：{{ item.id }}</p></div><button v-if="item.state !== 'exporting'" class="secondary" :disabled="blocked" @click="restore(item)"><Icon name="restore" :size="16" />还原</button></article></div><div v-if="!imageModel.trash.length" class="empty-list tall"><Icon name="trash" :size="38" /><h2>回收站是空的</h2><p>移入回收站的文件会出现在这里。</p></div>
     </template>
     <div v-if="imageModel.view === 'recycle'" class="pagination"><span>第 {{ imageModel.page }} / {{ Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize)) }} 页</span><button class="secondary" :disabled="blocked || imageModel.page === 1" @click="page(-1)">上一页</button><button class="secondary" :disabled="blocked || imageModel.page * imageModel.pageSize >= imageModel.total" @click="page(1)">下一页</button></div>
-    <ImageReviewDialog ref="reviewDialog" :load-page="listImages" @change="reviewChanged" @finish="finishReview" />
+    <ImageReviewDialog ref="reviewDialog" :load-page="listImages" :is-selected="isSelected" @change="reviewChanged" @finish="finishReview" />
     <dialog ref="namesDialog" class="task-dialog" aria-labelledby="local-recycle-names">
       <div class="section-heading"><h2 id="local-recycle-names">最近回收 · {{ lastLocalRecycle.length }} 张</h2><button class="icon-button" aria-label="关闭清单" @click="namesDialog?.close()"><Icon name="close" /></button></div>
       <textarea ref="namesField" class="my-4" readonly rows="6" aria-label="实际回收的文件名" :value="formatNames(lastLocalRecycle)" />

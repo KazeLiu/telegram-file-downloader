@@ -3,15 +3,17 @@ import { animate, AnimatePresence, MotionConfig, motion, useMotionValue, useRedu
 import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { bytes, imageThumbnail, type LibraryPicture as Picture } from './api'
 import { takenAt } from './xiaomiMedia'
+import { reviewNeedsRecycle, type ReviewDecision as Decision } from './reviewSelection'
+import { useBeforeUnload } from './useBeforeUnload'
 import Icon from './Icon.vue'
 
-type Decision = 'keep' | 'recycle'
 type Direction = 'previous' | 'next' | Decision
 type Pan = { offset: { x: number; y: number } }
 const props = defineProps<{
   loadPage: (after: number) => Promise<{ items: Picture[]; next_cursor: number | null; total: number }>
+  isSelected: (item: Picture) => boolean
 }>()
-const emit = defineEmits<{ finish: [items: Picture[], submit: boolean]; change: [id: number] }>()
+const emit = defineEmits<{ finish: [items: Picture[], submit: boolean, kept: Picture[]]; change: [id: number] }>()
 const dialog = ref<HTMLDialogElement>()
 const stage = ref<HTMLDivElement>()
 const queue = shallowRef<Picture[]>([])
@@ -32,6 +34,7 @@ const current = computed<Picture | undefined>(() => queue.value[index.value])
 const timeSources = { taken: '拍摄时间', digitized: '数字化时间', image: '图片日期', created: '文件创建时间', modified: '修改时间' }
 watch(current, item => { if (item && dialog.value?.open) emit('change', item.id) })
 const pending = computed(() => queue.value.filter((_, i) => needsRecycle(i)))
+useBeforeUnload(() => pending.value.length > 0)
 const canAdvance = computed(() => index.value + 1 < queue.value.length || cursor.value !== null)
 const filmstrip = computed(() => {
   const center = Math.min(index.value, queue.value.length - 1)
@@ -69,7 +72,8 @@ function open(items: Picture[], item: Picture, nextCursor: number | null, count:
 defineExpose({ open, close: () => dialog.value?.close() })
 
 function finish() {
-  emit('finish', pending.value, dialog.value?.returnValue === 'recycle')
+  const kept = queue.value.filter((_, i) => decisions.get(i) === 'keep')
+  emit('finish', pending.value, dialog.value?.returnValue === 'recycle', kept)
   queue.value = []
 }
 function go(target: number, way: Direction) {
@@ -173,7 +177,10 @@ function keys(event: KeyboardEvent) {
 }
 function hasPreview(item: Picture) { return !!item.width && !item.error && !broken.has(item.id) }
 function markBroken(event: Event) { broken.add(Number((event.currentTarget as HTMLImageElement).dataset.imageId)) }
-function needsRecycle(i: number) { return decisions.get(i) === 'recycle' }
+function needsRecycle(i: number) {
+  const item = queue.value[i]
+  return !!item && reviewNeedsRecycle(decisions.get(i), props.isSelected(item))
+}
 </script>
 
 <template>
