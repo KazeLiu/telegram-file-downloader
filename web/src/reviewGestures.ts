@@ -1,5 +1,10 @@
 export type ReviewAxis = 'horizontal' | 'vertical' | null
 
+export function reviewWheelStep(deltaX: number, deltaY: number): -1 | 0 | 1 {
+  if (!deltaY || Math.abs(deltaX) >= Math.abs(deltaY)) return 0
+  return deltaY > 0 ? 1 : -1
+}
+
 export function reviewAxis(locked: ReviewAxis, x: number, y: number): ReviewAxis {
   if (locked) return locked
   if (Math.abs(x) >= 8 && Math.abs(x) > Math.abs(y) * 1.25) return 'horizontal'

@@ -4,7 +4,7 @@ import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { bytes, imageThumbnail, type LibraryPicture as Picture } from './api'
 import { takenAt } from './xiaomiMedia'
 import { reviewNeedsRecycle, type ReviewDecision as Decision } from './reviewSelection'
-import { reviewAxis, reviewDrag, type ReviewAxis } from './reviewGestures'
+import { reviewAxis, reviewDrag, reviewWheelStep, type ReviewAxis } from './reviewGestures'
 import { useBeforeUnload } from './useBeforeUnload'
 import Icon from './Icon.vue'
 
@@ -203,6 +203,14 @@ function keys(event: KeyboardEvent) {
   else if (event.key === 'ArrowRight') void advance()
   else decide(currentMarked.value ? 'keep' : 'recycle', event.key === 'ArrowUp' ? -1 : 1)
 }
+function wheel(event: WheelEvent) {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+  const offset = reviewWheelStep(event.deltaX, event.deltaY)
+  if (!offset) return
+  event.preventDefault()
+  if (offset < 0) previous()
+  else void advance()
+}
 function hasPreview(item: Picture) { return !!item.width && !item.error && !broken.has(item.id) }
 function markBroken(event: Event) { broken.add(Number((event.currentTarget as HTMLImageElement).dataset.imageId)) }
 function needsRecycle(i: number) {
@@ -221,7 +229,8 @@ function needsRecycle(i: number) {
       </header>
 
       <MotionConfig reduced-motion="user" :transition="{ duration: reducedMotion ? 0 : .2 }">
-        <div ref="stage" class="review-stage">
+        <div ref="stage" class="review-stage" @wheel="wheel"
+          @mousedown.middle.prevent="decide(currentMarked ? 'keep' : 'recycle')" @auxclick.middle.prevent>
           <motion.div class="review-swipe" @panStart="startPan" @pan="trackPan" @panEnd="panEnd">
             <AnimatePresence :initial="false" :custom="direction">
               <motion.div v-if="current" :key="current.id" class="review-slide" :custom="direction" :variants="slide" initial="enter" animate="visible" exit="exit">
@@ -266,15 +275,14 @@ function needsRecycle(i: number) {
 
       <p v-if="error" class="notice error review-status" role="alert">加载下一批图片失败：{{ error }}</p>
       <p v-else-if="loading" class="muted review-status" role="status">正在加载下一批图片…</p>
-      <div class="review-options">
-        <span class="text-sm text-muted">操作后</span>
-        <div class="review-order" role="group" aria-label="标记或取消回收后的跳转方向">
-          <button type="button" :aria-pressed="step === 'previous'" :disabled="loading" @click="step = 'previous'"><Icon name="chevron" class="rotate-180" :size="14" />上一张</button>
-          <button type="button" :aria-pressed="step === 'next'" :disabled="loading" @click="step = 'next'">下一张<Icon name="chevron" :size="14" /></button>
-        </div>
-      </div>
-      <p class="review-hint">{{ step === 'previous' && index === 0 ? '已到第一张，操作后停留在当前图片' : currentMarked ? '左右滑切图，上下滑取消回收' : '左右滑切图，上下拖入回收区后松手标记' }}</p>
       <footer class="review-actions">
+        <div class="review-options">
+          <span class="text-sm text-muted">操作后</span>
+          <div class="review-order" role="group" aria-label="标记或取消回收后的跳转方向">
+            <button type="button" :aria-pressed="step === 'previous'" :disabled="loading" @click="step = 'previous'"><Icon name="chevron" class="rotate-180" :size="14" />上一张</button>
+            <button type="button" :aria-pressed="step === 'next'" :disabled="loading" @click="step = 'next'">下一张<Icon name="chevron" :size="14" /></button>
+          </div>
+        </div>
         <button class="secondary recycle" :disabled="!current || loading" aria-keyshortcuts="ArrowUp ArrowDown" @click="decide(currentMarked ? 'keep' : 'recycle')"><Icon :name="currentMarked ? 'restore' : 'trash'" :size="17" />{{ currentMarked ? '取消回收' : '标记回收' }} <kbd>↑ / ↓</kbd></button>
         <button class="secondary" :disabled="!history.length || loading" aria-keyshortcuts="Control+Z Meta+Z" @click="undo">撤销</button>
         <button v-if="pending.length" class="danger" @click="dialog?.close('recycle')">移入回收站 · {{ pending.length }} 张</button>
@@ -287,7 +295,7 @@ function needsRecycle(i: number) {
 @reference '../app/assets/main.css';
 
 .image-review {
-  width: min(1020px, calc(100% - 32px)); height: min(830px, calc(100dvh - 32px)); max-height: none;
+  width: min(1020px, calc(100% - 32px)); height: calc(100dvh - 32px); max-height: none;
   @apply overscroll-contain bg-canvas p-0;
 }
 .review-layout { @apply flex h-full min-h-full flex-col gap-3 overflow-y-auto px-5 py-4; }
@@ -327,17 +335,20 @@ function needsRecycle(i: number) {
 .review-status { @apply text-center; }
 .review-options { @apply flex shrink-0 items-center justify-center gap-3; }
 .review-order { @apply inline-flex gap-0.5 rounded-lg bg-soft p-0.5; }
-.review-order button { @apply inline-flex min-h-11 items-center justify-center gap-1 rounded-md px-3 text-sm text-muted; }
+.review-order button { @apply inline-flex min-h-[44px] items-center justify-center gap-1 rounded-md px-3 text-sm text-muted; }
 .review-order button[aria-pressed=true] { @apply bg-canvas text-blue shadow-xs; }
-.review-hint { @apply text-center text-[13px] leading-normal text-muted; }
-.review-actions { @apply flex flex-wrap justify-center gap-2; }
-.review-actions button { @apply gap-1.5 px-3 py-2; }
+.review-actions { @apply flex shrink-0 flex-wrap items-center justify-center gap-2; }
+.review-actions > button { @apply min-h-[44px] gap-1.5 px-3 py-2; }
 .review-actions kbd { @apply text-muted; }
 @media (max-width: 600px) {
   .image-review { width: 100%; height: 100dvh; max-width: none; margin: 0; border-radius: 0; }
   .review-layout { padding: max(10px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); gap: 10px; }
   .review-slide { padding-inline: 8px; }
   .review-arrow { background: color-mix(in srgb, var(--color-canvas) 88%, transparent); }
+  .review-options { @apply gap-1.5; }
+  .review-order button { @apply px-1.5; }
+  .review-order svg { @apply hidden; }
+  .review-actions > button { @apply px-2; }
   .review-actions kbd { display: none; }
 }
 @media (max-width: 420px) {

@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict'
-import { reviewAxis, reviewDrag } from '../src/reviewGestures.ts'
+import { reviewAxis, reviewDrag, reviewWheelStep } from '../src/reviewGestures.ts'
+
+assert.equal(reviewWheelStep(0, 0), 0)
+assert.equal(reviewWheelStep(0, 120), 1)
+assert.equal(reviewWheelStep(0, 1200), 1)
+assert.equal(reviewWheelStep(0, 3), 1)
+assert.equal(reviewWheelStep(0, -120), -1)
+assert.equal(reviewWheelStep(120, 10), 0)
+assert.equal(reviewWheelStep(120, 120), 0)
 
 assert.equal(reviewAxis(null, 3, 3), null)
 assert.equal(reviewAxis(null, 30, 30), null)
