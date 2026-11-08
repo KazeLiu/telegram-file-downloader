@@ -5,17 +5,48 @@ import asyncio
 import logging
 import os
 from collections import Counter, deque
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from stat import S_ISREG
 from uuid import uuid4
 
 from .storage import RecycleBin, file_version, inside, is_link
-from .xiaomi_cloud import UPLOAD_LIMIT, XiaomiError, upload_media
+from .xiaomi_cloud import UPLOAD_LIMIT, XiaomiError, receipt_record, record_time, upload_media
 
 
 LOGGER = logging.getLogger(__name__)
 PAGE_SIZE = 60
 UPLOAD_CONCURRENCY = 3
+
+
+def matches_receipt(record, receipt, album, *, scoped=False):
+    identity = (str(record.get("id")), str(record.get("sha1", "")).lower(), str(record.get("size")))
+    return (identity == receipt and record.get("status") != "deleted"
+            and (str(record.get("groupId")) == album or scoped and record.get("groupId") is None))
+
+
+def verification_ranges(items):
+    dated, undated = [], []
+    for index, item in enumerate(items):
+        try:
+            day = datetime.fromtimestamp(item["lookup_time"] / 1000, timezone.utc).date()
+            start, end = day - timedelta(days=1), day + timedelta(days=1)
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            undated.append(item)
+        else:
+            dated.append((start, end, index, item))
+    ranges = []
+    for start, end, _, item in sorted(dated):
+        # Adjacent windows share one scan; the one-day margin covers timezone boundaries.
+        if ranges and start.toordinal() <= ranges[-1][1].toordinal() + 1:
+            ranges[-1][1] = max(ranges[-1][1], end)
+            ranges[-1][2].append(item)
+        else:
+            ranges.append([start, end, [item]])
+    result = [(start.isoformat().replace("-", ""), end.isoformat().replace("-", ""), selected) for start, end, selected in ranges]
+    if undated:
+        result.append((None, None, undated))
+    return result
 
 
 def local_media(root):
@@ -77,6 +108,7 @@ class XiaomiBatch:
         await self.cloud.write_lock.acquire()
         job = self.job = dict(id=uuid4().hex, connection=connection, album=album, state="uploading",
                               error="", done=0, revision=0,
+                              verification=None,
                               gate=asyncio.Event(),
                               items=[dict(item, status="waiting", error="") for item in selected])
         job["gate"].set()
@@ -110,9 +142,11 @@ class XiaomiBatch:
         eligible = sum(item["status"] == "verified" and item.get("kind") == "image" for item in items)
         offset = (page - 1) * PAGE_SIZE
         current = "、".join(item["name"] for item in items if item["status"] == "uploading")
+        check_error = job["verification"]["error"] if job["verification"] else ""
         return dict(id=job["id"], album=job["album"], state=job["state"], current=current,
-                    error=job["error"], done=job["done"], total=len(items), page_size=PAGE_SIZE,
+                    error="；".join(error for error in (job["error"], check_error) if error), done=job["done"], total=len(items), page_size=PAGE_SIZE,
                     counts=counts, eligible=eligible, revision=job["revision"],
+                    verification=job["verification"],
                     items=[{key: item[key] for key in ("name", "status", "error")}
                            for item in items[offset:offset + PAGE_SIZE]])
 
@@ -144,12 +178,10 @@ class XiaomiBatch:
                 for _ in range(UPLOAD_CONCURRENCY):
                     workers.create_task(worker())
             job["state"] = "stopping" if job["state"] == "stopping" else "verifying"
-            try:
-                await self.verify(job)
-            except XiaomiError as exc:
-                job["error"] = (job["error"] + "；" if job["error"] else "") + "云端核对未完成：" + str(exc)
+            await self.verify(job)
         except XiaomiError as exc:
-            job["error"] = str(exc)
+            if job["verification"] is None:
+                job["error"] = str(exc)
         except Exception as exc:
             LOGGER.error("Xiaomi batch upload interrupted: %s", type(exc).__name__)
             job["error"] = "批量上传中断，未确认的文件仍保留在本地"
@@ -171,7 +203,8 @@ class XiaomiBatch:
                                                  kind, mime, info.st_size, file)
                 if file_version(os.fstat(file.fileno())) != item["version"]:
                     raise ValueError("上传期间本地文件已变化，已保留原文件")
-            item.update(kind=kind, status="uploaded", receipt=(result["id"], result["sha1"], str(info.st_size)))
+            item.update(kind=kind, status="uploaded", receipt=(result["id"], result["sha1"], str(info.st_size)),
+                        record=result["record"], lookup_time=result["lookup_time"])
         except XiaomiError as exc:
             item.update(status="failed", error=str(exc))
             if exc.status in {409, 429, 503, 504}:
@@ -184,42 +217,77 @@ class XiaomiBatch:
                 item.update(status="failed", error="上传中断，请核对云端后再试")
             job["done"] += 1
 
-    async def verify(self, job, candidates=None):
+    async def verify(self, job, candidates=None, *, fresh=False):
         if candidates is None:
             candidates = [item for item in job["items"] if item["status"] in {"uploaded", "verified"}]
-        remaining = {item["receipt"] for item in candidates}
-        page, seen = 0, set()
-        while remaining:
-            entries, last = await self.cloud.media_page(job["connection"], job["album"], page, 200)
-            ids = tuple(str(item.get("id")) for item in entries)
-            if not last and (not ids or ids in seen):
-                raise XiaomiError("小米云未返回完整相册列表，本地文件已保留")
-            seen.add(ids)
-            remaining.difference_update((str(item.get("id")), str(item.get("sha1", "")).lower(), str(item.get("size")))
-                                        for item in entries
-                                        if item.get("groupId") is None or str(item["groupId"]) == job["album"])
-            if last:
-                break
-            page += 1
+        progress = job["verification"] = dict(active=True, phase="receipt", done=0, total=len(candidates), pages=0, page=0, start=None, end=None, error="")
+        pending = []
         for item in candidates:
-            item["status"] = "uploaded" if item["receipt"] in remaining else "verified"
-        job["revision"] += 1
+            item.update(status="uploaded", error="")
+            if not fresh and matches_receipt(item["record"], item["receipt"], job["album"]):
+                item["status"] = "verified"
+                progress["done"] += 1
+            else:
+                pending.append(item)
+        try:
+            for start, end, selected in verification_ranges(pending):
+                remaining = {item["receipt"] for item in selected}
+                progress.update(phase="date" if start else "album", start=start, end=end, page=0)
+                page, seen = 0, set()
+                while remaining:
+                    progress["page"] = page + 1
+                    if start:
+                        entries, last = await self.cloud.media_page(job["connection"], job["album"], page, 200, day=start, end_day=end)
+                    else:
+                        entries, last = await self.cloud.media_page(job["connection"], job["album"], page, 200)
+                    progress["pages"] += 1
+                    ids = tuple(str(entry.get("id")) for entry in entries)
+                    if not last and (not ids or ids in seen):
+                        raise XiaomiError("小米云未返回完整相册列表，本地文件已保留")
+                    seen.add(ids)
+                    found = {}
+                    for entry in entries:
+                        receipt = (str(entry.get("id")), str(entry.get("sha1", "")).lower(), str(entry.get("size")))
+                        if receipt in remaining and matches_receipt(entry, receipt, job["album"], scoped=True):
+                            found[receipt] = receipt_record(entry)
+                    for item in selected:
+                        if item["receipt"] in found and item["status"] != "verified":
+                            item.update(status="verified", record=found[item["receipt"]])
+                            item["lookup_time"] = record_time(item["record"]) or item["lookup_time"]
+                            progress["done"] += 1
+                    remaining.difference_update(found)
+                    if last:
+                        break
+                    page += 1
+                for item in selected:
+                    if item["receipt"] in remaining:
+                        item["error"] = "未在目标相册的日期范围找到一致记录，本地文件已保留" if start else "未在目标相册找到一致记录，本地文件已保留"
+        except XiaomiError as exc:
+            progress["error"] = "云端核对未完成：" + str(exc)
+            raise
+        finally:
+            progress["active"] = False
+            job["revision"] += 1
 
-    async def recycle_images(self, candidates):
+    async def recycle_images(self, job, candidates):
+        candidates = [item for item in candidates if item["status"] == "verified"]
+        progress = job["verification"] = dict(active=True, phase="local", done=0, total=len(candidates), pages=0, page=0, start=None, end=None, error="")
         moved = 0
-        with RecycleBin(self.root) as recycle:
-            for item in candidates:
-                if item["status"] != "verified":
-                    continue
-                try:
-                    path, _ = selected_file(self.root, item)
-                    recycle.move(path, item.setdefault("recycle_id", uuid4().hex), "xiaomi_upload")
-                except (FileNotFoundError, ValueError) as exc:
-                    item.update(status="kept", error=str(exc))
-                except OSError as exc:
-                    item["error"] = str(exc)
-                else:
-                    item.update(status="recycled", error="")
-                    moved += 1
-                await asyncio.sleep(0)
+        try:
+            with RecycleBin(self.root) as recycle:
+                for item in candidates:
+                    try:
+                        path, _ = selected_file(self.root, item)
+                        recycle.move(path, item.setdefault("recycle_id", uuid4().hex), "xiaomi_upload")
+                    except (FileNotFoundError, ValueError) as exc:
+                        item.update(status="kept", error=str(exc))
+                    except OSError as exc:
+                        item["error"] = str(exc)
+                    else:
+                        item.update(status="recycled", error="")
+                        moved += 1
+                    progress["done"] += 1
+                    await asyncio.sleep(0)
+        finally:
+            progress["active"] = False
         return moved

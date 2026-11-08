@@ -523,7 +523,7 @@ def create_app():
     async def xiaomi_batch_verify(body: XiaomiBatchAction):
         job = batch.completed(body.connection, body.job)
         async with xiaomi.write_lock:
-            await batch.verify(job)
+            await batch.verify(job, fresh=True)
         return {"ok": True}
 
     @app.post("/api/xiaomi/batch/control")
@@ -541,10 +541,10 @@ def create_app():
             return {"moved": 0}
         ensure_library_idle()
         async with xiaomi.write_lock:
-            await batch.verify(job, candidates)
+            await batch.verify(job, candidates, fresh=True)
             ensure_library_idle()
             async with runtime.operation_lock:
-                moved = await batch.recycle_images(candidates)
+                moved = await batch.recycle_images(job, candidates)
                 job["revision"] += 1
         if moved:
             library.start_scan()

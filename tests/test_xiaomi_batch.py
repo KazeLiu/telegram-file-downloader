@@ -2,10 +2,12 @@
 import asyncio
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from telegram_file_downloader.storage import file_version
-from telegram_file_downloader.xiaomi_batch import XiaomiBatch
+from telegram_file_downloader.xiaomi_batch import XiaomiBatch, verification_ranges
 from telegram_file_downloader.xiaomi_cloud import XiaomiError
 
 
@@ -23,6 +25,8 @@ class Cloud:
         self.active = 0
         self.peak = 0
         self.failures = {}
+        self.complete_receipts = False
+        self.page_calls = []
 
     def account(self):
         return {"connection": "account"}
@@ -41,11 +45,12 @@ class Cloud:
                 raise self.failures[name]
             record = dict(id=str(len(self.records) + 1), sha1="receipt", size=size, groupId=album)
             self.records.append(record)
-            return record
+            return {"id": record["id"], "sha1": record["sha1"], "record": dict(record) if self.complete_receipts else {}, "lookup_time": None}
         finally:
             self.active -= 1
 
-    async def media_page(self, connection, album, page, size):
+    async def media_page(self, connection, album, page, size, day=None, end_day=None):
+        self.page_calls.append((page, size, day, end_day))
         self.verify_started.set()
         await self.verify_gate.wait()
         if self.verify_error:
@@ -151,6 +156,11 @@ class BatchControlChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.batch.view("account", 1)["eligible"], 0)
         self.assertEqual(self.batch.job["items"][0]["status"], "uploaded")
         self.assertTrue((self.root / "first.jpg").is_file())
+        self.assertIn("核对未完成", self.batch.view("account", 1)["error"])
+        self.cloud.verify_error = False
+        await self.batch.verify(self.batch.job, fresh=True)
+        self.assertEqual(self.batch.view("account", 1)["error"], "")
+        self.assertEqual(self.batch.view("account", 1)["eligible"], 3)
 
     async def test_stale_batch_control_does_not_change_current_job(self):
         await self.start()
@@ -169,6 +179,15 @@ class BatchControlChecks(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.batch.task, 1)
         self.assertEqual(self.cloud.peak, 3)
         self.assertEqual(self.batch.view("account", 1)["eligible"], 5)
+
+    async def test_complete_receipts_confirm_three_uploads_without_album_scan(self):
+        self.cloud.complete_receipts = True
+        await self.start(self.selected[:3])
+        self.release(3)
+        await asyncio.wait_for(self.batch.task, 1)
+        self.assertEqual(self.batch.view("account", 1)["eligible"], 3)
+        self.assertEqual(self.cloud.page_calls, [])
+        self.assertEqual(self.batch.view("account", 1)["verification"]["done"], 3)
 
     async def test_pause_on_last_files_does_not_leave_batch_stuck(self):
         await self.start(self.selected[:3])
@@ -205,6 +224,100 @@ class BatchControlChecks(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.cloud.write_lock.locked())
         self.assertTrue(self.batch.job["error"])
         self.assertEqual(len(self.cloud.uploads), 3)
+
+
+class BatchVerificationChecks(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name).resolve()
+        self.cloud = Cloud()
+        self.batch = XiaomiBatch(self.cloud, self.root)
+        self.items = []
+        for index in range(3):
+            name = f"{index}.jpg"
+            path = self.root / name
+            path.write_bytes(b"photo")
+            record = dict(id=str(index + 1), sha1="receipt", size=5, groupId="1", dateTaken=1700000000000)
+            self.cloud.records.append(record)
+            self.items.append(dict(name=name, kind="image", version=file_version(path.stat()), status="verified", error="",
+                                   receipt=(record["id"], "receipt", "5"), record=dict(record), lookup_time=record["dateTaken"]))
+        self.job = dict(connection="account", album="1", items=self.items, revision=0, verification=None)
+
+    async def asyncTearDown(self):
+        await self.batch.close()
+        self.temp.cleanup()
+
+    async def test_fresh_check_queries_only_old_date_window_once(self):
+        await self.batch.verify(self.job, fresh=True)
+        self.assertEqual(self.cloud.page_calls, [(0, 200, "20231113", "20231115")])
+        self.assertTrue(all(item["status"] == "verified" for item in self.items))
+        self.assertEqual(self.job["verification"]["done"], 3)
+        self.assertEqual(self.job["verification"]["pages"], 1)
+        self.assertFalse(self.job["verification"]["active"])
+
+    async def test_incomplete_receipt_uses_server_date_to_read_back(self):
+        for item in self.items:
+            item["record"].pop("groupId")
+        await self.batch.verify(self.job)
+        self.assertEqual(len(self.cloud.page_calls), 1)
+        self.assertEqual(self.cloud.page_calls[0][2:], ("20231113", "20231115"))
+        self.assertEqual(self.job["verification"]["done"], 3)
+
+    async def test_unknown_date_explicitly_uses_legacy_album_scope(self):
+        for item in self.items:
+            item["lookup_time"] = None
+        await self.batch.verify(self.job, fresh=True)
+        self.assertEqual(self.cloud.page_calls, [(0, 200, None, None)])
+        self.assertEqual(self.job["verification"]["phase"], "album")
+
+    async def test_fresh_missing_or_changed_record_is_not_eligible(self):
+        for patch in ({"sha1": "other"}, {"size": 6}, {"groupId": "2"}, {"status": "deleted"}):
+            self.cloud.records[0] = {**self.items[0]["record"], **patch}
+            await self.batch.verify(self.job, fresh=True)
+            self.assertEqual(self.items[0]["status"], "uploaded")
+            self.assertIn("本地文件已保留", self.items[0]["error"])
+            self.assertTrue((self.root / self.items[0]["name"]).exists())
+
+    async def test_pages_stop_as_soon_as_expected_ids_are_found(self):
+        self.cloud.media_page = AsyncMock(side_effect=[([], False)])
+        with self.assertRaises(XiaomiError):
+            await self.batch.verify(self.job, fresh=True)
+        self.cloud.media_page = AsyncMock(side_effect=[([{"id": "90"}], False), (self.cloud.records, False)])
+        await self.batch.verify(self.job, fresh=True)
+        self.assertEqual(self.cloud.media_page.await_count, 2)
+        self.assertEqual(self.job["verification"]["pages"], 2)
+        self.assertEqual(self.job["verification"]["done"], 3)
+
+    async def test_network_failure_revokes_unchecked_cached_confirmations(self):
+        self.cloud.media_page = AsyncMock(side_effect=[([self.cloud.records[0]], False), XiaomiError("network unavailable", 503)])
+        with self.assertRaises(XiaomiError):
+            await self.batch.verify(self.job, fresh=True)
+        self.assertEqual([item["status"] for item in self.items], ["verified", "uploaded", "uploaded"])
+        self.assertFalse(self.job["verification"]["active"])
+        self.assertEqual(self.job["revision"], 1)
+        self.assertTrue(all((self.root / item["name"]).exists() for item in self.items))
+
+    async def test_only_freshly_verified_unchanged_local_images_are_recycled(self):
+        self.cloud.records = self.cloud.records[:2]
+        await self.batch.verify(self.job, fresh=True)
+        (self.root / self.items[1]["name"]).write_bytes(b"changed")
+        moved = await self.batch.recycle_images(self.job, self.items)
+        self.assertEqual(moved, 1)
+        self.assertEqual([item["status"] for item in self.items], ["recycled", "kept", "uploaded"])
+        self.assertFalse((self.root / self.items[0]["name"]).exists())
+        self.assertTrue((self.root / self.items[1]["name"]).exists())
+        self.assertTrue((self.root / self.items[2]["name"]).exists())
+        self.assertEqual(self.job["verification"]["phase"], "local")
+        self.assertFalse(self.job["verification"]["active"])
+
+    def test_adjacent_server_dates_share_one_window_and_unknown_dates_stay_separate(self):
+        items = [{"lookup_time": int(datetime(2023, 11, day, tzinfo=timezone.utc).timestamp() * 1000)} for day in (14, 15, 30)]
+        items.append({"lookup_time": None})
+        ranges = verification_ranges(items)
+        self.assertEqual([(start, end) for start, end, _ in ranges], [
+            ("20231113", "20231116"), ("20231129", "20231201"), (None, None),
+        ])
+        self.assertEqual(len(ranges[0][2]), 2)
 
 
 if __name__ == "__main__":

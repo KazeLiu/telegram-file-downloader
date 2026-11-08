@@ -96,6 +96,20 @@ def remote_id(value):
     return value
 
 
+def receipt_record(value):
+    if not isinstance(value, dict):
+        return {}
+    return {key: value[key] for key in ("id", "sha1", "size", "groupId", "status", "sortTime", "dateTaken", "dateModified", "createTime") if key in value}
+
+
+def record_time(record):
+    for key in ("sortTime", "dateTaken", "dateModified", "createTime"):
+        value = record.get(key)
+        if type(value) is int and value != 0:
+            return value
+    return None
+
+
 def upload_media(name):
     if not name.strip() or name != name.strip() or re.search(r"[\\/\x00-\x1f\x7f]", name):
         raise XiaomiError("请输入有效的云端文件名", 400)
@@ -431,12 +445,14 @@ class XiaomiCloud:
         except ValueError:
             raise XiaomiError("日期必须是有效的 YYYYMMDD", 400) from None
 
-    async def media_page(self, connection, album_id, page, size, day=None):
+    async def media_page(self, connection, album_id, page, size, day=None, end_day=None):
         account, service = await self.auth(connection)
         query = {"albumId": album_id, "pageNum": page, "pageSize": size, "isShared": "false"}
         if day is not None:
             self.validate_day(day)
-            query.update(startDate=day, endDate=day)
+            end_day = day if end_day is None else end_day
+            self.validate_day(end_day)
+            query.update(startDate=day, endDate=end_day)
         data = await self.gallery(account, service, "/gallery/user/galleries", query=query)
         return page_data(data, "galleries")
 
@@ -651,7 +667,8 @@ class XiaomiCloud:
             raise XiaomiError("小米未返回上传记录，请先在相册中确认结果")
         media_id = remote_id(data["content"].get("id"))
         if data.get("fileExists") is True:
-            return {"id": media_id, "exists": True, "sha1": digest}
+            record = receipt_record(data["content"])
+            return {"id": media_id, "exists": True, "sha1": digest, "record": record, "lookup_time": record_time(record)}
         kss = data.get("kss")
         if (not isinstance(kss, dict) or not isinstance(kss.get("node_urls"), list) or not kss["node_urls"]
                 or not isinstance(kss.get("block_metas"), list) or len(kss["block_metas"]) != len(blocks)
@@ -684,10 +701,12 @@ class XiaomiCloud:
                 raise XiaomiError("小米存储未确认分片上传")
             commits.append({"commit_meta": commit})
         account, service = await self.auth(connection)
-        await self.gallery(account, service, f"/gallery/user/full/{media_id}/storage", form={
+        committed = await self.gallery(account, service, f"/gallery/user/full/{media_id}/storage", form={
             "data": json.dumps({"kss": {"file_meta": file_meta, "commit_metas": commits}}),
         })
-        return {"id": media_id, "exists": False, "sha1": digest}
+        record = receipt_record(committed.get("content") if isinstance(committed, dict) else None)
+        return {"id": media_id, "exists": False, "sha1": digest, "record": record,
+                "lookup_time": record_time(record) or record_time(data["content"])}
 
 
 def upload_blocks(file, size):

@@ -104,6 +104,32 @@ class UploadPayloadChecks(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("cookies", cloud.request.call_args.kwargs)
         self.assertEqual(cloud.gallery.call_args.args[2], "/gallery/user/full/1/storage")
 
+    async def test_final_record_not_create_record_is_used_as_upload_proof(self):
+        cloud = XiaomiCloud.__new__(XiaomiCloud)
+        cloud.auth = AsyncMock(return_value=({}, "test-session"))
+        cloud.gallery = AsyncMock(side_effect=[{
+            "content": {"id": "1", "dateTaken": 1609502400000, "groupId": "1", "sha1": "create-only", "size": 1},
+            "kss": {"node_urls": ["https://kssh2.xmssdn.micloud.mi.com/upload"], "file_meta": "file",
+                    "block_metas": [{"is_existed": 1, "commit_meta": "commit"}]},
+        }, {"content": {"id": "1", "groupId": "1", "sha1": "committed", "size": 2, "encryptInfo": "private"}}])
+        with tempfile.TemporaryFile() as file:
+            file.write(b"a")
+            result = await cloud.upload("connection", "1", "photo.jpg", "image", "image/jpeg", 1, file)
+        self.assertEqual(result["record"], {"id": "1", "groupId": "1", "sha1": "committed", "size": 2})
+        self.assertEqual(result["lookup_time"], 1609502400000)
+
+    async def test_duplicate_preserves_server_date_and_album(self):
+        cloud = XiaomiCloud.__new__(XiaomiCloud)
+        cloud.auth = AsyncMock(return_value=({}, "test-session"))
+        cloud.gallery = AsyncMock(return_value={"fileExists": True, "content": {
+            "id": "7", "groupId": "2", "sha1": "existing", "size": 3, "sortTime": 946684800000,
+        }})
+        with tempfile.TemporaryFile() as file:
+            file.write(b"abc")
+            result = await cloud.upload("connection", "1", "photo.jpg", "image", "image/jpeg", 3, file, modified_at=1609502400000)
+        self.assertEqual(result["lookup_time"], 946684800000)
+        self.assertEqual(result["record"]["groupId"], "2")
+
 
 if __name__ == "__main__":
     unittest.main()

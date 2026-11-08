@@ -47,6 +47,9 @@ class TimelineChecks(unittest.IsolatedAsyncioTestCase):
         })
         await self.cloud.media_page("test", "1", 0, 200)
         self.assertNotIn("startDate", self.cloud.gallery.call_args.kwargs["query"])
+        await self.cloud.media_page("test", "1", 0, 200, day="20200101", end_day="20200103")
+        self.assertEqual(self.cloud.gallery.call_args.kwargs["query"]["startDate"], "20200101")
+        self.assertEqual(self.cloud.gallery.call_args.kwargs["query"]["endDate"], "20200103")
 
     async def test_thumbnail_singleflight_reuse_expiry_and_source_change(self):
         self.cloud.cache_thumbnail("test", "1", "data:image/jpeg;base64,YQ==")

@@ -9,6 +9,8 @@ reference_commit: 340de4a231c65fa9780c2577ad30954effb5cf07
 
 ## 接入时补充的证据
 
+2026-11-08，继续只读检查小米云服务 4.0.1.328 的上传处理：`fileExists` 分支使用创建请求返回的 `content`；新文件以 `/gallery/user/full/{id}/storage` 的返回 `content` 更新上传任务和相册状态，没有在此流程重新从相册第一页寻找文件。本项目保留其中的编号、摘要、大小、相册和时间字段作为上传回执；完成提交不返回完整记录时，仍需定向读回核对。回收本地文件前不复用旧回执代替新鲜读取。
+
 2026-11-08，只读检查本机小米云服务 4.0.1.328 的 `resources/app.asar` 中 gallery renderer，确认日期索引先调用 `POST /gallery/user/lite/index/prepare`，准备好后调用 `GET /gallery/user/timeline?albumId=...`，响应 `dayCount` 为 `YYYYMMDD` 到数量的映射。未准备好且 `isRetriable` 时等待一秒重试一次。照片按相同的 `startDate`、`endDate` 调用 `/gallery/user/galleries`，每页 30 项，最多两个在途日期请求；页面按可见区域上下约半屏预取。
 
 普通照片墙主要复用 galleries 返回的缩略图地址。回收站另有 `/gallery/thumbnails?ids=...&type=small`，响应为 `idTothumbnails` 数组，每项含 `id`、`thumbnails.small.data`。本项目仅在地址缓存淘汰时按编号重新获取此缩略图信息，不将其表述为官方普通墙的常规批量策略。以上是已安装客户端的接口证据；本次界面验收使用隔离模拟账号，未用真实账号验证这些新接口。
