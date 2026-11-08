@@ -20,6 +20,8 @@ const model = reactive({ files: [] as LocalFile[], selected: new Set<string>(), 
 const running = computed(() => !!model.job && !['complete', 'stopped'].includes(model.job.state))
 const checking = computed(() => model.job?.verification?.active ? model.job.verification : null)
 const working = computed(() => running.value || !!checking.value)
+const retryCount = computed(() => (model.job?.counts.failed || 0) + (model.job?.counts.waiting || 0))
+const confirmedCount = computed(() => (model.job?.counts.verified || 0) + (model.job?.counts.recycled || 0) + (model.job?.counts.kept || 0))
 function dateLabel(day: string) { return `${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}` }
 const progressText = computed(() => {
   const job = model.job
@@ -166,6 +168,15 @@ function control(action: 'pause' | 'resume' | 'stop') {
   })
 }
 
+function retry() {
+  return run(async () => {
+    await api('/xiaomi/batch/retry', { connection: props.connection, job: model.job!.id })
+    promptedJob = ''; finishedJob = ''
+    model.confirming = false; model.page = 1
+    await loadJob()
+  })
+}
+
 function recycle() {
   model.confirming = false
   return run(async () => {
@@ -202,7 +213,7 @@ onUnmounted(() => { disposed = true; jobRead++; clearTimeout(timer) })
       <template v-if="working">
         <p class="batch-progress" role="status">{{ progressText }}</p>
         <ul v-if="model.job.active_files.length" class="batch-active" aria-label="正在上传的文件"><li v-for="name in model.job.active_files" :key="name"><Icon name="loader" class="loading-icon shrink-0" :size="16" /><span :title="name">{{ name }}</span></li></ul>
-        <p v-if="running && !checking" class="muted batch-tools" role="status">云端已确认 {{ model.job.counts.verified || 0 }} 个 · 待批后补查 {{ model.job.counts.uploaded || 0 }} 个<span v-if="model.job.counts.failed"> · 上传失败 {{ model.job.counts.failed }} 个</span></p>
+        <p v-if="running && !checking" class="muted batch-tools" role="status">云端已确认 {{ confirmedCount }} 个 · 待批后补查 {{ model.job.counts.uploaded || 0 }} 个<span v-if="model.job.counts.failed"> · 上传失败 {{ model.job.counts.failed }} 个</span></p>
         <progress :value="checking ? checking.done : model.job.done" :max="checking ? checking.total : model.job.total" :aria-label="checking ? '云端核对与本地回收进度' : '批量上传处理进度'" />
         <div v-if="running" class="batch-controls">
           <button v-if="model.job.state === 'uploading'" class="secondary" :disabled="model.busy" @click="control('pause')"><Icon name="pause" :size="17" />暂停</button>
@@ -213,7 +224,8 @@ onUnmounted(() => { disposed = true; jobRead++; clearTimeout(timer) })
         <p v-if="model.job.state === 'paused'" class="muted">暂停保留本批次的云端写操作，继续或停止后才能进行其他上传或云端回收。</p>
       </template>
       <template v-else>
-        <p class="batch-progress" role="status">{{ model.job.state === 'stopped' ? '批次已停止。' : '批次已结束。' }}云端已确认 {{ (model.job.counts.verified || 0) + (model.job.counts.recycled || 0) + (model.job.counts.kept || 0) }} / {{ model.job.total }} 个文件。{{ model.job.eligible }} 张图片可回收，视频保留在本地。</p>
+        <p class="batch-progress" role="status">{{ model.job.state === 'stopped' ? '批次已停止。' : '批次已结束。' }}云端已确认 {{ confirmedCount }} / {{ model.job.total }} 个文件。{{ model.job.eligible }} 张图片可回收，视频保留在本地。</p>
+        <div v-if="retryCount" class="batch-tools"><p>仍有 {{ retryCount }} 个文件未完成。重试只处理失败和未上传的文件，不重复上传已确认文件。</p><button class="primary" :disabled="model.busy" @click="retry">重试未完成的 {{ retryCount }} 个文件</button></div>
         <p v-if="model.note" class="notice" role="status">{{ model.note }}</p>
         <section v-if="model.confirming" class="batch-recycle-prompt" aria-labelledby="batch-recycle-question">
           <h3 id="batch-recycle-question">是否回收已上传的本地照片？</h3>

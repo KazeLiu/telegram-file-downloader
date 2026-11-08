@@ -25,14 +25,18 @@ def configure_logs(data_dir):
         file = RotatingFileHandler(directory / "collector.log", maxBytes=5 * 1024 * 1024,
                                    backupCount=5, encoding="utf-8")
         file.collector_log = True
+        file.setLevel(logging.DEBUG)
         file.setFormatter(formatter)
         logger.addHandler(file)
         stream = logging.StreamHandler()
+        stream.setLevel(logging.INFO)
         stream.setFormatter(formatter)
         logger.addHandler(stream)
     logging.getLogger("telethon").setLevel(logging.WARNING)
     # Xiaomi's QR and storage URLs contain access tickets in their query strings.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    for name in ("storage", "xiaomi_cloud", "xiaomi_batch"):
+        logging.getLogger("telegram_file_downloader." + name).setLevel(logging.DEBUG)
     return directory
 
 

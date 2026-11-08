@@ -10,7 +10,7 @@ import httpx
 from PIL import Image
 
 from telegram_file_downloader.storage import file_version
-from telegram_file_downloader.xiaomi_cloud import STORAGE_HOSTS, XiaomiCloud, XiaomiError, upload_dates, xiaomi_url
+from telegram_file_downloader.xiaomi_cloud import BLOCK_SIZE, STORAGE_HOSTS, XiaomiCloud, XiaomiError, upload_dates, xiaomi_url
 
 
 class UploadDatesChecks(unittest.TestCase):
@@ -92,17 +92,48 @@ class UploadPayloadChecks(unittest.IsolatedAsyncioTestCase):
         cloud.gallery = AsyncMock(side_effect=[{
             "content": {"id": "1"}, "kss": {
                 "node_urls": ["https://kssh2.xmssdn.micloud.mi.com/2/1595215017082"],
-                "file_meta": "file", "block_metas": [{"block_meta": "block", "is_existed": 0}],
+                "file_meta": "file", "block_metas": [{"block_meta": "first"}, {"block_meta": "second"}],
             },
         }, {}])
-        cloud.request = AsyncMock(return_value=httpx.Response(200, json={"commit_meta": "commit"}))
-        with tempfile.TemporaryFile() as file:
+        cloud.request = AsyncMock(side_effect=[httpx.Response(200, json={"commit_meta": "first-commit"}),
+                                              XiaomiError("TLS EOF", 503, retryable_connect=True),
+                                              httpx.Response(200, json={"commit_meta": "second-commit"})])
+        with tempfile.TemporaryFile() as file, patch("telegram_file_downloader.xiaomi_cloud.asyncio.sleep", new_callable=AsyncMock) as sleep:
             Image.new("RGB", (2, 2)).save(file, format="PNG")
+            file.seek(BLOCK_SIZE)
+            file.write(b"x")
             result = await cloud.upload("connection", "1", "photo.png", "image", "image/png", file.tell(), file)
         self.assertFalse(result["exists"])
         self.assertTrue(cloud.request.call_args.args[1].startswith("https://kssh2.xmssdn.micloud.mi.com/"))
         self.assertNotIn("cookies", cloud.request.call_args.kwargs)
+        self.assertEqual(cloud.request.await_count, 3)
+        self.assertEqual(len(cloud.request.call_args_list[0].kwargs["content"]), BLOCK_SIZE)
+        self.assertEqual(cloud.request.call_args_list[1], cloud.request.call_args_list[2])
+        sleep.assert_awaited_once_with(1)
         self.assertEqual(cloud.gallery.call_args.args[2], "/gallery/user/full/1/storage")
+        self.assertEqual(json.loads(cloud.gallery.call_args.kwargs["form"]["data"])["kss"]["commit_metas"],
+                         [{"commit_meta": "first-commit"}, {"commit_meta": "second-commit"}])
+
+    async def test_chunk_retry_is_bounded_and_never_retries_http_or_business_rejections(self):
+        for failure, attempts in ((XiaomiError("TLS EOF", 503, retryable_connect=True), 3),
+                                  (XiaomiError("certificate failure", 503), 1),
+                                  (httpx.Response(429), 1), (httpx.Response(403), 1),
+                                  (httpx.Response(503), 1)):
+            with self.subTest(failure=failure):
+                cloud = XiaomiCloud.__new__(XiaomiCloud)
+                cloud.auth = AsyncMock(return_value=({}, "test-session"))
+                cloud.gallery = AsyncMock(return_value={"content": {"id": "1"}, "kss": {
+                    "node_urls": ["https://kssh2.xmssdn.micloud.mi.com/upload"],
+                    "file_meta": "private", "block_metas": [{"block_meta": "private"}],
+                }})
+                cloud.request = AsyncMock(side_effect=failure if isinstance(failure, Exception) else None,
+                                          return_value=failure)
+                with tempfile.TemporaryFile() as file, patch("telegram_file_downloader.xiaomi_cloud.asyncio.sleep", new_callable=AsyncMock), \
+                        self.assertRaises(XiaomiError):
+                    Image.new("RGB", (2, 2)).save(file, format="PNG")
+                    await cloud.upload("connection", "1", "photo.png", "image", "image/png", file.tell(), file)
+                self.assertEqual(cloud.request.await_count, attempts)
+                self.assertEqual(cloud.gallery.await_count, 1)
 
     async def test_final_record_not_create_record_is_used_as_upload_proof(self):
         cloud = XiaomiCloud.__new__(XiaomiCloud)

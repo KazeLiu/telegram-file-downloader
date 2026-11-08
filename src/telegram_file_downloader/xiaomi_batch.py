@@ -161,8 +161,22 @@ class XiaomiBatch:
             raise XiaomiError("上传批次已变化，请刷新后再操作", 409)
         return job
 
+    async def retry(self, connection, job_id):
+        job = self.completed(connection, job_id)
+        candidates = [item for item in job["items"] if item["status"] in {"failed", "waiting"}]
+        if not candidates:
+            raise XiaomiError("没有失败或未上传的文件，请刷新批次结果", 409)
+        await self.cloud.write_lock.acquire()
+        for item in candidates:
+            item.update(status="waiting", error="")
+        job.update(state="uploading", error="", verification=None, done=len(job["items"]) - len(candidates),
+                   revision=job["revision"] + 1)
+        job["gate"].set()
+        LOGGER.info("Xiaomi batch retry batch=%s files=%s concurrency=%s", job["id"], len(candidates), UPLOAD_CONCURRENCY)
+        self.task = asyncio.create_task(self.run(job), name="xiaomi-local-upload")
+
     async def run(self, job):
-        pending = deque(job["items"])
+        pending = deque(item for item in job["items"] if item["status"] == "waiting")
 
         async def worker():
             while pending:
@@ -213,7 +227,7 @@ class XiaomiBatch:
                         record=result["record"], lookup_time=result["lookup_time"])
             if matches_receipt(item["record"], item["receipt"], job["album"]):
                 item["status"] = "verified"
-            LOGGER.info("Xiaomi upload completed batch=%s name=%r state=%s server_time=%s", job["id"], item["name"], item["status"], item["lookup_time"])
+            LOGGER.debug("Xiaomi upload completed batch=%s name=%r state=%s server_time=%s", job["id"], item["name"], item["status"], item["lookup_time"])
         except XiaomiError as exc:
             item.update(status="failed", error=str(exc))
             LOGGER.warning("Xiaomi upload failed batch=%s name=%r processed=%s status=%s detail=%s", job["id"], item["name"], job["done"], exc.status, exc)
@@ -300,4 +314,7 @@ class XiaomiBatch:
                     await asyncio.sleep(0)
         finally:
             progress["active"] = False
+            LOGGER.log(logging.WARNING if progress["done"] != moved else logging.INFO,
+                       "Xiaomi batch recycle finished batch=%s processed=%s total=%s moved=%s retained=%s",
+                       job["id"], progress["done"], len(candidates), moved, progress["done"] - moved)
         return moved

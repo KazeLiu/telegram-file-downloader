@@ -535,6 +535,11 @@ def create_app():
         batch.control(body.connection, body.job, body.action)
         return {"ok": True}
 
+    @app.post("/api/xiaomi/batch/retry")
+    async def xiaomi_batch_retry(body: XiaomiBatchAction):
+        await batch.retry(body.connection, body.job)
+        return {"ok": True}
+
     @app.post("/api/xiaomi/batch/recycle")
     async def xiaomi_batch_recycle(body: XiaomiBatchRecycle):
         job = batch.completed(body.connection, body.job)

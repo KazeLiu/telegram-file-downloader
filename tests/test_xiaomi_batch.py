@@ -254,6 +254,46 @@ class BatchControlChecks(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.cloud.write_lock.locked())
         self.assertTrue(all(item["status"] == "failed" for item in self.batch.job["items"][:3]))
 
+    async def test_retry_dispatches_only_failed_and_waiting_files(self):
+        self.cloud.complete_receipts = True
+        self.cloud.failures["first.jpg"] = XiaomiError("TLS EOF", 503)
+        await self.start()
+        self.release(3)
+        await asyncio.wait_for(self.batch.task, 1)
+        job = self.batch.job
+        self.assertEqual([item["status"] for item in job["items"]], ["failed", "verified", "verified", "waiting", "waiting"])
+        job["items"][1]["status"] = "recycled"
+        self.cloud.failures.clear()
+        await self.batch.retry("account", job["id"])
+        self.assertIs(self.batch.job, job)
+        self.assertEqual(job["done"], 2)
+        self.assertEqual(job["error"], "")
+        for name in ("first.jpg", "fourth.jpg", "fifth.jpg"):
+            self.assertEqual(await asyncio.wait_for(self.cloud.entered.get(), 1), name)
+        self.release(3)
+        await asyncio.wait_for(self.batch.task, 1)
+        self.assertEqual(self.cloud.uploads, [item["name"] for item in self.selected[:3]] + ["first.jpg", "fourth.jpg", "fifth.jpg"])
+        self.assertEqual(job["done"], 5)
+        self.assertEqual(job["items"][1]["status"], "recycled")
+        with self.assertRaises(XiaomiError):
+            await self.batch.retry("account", job["id"])
+
+    async def test_retry_keeps_changed_files_and_unconfirmed_receipts_out_of_upload_queue(self):
+        await self.start()
+        self.control("stop")
+        self.release(3)
+        await asyncio.wait_for(self.batch.task, 1)
+        self.batch.job["items"][0]["status"] = "uploaded"
+        self.batch.job["items"][1]["status"] = "kept"
+        (self.root / "fourth.jpg").write_bytes(b"changed original")
+        await self.batch.retry("account", self.batch.job["id"])
+        self.assertEqual(await asyncio.wait_for(self.cloud.entered.get(), 1), "fifth.jpg")
+        self.release(1)
+        await asyncio.wait_for(self.batch.task, 1)
+        self.assertEqual(self.cloud.uploads, [item["name"] for item in self.selected[:3]] + ["fifth.jpg"])
+        self.assertEqual(self.batch.job["items"][3]["status"], "failed")
+        self.assertEqual((self.root / "fourth.jpg").read_bytes(), b"changed original")
+
     async def test_unexpected_worker_error_cancels_siblings_before_unlocking(self):
         await self.start()
         self.cloud.failures["first.jpg"] = RuntimeError("unexpected upload failure")
@@ -281,7 +321,7 @@ class BatchVerificationChecks(unittest.IsolatedAsyncioTestCase):
             self.cloud.records.append(record)
             self.items.append(dict(name=name, kind="image", version=file_version(path.stat()), status="verified", error="",
                                    receipt=(record["id"], "receipt", "5"), record=dict(record), lookup_time=record["dateTaken"]))
-        self.job = dict(connection="account", album="1", items=self.items, revision=0, verification=None)
+        self.job = dict(id="test-batch", connection="account", album="1", items=self.items, revision=0, verification=None)
 
     async def asyncTearDown(self):
         await self.batch.close()

@@ -11,6 +11,7 @@ import mimetypes
 import os
 import re
 import sqlite3
+import ssl
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -46,9 +47,10 @@ LOGGER = logging.getLogger(__name__)
 
 
 class XiaomiError(Exception):
-    def __init__(self, message: str, status: int = 502):
+    def __init__(self, message: str, status: int = 502, *, retryable_connect=False):
         super().__init__(message)
         self.status = status
+        self.retryable_connect = retryable_connect
 
 
 def request_stage(method, url):
@@ -247,14 +249,18 @@ class XiaomiCloud:
         except (httpx.RequestError, httpx.InvalidURL) as exc:
             timeout_error = isinstance(exc, httpx.TimeoutException)
             causes, cause = [], exc
+            retryable_connect = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
             while cause is not None and len(causes) < 5:
+                if isinstance(cause, ssl.SSLCertVerificationError):
+                    retryable_connect = False
                 number = getattr(cause, "errno", None)
                 causes.append(type(cause).__name__ + (f"(errno={number})" if type(number) is int else ""))
                 cause = cause.__cause__ or cause.__context__
             LOGGER.warning("Xiaomi request failed request=%s stage=%s method=%s host=%s error=%s causes=%s elapsed=%.3fs HTTP=no_response",
                            request_id, stage, method, host, type(exc).__name__, ">".join(causes), time.monotonic() - started)
             reason = "连接超时" if timeout_error else "连接失败"
-            raise XiaomiError(f"小米{reason}（{stage}；{type(exc).__name__}；请求 {request_id}），请查看运行日志并确认云端结果", 504 if timeout_error else 503) from None
+            raise XiaomiError(f"小米{reason}（{stage}；{type(exc).__name__}；请求 {request_id}），请查看运行日志并确认云端结果",
+                              504 if timeout_error else 503, retryable_connect=retryable_connect) from None
         finally:
             self.http.cookies.clear()
 
@@ -694,7 +700,7 @@ class XiaomiCloud:
     async def upload(self, connection, album, name, kind, mime, size, file, *, modified_at=None):
         account, service = await self.auth(connection)
         dates = await asyncio.to_thread(upload_dates, file, kind, modified_at)
-        LOGGER.info("Xiaomi upload dates name=%r date_taken=%s date_modified=%s", name, dates["dateTaken"], dates["dateModified"])
+        LOGGER.debug("Xiaomi upload dates name=%r date_taken=%s date_modified=%s", name, dates["dateTaken"], dates["dateModified"])
         digest, blocks = await asyncio.to_thread(upload_blocks, file, size)
         content = {"type": kind, "groupId": album, "mimeType": mime, "fileName": name,
                    "title": PurePath(name).stem, "sha1": digest, "size": size, **dates}
@@ -707,7 +713,7 @@ class XiaomiCloud:
         media_id = remote_id(data["content"].get("id"))
         if data.get("fileExists") is True:
             record = receipt_record(data["content"])
-            LOGGER.info("Xiaomi upload deduplicated name=%r requested_date=%s server_time=%s", name, dates["dateTaken"], record_time(record))
+            LOGGER.debug("Xiaomi upload deduplicated name=%r requested_date=%s server_time=%s", name, dates["dateTaken"], record_time(record))
             return {"id": media_id, "exists": True, "sha1": digest, "record": record, "lookup_time": record_time(record)}
         kss = data.get("kss")
         if (not isinstance(kss, dict) or not isinstance(kss.get("node_urls"), list) or not kss["node_urls"]
@@ -733,8 +739,18 @@ class XiaomiCloud:
                 # The storage service supplies URL-ready opaque metadata; keep its percent escapes.
                 url = (f"{node}/upload_block_chunk?chunk_pos=0&file_meta={quote(file_meta, safe='%+/=')}"
                        f"&block_meta={quote(block_meta, safe='%+/=')}")
-                response = await self.request("POST", url, content=chunk, timeout=120,
-                                              headers={"Content-Type": "application/octet-stream", "Origin": CLOUD})
+                # The official client replays the same complete block at offset zero, at most three times.
+                for attempt in range(1, 4):
+                    try:
+                        response = await self.request("POST", url, content=chunk, timeout=120,
+                                                      headers={"Content-Type": "application/octet-stream", "Origin": CLOUD})
+                        break
+                    except XiaomiError as exc:
+                        if not exc.retryable_connect or attempt == 3:
+                            raise
+                        LOGGER.warning("Xiaomi chunk retry name=%r block=%s attempt=%s/3 delay=%ss host=%s detail=%s",
+                                       name, len(commits) + 1, attempt + 1, attempt, urlsplit(node).hostname, exc)
+                        await asyncio.sleep(attempt)
                 self.check_http(response)
                 commit = response_json(response).get("commit_meta")
             if not isinstance(commit, str) or not commit:

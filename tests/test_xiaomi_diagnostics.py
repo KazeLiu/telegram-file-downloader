@@ -1,4 +1,5 @@
 """Request failures remain actionable without leaking request URLs or credentials."""
+import ssl
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -21,6 +22,21 @@ class XiaomiDiagnosticsChecks(unittest.IsolatedAsyncioTestCase):
         self.assertIn("上传存储节点", str(error.exception))
         self.assertIn("HTTP=no_response", " ".join(logs.output))
         self.assertNotIn(secret, str(error.exception) + " ".join(logs.output))
+        self.assertTrue(error.exception.retryable_connect)
+
+    async def test_tls_eof_can_retry_but_certificate_and_read_errors_cannot(self):
+        for native, retryable in ((ssl.SSLEOFError(8, "EOF"), True),
+                                  (ssl.SSLCertVerificationError(1, "invalid certificate"), False),
+                                  (httpx.ReadTimeout("read timed out"), False)):
+            failure = native if isinstance(native, httpx.RequestError) else httpx.ConnectError("TLS failed")
+            if failure is not native:
+                failure.__cause__ = native
+            cloud = XiaomiCloud.__new__(XiaomiCloud)
+            cloud.http = SimpleNamespace(cookies={}, send=AsyncMock(side_effect=failure))
+            with self.subTest(native=native), self.assertLogs("telegram_file_downloader.xiaomi_cloud", level="WARNING"), \
+                    self.assertRaises(XiaomiError) as error:
+                await cloud.request("POST", "https://ali.xmssdn.micloud.mi.com/upload")
+            self.assertEqual(error.exception.retryable_connect, retryable)
 
     async def test_http_rate_limit_keeps_status_and_retry_hint(self):
         cloud = XiaomiCloud.__new__(XiaomiCloud)

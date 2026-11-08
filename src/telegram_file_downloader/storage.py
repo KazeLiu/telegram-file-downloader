@@ -53,6 +53,8 @@ def restore_batch(root, ids):
                 restored.append(record_id)
             except (OSError, ValueError) as exc:
                 failures.append(dict(id=record_id, error=str(exc)))
+    LOGGER.log(logging.WARNING if failures else logging.INFO,
+               "recycle restore batch finished restored=%s failed=%s", len(restored), len(failures))
     return dict(restored=restored, failures=failures)
 
 
@@ -142,7 +144,7 @@ class RecycleBin:
             elif not target.is_file():
                 raise ValueError("源文件和回收副本均不存在，请检查下载挂载")
             self.db.execute("UPDATE items SET state='trashed' WHERE id=?", (record_id,))
-        LOGGER.info("recycle moved id=%s source=%s reason=%s", record_id, relative, reason)
+        LOGGER.debug("recycle moved id=%s source=%s reason=%s", record_id, relative, reason)
         return record_id
 
     def listing(self, page=1):
@@ -187,7 +189,7 @@ class RecycleBin:
                     raise ValueError("原位置在还原期间发生变化，回收文件已保留")
                 target.unlink()
                 self.db.execute("UPDATE items SET state='restored' WHERE id=?", (record_id,))
-        LOGGER.info("recycle restored id=%s target=%s", record_id, record["original"])
+        LOGGER.debug("recycle restored id=%s target=%s", record_id, record["original"])
         return record["original"]
 
     def purge_expired(self, after=None):
