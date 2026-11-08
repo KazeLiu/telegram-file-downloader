@@ -23,7 +23,7 @@ class UploadDatesChecks(unittest.TestCase):
     def test_original_file_times_and_browser_time_ignore_temporary_birth(self):
         with patch("telegram_file_downloader.xiaomi_cloud.os.fstat", return_value=self.info):
             dates = upload_dates(self.file, "image")
-            self.assertEqual(dates, {"dateTaken": 1790152905215, "dateModified": 1789887737000})
+            self.assertEqual(dates, {"dateTaken": 1789887737000, "dateModified": 1789887737000})
             self.assertEqual(self.file.tell(), 0)
             self.assertFalse(self.file.closed)
             self.assertEqual(upload_dates(self.file, "image", 1609502400000),
@@ -50,7 +50,7 @@ class UploadDatesChecks(unittest.TestCase):
         with patch("telegram_file_downloader.xiaomi_cloud.os.fstat", return_value=self.info), \
                 patch("telegram_file_downloader.xiaomi_cloud.Image.open", side_effect=OSError("unsupported image")), \
                 self.assertLogs("telegram_file_downloader.xiaomi_cloud", level="WARNING"):
-            self.assertEqual(upload_dates(self.file, "image")["dateTaken"], 1790152905215)
+            self.assertEqual(upload_dates(self.file, "image")["dateTaken"], 1789887737000)
 
     def test_official_storage_node_allowed_without_weakening_url_checks(self):
         node = "https://kssh2.xmssdn.micloud.mi.com/2/1595215017082"

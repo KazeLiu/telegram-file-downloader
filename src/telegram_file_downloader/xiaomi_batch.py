@@ -112,6 +112,7 @@ class XiaomiBatch:
                               gate=asyncio.Event(),
                               items=[dict(item, status="waiting", error="") for item in selected])
         job["gate"].set()
+        LOGGER.info("Xiaomi batch started batch=%s album=%s files=%s concurrency=%s", job["id"], album, len(selected), UPLOAD_CONCURRENCY)
         self.task = asyncio.create_task(self.run(job), name="xiaomi-local-upload")
 
     def control(self, connection, job_id, action):
@@ -141,11 +142,13 @@ class XiaomiBatch:
         counts = Counter(item["status"] for item in items)
         eligible = sum(item["status"] == "verified" and item.get("kind") == "image" for item in items)
         offset = (page - 1) * PAGE_SIZE
-        current = "、".join(item["name"] for item in items if item["status"] == "uploading")
+        active_files = [item["name"] for item in items if item["status"] == "uploading"]
+        current = "、".join(active_files)
         check_error = job["verification"]["error"] if job["verification"] else ""
         return dict(id=job["id"], album=job["album"], state=job["state"], current=current,
                     error="；".join(error for error in (job["error"], check_error) if error), done=job["done"], total=len(items), page_size=PAGE_SIZE,
                     counts=counts, eligible=eligible, revision=job["revision"],
+                    active_files=active_files,
                     verification=job["verification"],
                     items=[{key: item[key] for key in ("name", "status", "error")}
                            for item in items[offset:offset + PAGE_SIZE]])
@@ -189,6 +192,7 @@ class XiaomiBatch:
             job["error"] = "批量上传中断，未确认的文件仍保留在本地"
         finally:
             job["state"] = "stopped" if job["state"] == "stopping" else "complete"
+            LOGGER.info("Xiaomi batch finished batch=%s state=%s processed=%s counts=%s", job["id"], job["state"], job["done"], dict(Counter(item["status"] for item in job["items"])))
             self.cloud.write_lock.release()
 
     async def upload_item(self, job, item):
@@ -209,8 +213,10 @@ class XiaomiBatch:
                         record=result["record"], lookup_time=result["lookup_time"])
             if matches_receipt(item["record"], item["receipt"], job["album"]):
                 item["status"] = "verified"
+            LOGGER.info("Xiaomi upload completed batch=%s name=%r state=%s server_time=%s", job["id"], item["name"], item["status"], item["lookup_time"])
         except XiaomiError as exc:
             item.update(status="failed", error=str(exc))
+            LOGGER.warning("Xiaomi upload failed batch=%s name=%r processed=%s status=%s detail=%s", job["id"], item["name"], job["done"], exc.status, exc)
             if exc.status in {409, 429, 503, 504}:
                 job["error"] = "已停止后续上传：" + str(exc)
                 job["gate"].set()

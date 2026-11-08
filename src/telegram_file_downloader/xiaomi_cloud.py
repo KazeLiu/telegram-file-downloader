@@ -51,6 +51,21 @@ class XiaomiError(Exception):
         self.status = status
 
 
+def request_stage(method, url):
+    parts = urlsplit(url)
+    if parts.hostname == "account.xiaomi.com":
+        return "账号验证"
+    if parts.hostname != "i.mi.com":
+        return "上传存储节点" if method == "POST" else "读取媒体节点"
+    if parts.path.endswith("/storage"):
+        return "提交上传"
+    if parts.path == "/gallery/user/full":
+        return "创建上传记录"
+    if parts.path == "/gallery/user/galleries":
+        return "读取相册照片"
+    return "云相册接口" if parts.path.startswith("/gallery/") else "登录换票"
+
+
 def milliseconds():
     return time.time_ns() // 1_000_000
 
@@ -73,7 +88,9 @@ def response_json(response):
     except ValueError:
         value = None
     if not isinstance(value, dict):
-        raise XiaomiError("小米返回了无法识别的响应")
+        context = response.extensions.get("xiaomi_diagnostic", "请查看运行日志")
+        LOGGER.warning("Xiaomi invalid response HTTP=%s context=%s", response.status_code, context)
+        raise XiaomiError(f"小米返回了无法识别的响应（HTTP {response.status_code}；{context}）")
     return value
 
 
@@ -124,15 +141,13 @@ def upload_media(name):
 
 def upload_dates(file, kind, modified_at=None):
     info = os.fstat(file.fileno())
-    birth = getattr(info, "st_birthtime", None) if modified_at is None else None
-    created = round(birth * 1000) if birth is not None else None
     modified = info.st_mtime_ns // 1_000_000 if modified_at is None else modified_at
-    taken = created if created is not None else modified
+    taken = modified
     if kind == "image":
         try:
             file.seek(0)
             with Image.open(file) as image:
-                taken, _ = image_time(image, {"created_ms": created, "mtime_ns": modified * 1_000_000})
+                taken, _ = image_time(image, {"mtime_ns": modified * 1_000_000})
         except (OSError, ValueError, SyntaxError) as exc:
             LOGGER.warning("Image date metadata unavailable; using file time: %s", type(exc).__name__)
         finally:
@@ -214,30 +229,47 @@ class XiaomiCloud:
 
     async def request(self, method, url, *, cookies=None, headers=None, timeout=20, stream=False, **kwargs):
         # Construct the request directly: redirects and the client's cookie jar must not forward credentials.
+        stage, request_id, started = request_stage(method, url), uuid4().hex[:12], time.monotonic()
+        host = urlsplit(url).hostname
         try:
             request = httpx.Request(method, url, cookies=cookies, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
                 **(headers or {}),
             }, extensions={"timeout": httpx.Timeout(timeout, connect=15).as_dict()}, **kwargs)
-            return await self.http.send(request, stream=stream)
-        except httpx.TimeoutException:
-            raise XiaomiError("连接小米超时，请刷新确认结果后再试", 504) from None
-        except (httpx.RequestError, httpx.InvalidURL):
-            raise XiaomiError("无法连接小米，请检查运行工作台的设备能否访问小米云", 503) from None
+            response = await self.http.send(request, stream=stream)
+            response.extensions["xiaomi_diagnostic"] = f"{stage}，请求 {request_id}"
+            if not response.is_success and not response.is_redirect:
+                retry = response.headers.get("retry-after", "")
+                retry = retry if retry.isascii() and retry.isdigit() and len(retry) <= 9 else "unspecified"
+                LOGGER.warning("Xiaomi request rejected request=%s stage=%s method=%s host=%s HTTP=%s retry_after=%s elapsed=%.3fs",
+                               request_id, stage, method, host, response.status_code, retry, time.monotonic() - started)
+            return response
+        except (httpx.RequestError, httpx.InvalidURL) as exc:
+            timeout_error = isinstance(exc, httpx.TimeoutException)
+            causes, cause = [], exc
+            while cause is not None and len(causes) < 5:
+                number = getattr(cause, "errno", None)
+                causes.append(type(cause).__name__ + (f"(errno={number})" if type(number) is int else ""))
+                cause = cause.__cause__ or cause.__context__
+            LOGGER.warning("Xiaomi request failed request=%s stage=%s method=%s host=%s error=%s causes=%s elapsed=%.3fs HTTP=no_response",
+                           request_id, stage, method, host, type(exc).__name__, ">".join(causes), time.monotonic() - started)
+            reason = "连接超时" if timeout_error else "连接失败"
+            raise XiaomiError(f"小米{reason}（{stage}；{type(exc).__name__}；请求 {request_id}），请查看运行日志并确认云端结果", 504 if timeout_error else 503) from None
         finally:
             self.http.cookies.clear()
 
     @staticmethod
     def check_http(response):
+        context = response.extensions.get("xiaomi_diagnostic", "请查看运行日志")
         if response.status_code == 429:
-            raise XiaomiError("小米云暂时限制请求，请稍后再试", 429)
+            raise XiaomiError(f"小米云暂时限制请求（HTTP 429；{context}），请稍后再试", 429)
         if response.status_code in {401, 403}:
             data = response_json(response) if "json" in response.headers.get("content-type", "") else {}
             if data.get("isSecondValidation"):
-                raise XiaomiError("请先在小米云网页版打开相册并完成安全验证", 409)
-            raise XiaomiError("小米云拒绝访问，请检查账号权限或重新连接", 409)
+                raise XiaomiError(f"小米要求安全验证（HTTP {response.status_code}；{context}），请先在小米云网页版打开相册并完成验证", 409)
+            raise XiaomiError(f"小米云拒绝访问（HTTP {response.status_code}；{context}），请检查账号权限或重新连接", 409)
         if not response.is_success:
-            raise XiaomiError(f"小米请求失败（HTTP {response.status_code}）")
+            raise XiaomiError(f"小米请求失败（HTTP {response.status_code}；{context}）", 503 if response.status_code >= 500 else 502)
 
     async def start_qr(self, owner):
         if self.account():
@@ -378,14 +410,18 @@ class XiaomiCloud:
         self.check_http(response)
         result = response_json(response)
         code = result.get("code")
+        context = response.extensions.get("xiaomi_diagnostic", "请查看运行日志")
         if type(code) is not int:
-            raise XiaomiError("小米云相册没有返回操作结果")
-        if code in {11010, 11001}:
-            raise XiaomiError("该账号需要加密上传，请在小米云网页版完成上传", 409)
-        if code == 50006:
-            raise XiaomiError("小米云空间不足", 409)
+            LOGGER.warning("Xiaomi business response missing code context=%s HTTP=%s", context, response.status_code)
+            raise XiaomiError(f"小米云相册没有返回操作结果（{context}）")
         if code != 0:
-            raise XiaomiError(f"小米云相册拒绝了操作（错误码 {code}）")
+            LOGGER.warning("Xiaomi business rejected context=%s HTTP=%s code=%s", context, response.status_code, code)
+        if code in {11010, 11001}:
+            raise XiaomiError(f"该账号需要加密上传（小米错误码 {code}；{context}），请在小米云网页版完成上传", 409)
+        if code == 50006:
+            raise XiaomiError(f"小米云空间不足（小米错误码 {code}；{context}）", 409)
+        if code != 0:
+            raise XiaomiError(f"小米云相册拒绝了操作（小米错误码 {code}；{context}）", 409)
         return result.get("data")
 
     async def album_page(self, account, service, page):
@@ -616,8 +652,10 @@ class XiaomiCloud:
                         if len(data) > THUMBNAIL_LIMIT:
                             raise XiaomiError("缩略图超过大小限制", 413)
                     return bytes(data), media_type
-                except httpx.RequestError:
-                    raise XiaomiError("缩略图连接中断，请刷新后重试", 503) from None
+                except httpx.RequestError as exc:
+                    context = response.extensions.get("xiaomi_diagnostic", "请查看运行日志")
+                    LOGGER.warning("Xiaomi thumbnail stream failed context=%s error=%s", context, type(exc).__name__)
+                    raise XiaomiError(f"缩略图连接中断（{type(exc).__name__}；{context}），请刷新后重试", 503) from None
                 finally:
                     await response.aclose()
             raise XiaomiError("缩略图跳转未完成", 404)
@@ -656,6 +694,7 @@ class XiaomiCloud:
     async def upload(self, connection, album, name, kind, mime, size, file, *, modified_at=None):
         account, service = await self.auth(connection)
         dates = await asyncio.to_thread(upload_dates, file, kind, modified_at)
+        LOGGER.info("Xiaomi upload dates name=%r date_taken=%s date_modified=%s", name, dates["dateTaken"], dates["dateModified"])
         digest, blocks = await asyncio.to_thread(upload_blocks, file, size)
         content = {"type": kind, "groupId": album, "mimeType": mime, "fileName": name,
                    "title": PurePath(name).stem, "sha1": digest, "size": size, **dates}
@@ -668,6 +707,7 @@ class XiaomiCloud:
         media_id = remote_id(data["content"].get("id"))
         if data.get("fileExists") is True:
             record = receipt_record(data["content"])
+            LOGGER.info("Xiaomi upload deduplicated name=%r requested_date=%s server_time=%s", name, dates["dateTaken"], record_time(record))
             return {"id": media_id, "exists": True, "sha1": digest, "record": record, "lookup_time": record_time(record)}
         kss = data.get("kss")
         if (not isinstance(kss, dict) or not isinstance(kss.get("node_urls"), list) or not kss["node_urls"]

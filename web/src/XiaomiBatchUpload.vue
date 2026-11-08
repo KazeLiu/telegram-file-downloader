@@ -9,6 +9,7 @@ type Verification = { active: boolean; phase: 'receipt' | 'date' | 'album' | 'lo
 type Job = { id: string; album: string; state: 'uploading' | 'pausing' | 'paused' | 'verifying' | 'stopping' | 'stopped' | 'complete'; current: string; error: string;
   total: number; done: number; eligible: number; revision: number; page_size: number; counts: Partial<Record<ItemState, number>>;
   verification: Verification | null;
+  active_files: string[];
   items: { name: string; status: ItemState; error: string }[] }
 
 const props = defineProps<{ connection: string; album: string; albums: { id: string; name: string }[]; disabled: boolean }>()
@@ -31,10 +32,10 @@ const progressText = computed(() => {
     return `已确认 ${check.done} / ${check.total} 个文件 · ${scope} · 第 ${check.page} 页（累计读取 ${check.pages} 页）`
   }
   if (job.state === 'paused') return `已暂停 · 已处理 ${job.done} / ${job.total}`
-  if (job.state === 'pausing') return `正在暂停，等待在途文件完成 · ${job.current || '正在准备'}`
-  if (job.state === 'stopping') return job.current ? `正在停止，等待在途文件完成 · ${job.current}` : '正在停止，核对已上传的文件…'
+  if (job.state === 'pausing') return '正在暂停，等待在途文件完成…'
+  if (job.state === 'stopping') return job.active_files.length ? '正在停止，等待在途文件完成…' : '正在停止，核对已上传的文件…'
   if (job.state === 'verifying') return '正在核对目标相册中的文件…'
-  return `已处理 ${job.done} / ${job.total} · 正在上传 ${job.counts.uploading || 0} / 3 个文件 · ${job.current || '正在准备'}`
+  return `已处理 ${job.done} / ${job.total} · 正在上传 ${job.counts.uploading || 0} / 3 个文件`
 })
 const albumName = computed(() => {
   const id = model.selecting ? props.album : model.job?.album
@@ -197,9 +198,10 @@ onUnmounted(() => { disposed = true; jobRead++; clearTimeout(timer) })
     </template>
 
     <template v-else-if="model.job">
-      <p v-if="model.job.error" class="notice" role="status">{{ model.job.error }}</p>
+      <p v-if="model.job.error" class="notice error" role="alert">{{ model.job.error }} <a href="#/logs">查看运行日志</a></p>
       <template v-if="working">
         <p class="batch-progress" role="status">{{ progressText }}</p>
+        <ul v-if="model.job.active_files.length" class="batch-active" aria-label="正在上传的文件"><li v-for="name in model.job.active_files" :key="name"><Icon name="loader" class="loading-icon shrink-0" :size="16" /><span :title="name">{{ name }}</span></li></ul>
         <p v-if="running && !checking" class="muted batch-tools" role="status">云端已确认 {{ model.job.counts.verified || 0 }} 个 · 待批后补查 {{ model.job.counts.uploaded || 0 }} 个<span v-if="model.job.counts.failed"> · 上传失败 {{ model.job.counts.failed }} 个</span></p>
         <progress :value="checking ? checking.done : model.job.done" :max="checking ? checking.total : model.job.total" :aria-label="checking ? '云端核对与本地回收进度' : '批量上传处理进度'" />
         <div v-if="running" class="batch-controls">
@@ -251,6 +253,9 @@ onUnmounted(() => { disposed = true; jobRead++; clearTimeout(timer) })
 .batch-dialog h2, .batch-progress { overflow-wrap: anywhere; }
 .batch-tools, .batch-progress { @apply my-3.5; }
 .batch-controls { @apply my-3 flex flex-wrap gap-2; }
+.batch-active { @apply my-3 grid list-none gap-2 rounded-lg bg-soft p-3; }
+.batch-active li { @apply flex min-h-8 min-w-0 items-center gap-2 text-sm; }
+.batch-active span { @apply min-w-0; overflow-wrap: anywhere; }
 .batch-recycle-prompt { @apply my-4 rounded-xl bg-soft p-4; }
 .batch-recycle-prompt h3 { @apply mb-2 text-base; }
 .batch-recycle-prompt p { @apply mt-2 text-sm; }

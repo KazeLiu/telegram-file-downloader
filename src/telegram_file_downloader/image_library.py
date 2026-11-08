@@ -46,7 +46,8 @@ def image_time(image, record):
             return round(stamp.timestamp() * 1000), source
         except (UnicodeError, TypeError, ValueError, OverflowError, OSError):
             continue
-    return record["created_ms"] or record["mtime_ns"] // 1_000_000, "created" if record["created_ms"] else "modified"
+    # Extraction and copying create a new filesystem birth time, not a new photo date.
+    return record["mtime_ns"] // 1_000_000, "modified"
 
 
 def is_monochrome(image):
@@ -99,7 +100,7 @@ def root_images(root):
                 continue
             created = getattr(stat, "st_birthtime", None)
             created_ms = round(created * 1000) if created else None
-            records.append((entry.name, stat.st_size, stat.st_mtime_ns, created_ms, created_ms or stat.st_mtime_ns // 1_000_000))
+            records.append((entry.name, stat.st_size, stat.st_mtime_ns, created_ms, stat.st_mtime_ns // 1_000_000))
     return records
 
 
@@ -125,6 +126,7 @@ class ImageLibrary:
             if name not in columns:
                 self.db.execute(f"ALTER TABLE images ADD COLUMN {name} {kind}")
         self.db.execute("UPDATE images SET sort_time=mtime_ns / 1000000 WHERE sort_time IS NULL")
+        self.db.execute("UPDATE images SET sort_time=mtime_ns / 1000000,time_source='modified' WHERE time_source='created'")
         self.db.execute("CREATE INDEX IF NOT EXISTS images_active_time ON images(active,sort_time DESC,id DESC)")
         self.db.execute("DROP INDEX IF EXISTS images_active_name")
         self.db.commit()

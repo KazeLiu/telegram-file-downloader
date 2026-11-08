@@ -20,8 +20,25 @@ class PhotoOrderTests(unittest.TestCase):
         expected = round(datetime(2026, 11, 1, 0, 30, 0, 125000, tzinfo=timezone.utc).timestamp() * 1000)
         self.assertEqual(image_time(image, fallback), (expected, "taken"))
         exif.get_ifd.return_value = {36867: "0000:00:00 00:00:00"}
-        self.assertEqual(image_time(image, fallback), (1234, "created"))
+        self.assertEqual(image_time(image, fallback), (5678, "modified"))
         self.assertEqual(image_time(image, {**fallback, "created_ms": None}), (5678, "modified"))
+
+    def test_cached_creation_time_fallback_is_migrated_without_changing_exif_dates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            library = ImageLibrary(root, root)
+            library.db.executemany("INSERT INTO images(name,size,mtime_ns,sort_time,time_source) VALUES (?,?,?,?,?)", [
+                ("extracted.jpg", 1, 1742883900000000000, 1794081180000, "created"),
+                ("camera.jpg", 1, 1742883900000000000, 1609502400000, "taken"),
+            ])
+            library.db.commit(); library.db.close()
+            library = ImageLibrary(root, root)
+            try:
+                rows = library.db.execute("SELECT sort_time,time_source FROM images ORDER BY id").fetchall()
+                self.assertEqual(tuple(rows[0]), (1742883900000, "modified"))
+                self.assertEqual(tuple(rows[1]), (1609502400000, "taken"))
+            finally:
+                library.db.close()
 
     def test_old_index_migration_time_order_and_removed_cursor(self):
         with tempfile.TemporaryDirectory() as directory:
