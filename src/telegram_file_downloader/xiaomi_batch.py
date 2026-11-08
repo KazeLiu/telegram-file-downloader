@@ -177,8 +177,10 @@ class XiaomiBatch:
             async with asyncio.TaskGroup() as workers:
                 for _ in range(UPLOAD_CONCURRENCY):
                     workers.create_task(worker())
-            job["state"] = "stopping" if job["state"] == "stopping" else "verifying"
-            await self.verify(job)
+            unconfirmed = [item for item in job["items"] if item["status"] == "uploaded"]
+            if unconfirmed:
+                job["state"] = "stopping" if job["state"] == "stopping" else "verifying"
+                await self.verify(job, unconfirmed)
         except XiaomiError as exc:
             if job["verification"] is None:
                 job["error"] = str(exc)
@@ -205,6 +207,8 @@ class XiaomiBatch:
                     raise ValueError("上传期间本地文件已变化，已保留原文件")
             item.update(kind=kind, status="uploaded", receipt=(result["id"], result["sha1"], str(info.st_size)),
                         record=result["record"], lookup_time=result["lookup_time"])
+            if matches_receipt(item["record"], item["receipt"], job["album"]):
+                item["status"] = "verified"
         except XiaomiError as exc:
             item.update(status="failed", error=str(exc))
             if exc.status in {409, 429, 503, 504}:

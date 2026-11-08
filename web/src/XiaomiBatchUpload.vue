@@ -200,6 +200,7 @@ onUnmounted(() => { disposed = true; jobRead++; clearTimeout(timer) })
       <p v-if="model.job.error" class="notice" role="status">{{ model.job.error }}</p>
       <template v-if="working">
         <p class="batch-progress" role="status">{{ progressText }}</p>
+        <p v-if="running && !checking" class="muted batch-tools" role="status">云端已确认 {{ model.job.counts.verified || 0 }} 个 · 待批后补查 {{ model.job.counts.uploaded || 0 }} 个<span v-if="model.job.counts.failed"> · 上传失败 {{ model.job.counts.failed }} 个</span></p>
         <progress :value="checking ? checking.done : model.job.done" :max="checking ? checking.total : model.job.total" :aria-label="checking ? '云端核对与本地回收进度' : '批量上传处理进度'" />
         <div v-if="running" class="batch-controls">
           <button v-if="model.job.state === 'uploading'" class="secondary" :disabled="model.busy" @click="control('pause')"><Icon name="pause" :size="17" />暂停</button>

@@ -187,7 +187,47 @@ class BatchControlChecks(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.batch.task, 1)
         self.assertEqual(self.batch.view("account", 1)["eligible"], 3)
         self.assertEqual(self.cloud.page_calls, [])
-        self.assertEqual(self.batch.view("account", 1)["verification"]["done"], 3)
+        self.assertIsNone(self.batch.view("account", 1)["verification"])
+
+    async def test_receipt_is_confirmed_while_other_files_are_still_uploading(self):
+        self.cloud.complete_receipts = True
+        await self.start()
+        self.release(1)
+        self.assertEqual(await asyncio.wait_for(self.cloud.entered.get(), 1), "fourth.jpg")
+        view = self.batch.view("account", 1)
+        self.assertEqual(view["state"], "uploading")
+        self.assertEqual(view["counts"]["verified"], 1)
+        self.assertEqual(view["counts"]["uploading"], 3)
+        self.assertEqual(view["items"][0]["status"], "verified")
+        self.assertEqual(self.cloud.page_calls, [])
+        self.release(4)
+        await asyncio.wait_for(self.batch.task, 1)
+
+    async def test_only_missing_or_inconsistent_receipts_are_checked_after_upload(self):
+        self.cloud.complete_receipts = True
+        upload = self.cloud.upload
+        async def incomplete_upload(connection, album, name, *args):
+            result = await upload(connection, album, name, *args)
+            if name == "second.jpg":
+                result["record"] = {}
+            if name == "third.jpg":
+                result["record"]["groupId"] = "other-album"
+            return result
+        self.cloud.upload = incomplete_upload
+        self.cloud.verify_gate.clear()
+        await self.start()
+        self.release(5)
+        await asyncio.wait_for(self.cloud.verify_started.wait(), 1)
+        view = self.batch.view("account", 1)
+        self.assertEqual(view["state"], "verifying")
+        self.assertEqual(view["counts"]["verified"], 3)
+        self.assertEqual(view["counts"]["uploaded"], 2)
+        self.assertEqual(view["verification"]["total"], 2)
+        self.cloud.verify_gate.set()
+        await asyncio.wait_for(self.batch.task, 1)
+        self.assertEqual(self.batch.view("account", 1)["eligible"], 5)
+        self.assertEqual(self.batch.view("account", 1)["verification"]["done"], 2)
+        self.assertEqual(len(self.cloud.page_calls), 1)
 
     async def test_pause_on_last_files_does_not_leave_batch_stuck(self):
         await self.start(self.selected[:3])
