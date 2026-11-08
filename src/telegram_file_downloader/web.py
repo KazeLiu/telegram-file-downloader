@@ -32,7 +32,7 @@ from .recycle_cleanup import RecycleCleaner
 from .storage import RecycleBin, inside
 from .xiaomi_batch import XiaomiBatch, local_media
 from .xiaomi_local import XiaomiLocalIndex
-from .xiaomi_cloud import CONNECTION_PATTERN, ID_PATTERN, UPLOAD_LIMIT, XiaomiCloud, XiaomiError, upload_media
+from .xiaomi_cloud import CONNECTION_PATTERN, DAY_PATTERN, ID_PATTERN, UPLOAD_LIMIT, XiaomiCloud, XiaomiError, upload_media
 
 
 class Credentials(BaseModel):
@@ -235,7 +235,7 @@ def create_app():
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
         if request.url.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
+            response.headers.setdefault("Cache-Control", "no-store")
         return response
 
     @app.exception_handler(ValueError)
@@ -434,6 +434,15 @@ def create_app():
                            album: str = Query(pattern=ID_PATTERN), page: int = Query(default=0, ge=0), wall: bool = False):
         return await xiaomi.media(connection, album, page, wall)
 
+    @app.get("/api/xiaomi/timeline")
+    async def xiaomi_timeline(connection: str = Query(pattern=CONNECTION_PATTERN), album: str = Query(pattern=ID_PATTERN)):
+        return await xiaomi.timeline(connection, album)
+
+    @app.get("/api/xiaomi/day")
+    async def xiaomi_day(connection: str = Query(pattern=CONNECTION_PATTERN), album: str = Query(pattern=ID_PATTERN),
+                         date: str = Query(pattern=DAY_PATTERN), page: int = Query(default=0, ge=0)):
+        return await xiaomi.day_media(connection, album, date, page)
+
     @app.post("/api/xiaomi/local/status")
     async def xiaomi_local_status(body: XiaomiLocalStatus):
         owner = xiaomi.local_owner(body.connection)
@@ -458,16 +467,23 @@ def create_app():
         return await xiaomi.match_media(body.connection, body.album, body.page, set(body.names))
 
     @app.get("/api/xiaomi/thumbnail/{media_id}")
-    async def xiaomi_thumbnail(media_id: Annotated[str, FastAPIPath(pattern=ID_PATTERN)],
+    async def xiaomi_thumbnail(request: Request, media_id: Annotated[str, FastAPIPath(pattern=ID_PATTERN)],
                                connection: str = Query(pattern=CONNECTION_PATTERN)):
-        data, media_type = await xiaomi.thumbnail(connection, media_id)
-        return Response(data, media_type=media_type)
+        return await thumbnail_response(request, connection, media_id)
 
     @app.get("/api/xiaomi/album-cover/{album_id}")
-    async def xiaomi_album_cover(album_id: Annotated[str, FastAPIPath(pattern=ID_PATTERN)],
+    async def xiaomi_album_cover(request: Request, album_id: Annotated[str, FastAPIPath(pattern=ID_PATTERN)],
                                   connection: str = Query(pattern=CONNECTION_PATTERN)):
-        data, media_type = await xiaomi.thumbnail(connection, "album:" + album_id)
-        return Response(data, media_type=media_type)
+        return await thumbnail_response(request, connection, "album:" + album_id)
+
+    async def thumbnail_response(request, connection, key):
+        data, media_type, etag = await xiaomi.thumbnail(connection, key)
+        headers = {"Cache-Control": "private, no-cache", "ETag": etag, "Vary": "Cookie", "X-Content-Type-Options": "nosniff"}
+        # Revalidate through authentication even when the browser already holds the bytes.
+        matches = [tag.strip().removeprefix("W/") for tag in request.headers.get("if-none-match", "").split(",")]
+        if etag in matches or "*" in matches:
+            return Response(status_code=304, headers=headers)
+        return Response(data, media_type=media_type, headers=headers)
 
     @app.post("/api/xiaomi/recycle")
     async def xiaomi_recycle(body: XiaomiRecycle):

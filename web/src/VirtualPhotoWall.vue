@@ -1,18 +1,19 @@
 <script setup lang="ts" generic="T extends WallPhoto">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { defaultRangeExtractor, useWindowVirtualizer } from '@tanstack/vue-virtual'
 import Icon from './Icon.vue'
-import { groupPhotos, photoRows, type WallPhoto } from './photoWall'
+import { groupPhotos, photoRows, type PhotoGroup, type WallPhoto } from './photoWall'
 
-const props = defineProps<{ items: T[]; caption?: boolean; disabled: boolean; isSelected: (item: T) => boolean }>()
-const emit = defineEmits<{ toggleDay: [day: string, items: T[]] }>()
+const props = defineProps<{ items: T[]; groups?: PhotoGroup<T>[]; caption?: boolean; topInset?: number; disabled: boolean; isSelected: (item: T) => boolean }>()
+const emit = defineEmits<{ toggleDay: [day: string, items: T[]]; visibleDays: [days: string[]]; activeDay: [day: string] }>()
 const wall = ref<HTMLDivElement>()
 const columns = ref(1)
 const width = ref(0)
 const gap = ref(0)
 const margin = ref(0)
+const viewportHeight = ref(0)
 const focusedRow = ref<string | null>(null)
-const groups = computed(() => groupPhotos(props.items))
+const groups = computed(() => props.groups ?? groupPhotos(props.items))
 const rows = computed(() => photoRows(groups.value, columns.value))
 const photoHeight = computed(() => (width.value - gap.value * (columns.value - 1)) / columns.value + (props.caption ? 20 : 0) + gap.value)
 const dayStates = computed(() => new Map(groups.value.map(group => {
@@ -24,7 +25,7 @@ const virtualizer = useWindowVirtualizer(computed(() => {
   const height = photoHeight.value
   const focus = data.findIndex(row => row.key === focusedRow.value)
   return {
-    count: data.length, overscan: 4, scrollMargin: margin.value,
+    count: data.length, overscan: props.groups ? Math.max(1, Math.ceil(viewportHeight.value / height / 2)) : 4, scrollMargin: margin.value,
     getItemKey: (index: number) => data[index]!.key,
     estimateSize: (index: number) => data[index]!.kind === 'day' ? 44 : height,
     rangeExtractor: (range: Parameters<typeof defaultRangeExtractor>[0]) => {
@@ -40,6 +41,13 @@ const visibleRows = computed(() => virtualizer.value.getVirtualItems().flatMap(v
   return row ? [{ virtual, row }] : []
 }))
 const totalHeight = computed(() => virtualizer.value.getTotalSize())
+const totalCount = computed(() => groups.value.reduce((sum, group) => sum + (group.count ?? group.items.length), 0))
+watch(visibleRows, (visible) => {
+  const viewport = visible.filter(({ virtual }) => virtual.end > window.scrollY + (props.topInset ?? 0) + 1 && virtual.start < window.scrollY + window.innerHeight)
+  const buffered = visible.filter(({ virtual }) => virtual.end > window.scrollY - window.innerHeight / 2 && virtual.start < window.scrollY + window.innerHeight * 1.5)
+  emit('visibleDays', [...new Set([...viewport, ...buffered].map(({ row }) => row.group.key))])
+  if (viewport[0]) emit('activeDay', viewport[0].row.group.key)
+}, { flush: 'post' })
 let observer: ResizeObserver
 let layoutRevision = 0
 
@@ -53,15 +61,17 @@ function measure() {
   const anchor = resizing && window.scrollY > margin.value
     ? virtualizer.value.getVirtualItems().find(item => item.end > window.scrollY && rows.value[item.index]?.kind === 'photos') : undefined
   const photo = anchor ? rows.value[anchor.index]!.items[0] : undefined
+  const anchorStart = anchor ? rows.value[anchor.index]!.start : 0
   const fraction = anchor ? (window.scrollY - anchor.start) / anchor.size : 0
   width.value = rect.width
+  viewportHeight.value = window.innerHeight
   columns.value = nextColumns
   gap.value = parseFloat(style.columnGap)
   margin.value = rect.top + window.scrollY
-  if (photo) {
+  if (anchor) {
     let top = margin.value
     for (const row of rows.value) {
-      if (row.items.some(item => item.id === photo.id)) { top += fraction * photoHeight.value; break }
+      if (photo ? row.items.some(item => item.id === photo.id) : row.kind === 'photos' && row.start <= anchorStart && row.start + row.count > anchorStart) { top += fraction * photoHeight.value; break }
       top += row.kind === 'day' ? 44 : photoHeight.value
     }
     const revision = ++layoutRevision
@@ -75,6 +85,14 @@ function focus(event: FocusEvent) {
 function blur(event: FocusEvent) {
   if (!wall.value?.contains(event.relatedTarget as Node | null)) focusedRow.value = null
 }
+function jump(day: string) {
+  const index = rows.value.findIndex(row => row.kind === 'day' && row.group.key === day)
+  if (index >= 0) {
+    const top = rows.value.slice(0, index).reduce((top, row) => top + (row.kind === 'day' ? 44 : photoHeight.value), margin.value)
+    window.scrollTo({ top: top - (props.topInset ?? 0), behavior: 'instant' })
+  }
+}
+defineExpose({ jump })
 onMounted(() => {
   measure()
   observer = new ResizeObserver(measure)
@@ -91,14 +109,15 @@ onUnmounted(() => { observer.disconnect(); window.removeEventListener('resize', 
       <div v-for="{ virtual, row } in visibleRows" :key="row.key" class="virtual-photo-row" :data-wall-row="row.key" role="presentation"
         :style="{ height: `${virtual.size}px`, transform: `translateY(${virtual.start - margin}px)`, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, columnGap: `${gap}px` }">
         <h3 v-if="row.kind === 'day'" class="wall-day">
-          <button type="button" role="checkbox" class="day-select" :aria-checked="dayStates.get(row.group.key)" :disabled="disabled"
-            :aria-label="`${dayStates.get(row.group.key) === true ? '取消选择' : '选择'} ${row.group.key} 已加载的 ${row.group.items.length} 项`"
+          <button type="button" role="checkbox" class="day-select" :aria-checked="dayStates.get(row.group.key)" :disabled="disabled || !row.group.items.length"
+            :aria-label="`${dayStates.get(row.group.key) === true ? '取消选择' : '选择'} ${row.group.label ?? row.group.key} 已加载的 ${row.group.items.length} 项`"
             title="选择这一天已加载的图片，后续加载的同日图片会继续选中" @click="emit('toggleDay', row.group.key, row.group.items)">
             <span class="day-check" :class="{ checked: dayStates.get(row.group.key) !== false }"><Icon v-if="dayStates.get(row.group.key) === true" name="check" :size="14" /><span v-else-if="dayStates.get(row.group.key) === 'mixed'" class="day-mixed" /></span>
-            <span>{{ row.group.key }}</span><span class="text-xs text-muted">{{ row.group.items.length }} 项</span>
+            <span>{{ row.group.label ?? row.group.key }}</span><span class="text-xs text-muted">{{ row.group.count ?? row.group.items.length }} 项</span>
           </button>
         </h3>
-        <div v-for="(item, index) in row.items" :key="item.id" class="virtual-photo-cell" role="listitem" :aria-posinset="row.start + index + 1" :aria-setsize="items.length"><slot :item="item" /></div>
+        <div v-for="(item, index) in row.items" :key="item.id" class="virtual-photo-cell" role="listitem" :aria-posinset="row.start + index + 1" :aria-setsize="totalCount"><slot :item="item" /></div>
+        <div v-for="index in row.count - row.items.length" :key="`pending:${index}`" class="virtual-photo-cell"><slot name="pending" :day="row.group.key"><div class="aspect-square rounded-lg bg-soft" /></slot></div>
       </div>
     </div>
   </div>

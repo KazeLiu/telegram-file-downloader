@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
-import { useRoute, useRouter } from '#imports'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteUpdate, useRoute, useRouter } from '#imports'
 import { queryPage } from './routeState'
 import { api, bytes } from './api'
 import Icon from './Icon.vue'
@@ -8,10 +8,11 @@ import XiaomiBatchUpload from './XiaomiBatchUpload.vue'
 import XiaomiNameRecycle from './XiaomiNameRecycle.vue'
 import XiaomiRecycleDialog from './XiaomiRecycleDialog.vue'
 import XiaomiThumbnail from './XiaomiThumbnail.vue'
-import VirtualPhotoWall from './VirtualPhotoWall.vue'
+import XiaomiTimelineWall from './XiaomiTimelineWall.vue'
 import XiaomiLocalBinding from './XiaomiLocalBinding.vue'
 import XiaomiLocalIndicator from './XiaomiLocalIndicator.vue'
-import { nextWallPage, photoDay, takenAt, type CloudMedia as Media, type LocalFileState } from './xiaomiMedia'
+import { photoDay, takenAt, type CloudMedia as Media, type LocalFileState } from './xiaomiMedia'
+import { accountViews, invalidateAlbum } from './xiaomiTimeline'
 import { useBeforeUnload } from './useBeforeUnload'
 
 type Account = { connection: string; label: string }
@@ -29,16 +30,23 @@ const recycleDialog = ref<InstanceType<typeof XiaomiRecycleDialog>>()
 const uploadDialog = ref<HTMLDialogElement>()
 const fileInput = ref<HTMLInputElement>()
 const albumHeading = ref<HTMLHeadingElement>()
-const wallEnd = ref<HTMLDivElement>()
+const timelineWall = ref<InstanceType<typeof XiaomiTimelineWall>>()
 const albumName = computed(() => cloud.albums.find(item => item.id === cloud.album)?.name || '')
 const selectedCount = computed(() => cloud.selected.size)
 useBeforeUnload(() => cloud.organizing && selectedCount.value > 0)
 const allSelected = computed(() => cloud.items.length > 0 && cloud.items.every(item => cloud.selected.has(item.id)))
 let pollTimer: ReturnType<typeof setTimeout>
 let disposed = false
-let wallObserver: IntersectionObserver | undefined
 let loadedRoute = ''
-let wallRemoved = 0
+const albumModes = new Map<string, boolean>()
+const listViews = new Map<string, { items: Media[]; last: boolean; scroll: number }>()
+function mediaDay(item: Media) { return item.timeline_day ?? photoDay(item.sort_time) }
+onBeforeRouteUpdate(() => {
+  if (cloud.album && !cloud.wall && cloud.ready) {
+    listViews.set(`${cloud.album}:${cloud.page}`, { items: cloud.items, last: cloud.last, scroll: window.scrollY })
+    if (listViews.size > 16) listViews.delete(listViews.keys().next().value!)
+  }
+})
 
 function albumRoute(album = cloud.album, wall = cloud.wall, page = 0) {
   return router.push({ path: album ? `/xiaomi/albums/${encodeURIComponent(album)}` : '/xiaomi', query: album ? { wall: wall ? '1' : undefined, page: !wall && page ? String(page + 1) : undefined } : {} })
@@ -49,9 +57,19 @@ watch(() => [route.fullPath, cloud.account?.connection, cloud.busy], () => {
   if (key === loadedRoute) return
   loadedRoute = key
   const album = /^\/xiaomi\/albums\/([^/]+)$/.exec(route.path)?.[1] || ''
+  if (cloud.album) {
+    albumModes.set(cloud.album, cloud.wall)
+  }
   if (cloud.album !== album) { cloud.organizing = false; cloud.bound = false }
   cloud.album = album; cloud.wall = route.query.wall === '1'; resetMedia()
-  if (album) void run('正在读取相册内容…', () => loadMedia(cloud.wall ? 0 : queryPage(route.query.page) - 1))
+  if (album && !cloud.wall) {
+    const page = queryPage(route.query.page) - 1
+    const cached = listViews.get(`${album}:${page}`)
+    if (cached) {
+      cloud.items = cached.items; cloud.page = page; cloud.last = cached.last; cloud.ready = true
+      void nextTick(() => window.scrollTo({ top: cached.scroll, behavior: 'instant' }))
+    } else void run('正在读取相册内容…', () => loadMedia(page))
+  }
 })
 
 function params(values: Record<string, string>) {
@@ -66,19 +84,30 @@ async function run(label: string, action: () => Promise<void>) {
   finally { cloud.busy = '' }
 }
 
-async function loadMedia(page = 0, append = false) {
+async function loadMedia(page = 0) {
   const result = await api<{ items: Media[]; last: boolean }>(`/xiaomi/media?${params({ album: cloud.album, page: String(page), wall: String(cloud.wall) })}`)
-  if (append) {
-    const existing = new Set(cloud.items.map(item => item.id))
-    const added = result.items.filter(item => !existing.has(item.id))
-    cloud.items.push(...added)
-    for (const item of added) if (cloud.selectedDays.has(photoDay(item.sort_time))) cloud.selected.set(item.id, item)
-  } else { cloud.items = result.items; clearSelection(); cloud.thumbnailErrors.clear(); wallRemoved = 0 }
+  cloud.items = result.items; clearSelection(); cloud.thumbnailErrors.clear()
   cloud.last = result.last; cloud.page = page; cloud.ready = true
 }
 
+function wallItems(items: Media[]) {
+  cloud.items = items
+  for (const item of items) if (cloud.selectedDays.has(mediaDay(item))) cloud.selected.set(item.id, item)
+}
+
+function invalidateViews(album = cloud.album) {
+  invalidateAlbum(cloud.account!.connection, album)
+  for (const key of listViews.keys()) if (key.startsWith(`${album}:`)) listViews.delete(key)
+}
+
+async function refreshMedia() {
+  invalidateViews()
+  clearSelection(); cloud.thumbnailErrors.clear()
+  if (cloud.wall) await timelineWall.value?.refresh()
+  else await loadMedia(cloud.page)
+}
+
 function resetMedia() {
-  wallRemoved = 0
   cloud.items = []; cloud.page = 0; cloud.last = true; cloud.ready = false
   cloud.localStates = {}
   clearSelection(); cloud.thumbnailErrors.clear()
@@ -87,7 +116,7 @@ function resetMedia() {
 function clearSelection() { cloud.selected.clear(); cloud.selectedDays.clear() }
 function isSelected(item: Media) { return cloud.selected.has(item.id) }
 function select(item: Media) {
-  if (cloud.selected.has(item.id)) { cloud.selected.delete(item.id); cloud.selectedDays.delete(photoDay(item.sort_time)) }
+  if (cloud.selected.has(item.id)) { cloud.selected.delete(item.id); cloud.selectedDays.delete(mediaDay(item)) }
   else cloud.selected.set(item.id, item)
 }
 
@@ -128,25 +157,13 @@ function localStatus(states: Record<string, LocalFileState>, bound: boolean) {
   cloud.localStates = states; cloud.bound = bound
 }
 
-function loadMore() {
-  if (!cloud.wall || !cloud.ready || cloud.last || cloud.busy || cloud.recycleActive || cloud.error || disposed) return
-  void run('正在加载下一批图片…', async () => {
-    await loadMedia(nextWallPage(cloud.page, wallRemoved), true)
-    wallRemoved = 0
-  })
-}
-
-watchEffect(() => {
-  wallObserver?.disconnect()
-  if (wallEnd.value && cloud.wall && cloud.ready && !cloud.last && !cloud.busy && !cloud.recycleActive && !cloud.error) wallObserver?.observe(wallEnd.value)
-}, { flush: 'post' })
-
 async function loadAccount() {
   const previous = cloud.account?.connection
   const result = await api<{ account: Account | null }>('/xiaomi/account')
   cloud.account = result.account; cloud.initialized = true
   if (!cloud.account || cloud.account.connection !== previous) {
     loadedRoute = ''
+    accountViews(cloud.account?.connection ?? ''); listViews.clear(); albumModes.clear()
     cloud.organizing = false
     cloud.albums = []; cloud.album = ''; resetMedia()
   }
@@ -202,8 +219,8 @@ function disconnect() {
 }
 
 async function openAlbum(album: string) {
-  await albumRoute(album, false)
-  await nextTick(); albumHeading.value?.focus()
+  await albumRoute(album, albumModes.get(album) ?? true)
+  await nextTick(); albumHeading.value?.focus({ preventScroll: true })
 }
 
 function toggleWall(event: Event) {
@@ -217,7 +234,8 @@ async function backToAlbums() {
 }
 
 function batchFinished(album: string) {
-  if (album === cloud.album && !cloud.busy && !cloud.recycleActive && !cloud.organizing) void run('正在刷新云相册…', () => loadMedia())
+  invalidateViews(album)
+  if (album === cloud.album && !cloud.busy && !cloud.recycleActive && !cloud.organizing) void run('正在刷新云相册…', refreshMedia)
 }
 
 async function confirmRecycle(item: Media) {
@@ -226,7 +244,9 @@ async function confirmRecycle(item: Media) {
 
 function afterRecycle(ids: string[]) {
   const moved = new Set(ids)
-  if (cloud.wall) wallRemoved += cloud.items.filter(item => moved.has(item.id)).length
+  if (cloud.wall) timelineWall.value?.remove(ids)
+  else invalidateViews()
+  listViews.clear()
   ids.forEach(id => cloud.selected.delete(id))
   ids.forEach(id => delete cloud.localStates[id])
   cloud.items = cloud.items.filter(item => !moved.has(item.id))
@@ -268,14 +288,13 @@ async function uploadFile() {
     upload.error = error instanceof TypeError ? '上传连接已中断，请先刷新相册确认结果再重试。' : (error as Error).message
     return
   } finally { cloud.busy = '' }
-  await run('正在刷新云相册…', () => loadMedia())
+  await run('正在刷新云相册…', refreshMedia)
 }
 
 onMounted(() => {
-  wallObserver = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) loadMore() }, { rootMargin: '0px 0px 160px' })
   void run('正在读取连接…', loadAccount)
 })
-onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disconnect() })
+onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
 </script>
 
 <template>
@@ -326,7 +345,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
           </div>
           <div class="cloud-actions">
             <label class="wall-toggle"><input type="checkbox" role="switch" :checked="cloud.wall" :disabled="!!cloud.busy" @change="toggleWall" />图片墙</label>
-            <button class="secondary" :disabled="!!cloud.busy" @click="run('正在刷新相册内容…', () => loadMedia(cloud.wall ? 0 : cloud.page))"><Icon name="refresh" :size="17" />刷新</button>
+            <button class="secondary" :disabled="!!cloud.busy" @click="run('正在刷新相册内容…', refreshMedia)"><Icon name="refresh" :size="17" />刷新</button>
             <button class="floating-manage" :class="cloud.organizing ? 'primary' : 'secondary'" :aria-pressed="cloud.organizing" :disabled="!!cloud.busy || !cloud.ready" @click="toggleOrganizing">{{ cloud.organizing ? '完成' : '管理' }}</button>
             <XiaomiNameRecycle :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :album-name="albumName"
               :last-local-recycle="props.lastLocalRecycle" :disabled="!!cloud.busy || cloud.organizing" @confirm="recycleDialog?.open($event)" />
@@ -342,7 +361,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
           <span role="status">已选 {{ selectedCount }} 项</span>
           <button class="text-button" :disabled="!!cloud.busy || !cloud.items.length" @click="selectLoaded">{{ allSelected ? '取消已加载选择' : '全选已加载' }}</button>
         </div>
-        <VirtualPhotoWall v-if="cloud.wall && cloud.items.length" class="cloud-wall" :items="cloud.items" caption :disabled="!!cloud.busy || cloud.recycleActive" :is-selected="isSelected" @toggle-day="selectDay">
+        <XiaomiTimelineWall v-if="cloud.wall" :key="`${cloud.account.connection}:${route.fullPath}`" ref="timelineWall" :connection="cloud.account.connection" :album="cloud.album" :disabled="!!cloud.busy || cloud.recycleActive" :is-selected="isSelected" @items="wallItems" @ready="cloud.ready = $event" @toggle-day="selectDay">
           <template #default="{ item }">
           <article class="relative min-w-0">
             <div class="relative">
@@ -354,7 +373,7 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
             <p class="h-[20px] truncate text-xs leading-[20px] text-muted" :title="item.name">{{ item.name }}</p>
           </article>
           </template>
-        </VirtualPhotoWall>
+        </XiaomiTimelineWall>
         <ul v-else-if="cloud.items.length" class="cloud-files">
           <li v-for="item in cloud.items" :key="item.id" :class="{ 'is-selected': cloud.organizing && cloud.selected.has(item.id) }">
             <component :is="cloud.organizing ? 'button' : 'div'" class="cloud-file" :class="{ 'cloud-file-select': cloud.organizing }" :type="cloud.organizing ? 'button' : undefined"
@@ -368,10 +387,6 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
         </ul>
         <div v-else-if="!cloud.busy && !cloud.error && cloud.last" class="empty-list">
           <Icon name="photo" :size="30" /><p>这个相册还没有图片或视频</p>
-        </div>
-        <div v-if="cloud.wall && cloud.ready && !cloud.last" ref="wallEnd" class="wall-end" role="status">
-          <template v-if="cloud.busy">正在加载…</template>
-          <button v-else-if="cloud.error" class="text-button" @click="cloud.error = ''; loadMore()">重试加载</button>
         </div>
         <div v-if="!cloud.wall && cloud.ready && (cloud.page > 0 || !cloud.last)" class="pagination">
           <span>第 {{ cloud.page + 1 }} 页</span>
@@ -423,14 +438,12 @@ onUnmounted(() => { disposed = true; clearTimeout(pollTimer); wallObserver?.disc
 .cloud-detail-heading h2 { overflow-wrap: anywhere; }
 .cloud-status { @apply mb-2.5; }
 .wall-toggle { @apply flex flex-row items-center gap-2; }
-.wall-end { @apply grid min-h-14 place-items-center text-sm text-muted; }
 .cloud-files {
   --file-gap: 10px;
   @apply m-0 grid list-none p-0;
   gap: var(--file-gap);
   grid-template-columns: repeat(auto-fill, minmax(clamp(calc((100% - 11 * var(--file-gap)) / 12), 260px, calc((100% - 2 * var(--file-gap)) / 3)), 1fr));
 }
-.cloud-wall { @apply m-0 grid list-none grid-cols-3 gap-2 p-0 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
 .wall-recycle { @apply absolute top-1 right-1 grid size-8 min-h-0 place-items-center rounded-full bg-canvas p-0 text-danger; }
 .cloud-files li { @apply relative min-w-0 rounded-lg border border-solid border-hairline py-2 pr-1 pl-2; }
 .cloud-file { @apply min-w-0; }

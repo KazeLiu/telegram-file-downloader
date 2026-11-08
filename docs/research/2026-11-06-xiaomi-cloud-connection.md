@@ -9,6 +9,10 @@ reference_commit: 340de4a231c65fa9780c2577ad30954effb5cf07
 
 ## 接入时补充的证据
 
+2026-11-08，只读检查本机小米云服务 4.0.1.328 的 `resources/app.asar` 中 gallery renderer，确认日期索引先调用 `POST /gallery/user/lite/index/prepare`，准备好后调用 `GET /gallery/user/timeline?albumId=...`，响应 `dayCount` 为 `YYYYMMDD` 到数量的映射。未准备好且 `isRetriable` 时等待一秒重试一次。照片按相同的 `startDate`、`endDate` 调用 `/gallery/user/galleries`，每页 30 项，最多两个在途日期请求；页面按可见区域上下约半屏预取。
+
+普通照片墙主要复用 galleries 返回的缩略图地址。回收站另有 `/gallery/thumbnails?ids=...&type=small`，响应为 `idTothumbnails` 数组，每项含 `id`、`thumbnails.small.data`。本项目仅在地址缓存淘汰时按编号重新获取此缩略图信息，不将其表述为官方普通墙的常规批量策略。以上是已安装客户端的接口证据；本次界面验收使用隔离模拟账号，未用真实账号验证这些新接口。
+
 2026-11-06，经用户授权在已登录的官方网页只读查看“酷安”相册：
 
 - `/gallery/user/album/list` 的相册记录提供 `thumbnails[0].url` 作为封面。

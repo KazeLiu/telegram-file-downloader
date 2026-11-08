@@ -14,6 +14,7 @@ import sqlite3
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import PurePath
 from urllib.parse import quote, urljoin, urlsplit
 from uuid import uuid4
@@ -38,6 +39,9 @@ UPLOAD_LIMIT = {"image": 100 * 1024**2, "video": 4 * 1024**3}
 ALBUM_NAMES = {"1": "相机", "2": "屏幕截图", "1000": "隐私相册"}
 THUMBNAIL_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"}
 THUMBNAIL_LIMIT = 512 * 1024
+THUMBNAIL_CACHE_BYTES = 64 * 1024**2
+THUMBNAIL_CACHE_SECONDS = 15 * 60
+DAY_PATTERN = r"^[0-9]{8}$"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -144,12 +148,20 @@ class XiaomiCloud:
         self.token_lock = asyncio.Lock()
         self.write_lock = asyncio.Lock()
         self.thumbnail_slots = asyncio.Semaphore(4)
+        self.day_slots = asyncio.Semaphore(2)
         self.thumbnail_sources = OrderedDict()
         self.thumbnail_source_size = 0
+        self.thumbnail_contents = OrderedDict()
+        self.thumbnail_content_size = 0
+        self.thumbnail_tasks = {}
         self.thumbnail_pause_until = 0.0
         self.media_snapshots = OrderedDict()
 
     async def close(self):
+        tasks = list(self.thumbnail_tasks.values())
+        for pending in tasks:
+            pending.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         task = self.qr_task
         if task:
             task.cancel()
@@ -177,6 +189,11 @@ class XiaomiCloud:
         self.store.put("xiaomi_account", None)
         self.ticket = None
         self.thumbnail_sources.clear()
+        self.thumbnail_contents.clear()
+        self.thumbnail_content_size = 0
+        for task in self.thumbnail_tasks.values():
+            task.cancel()
+        self.thumbnail_tasks.clear()
         self.media_snapshots.clear()
         self.thumbnail_source_size = 0
         self.thumbnail_pause_until = 0.0
@@ -383,12 +400,54 @@ class XiaomiCloud:
                 raise XiaomiError("小米云相册未返回完整列表")
             page += 1
 
-    async def media_page(self, connection, album_id, page, size):
+    async def timeline(self, connection, album_id):
         account, service = await self.auth(connection)
-        data = await self.gallery(account, service, "/gallery/user/galleries", query={
-            "albumId": album_id, "pageNum": page, "pageSize": size, "isShared": "false",
-        })
+        for attempt in range(2):
+            state = await self.gallery(account, service, "/gallery/user/lite/index/prepare", form={})
+            if not isinstance(state, dict) or type(state.get("isReady")) is not bool:
+                raise XiaomiError("小米云日期索引格式有变化，请稍后再试")
+            if state["isReady"]:
+                break
+            if attempt == 0 and state.get("isRetriable") is True:
+                await asyncio.sleep(1)
+            else:
+                raise XiaomiError("小米云正在准备日期索引，请稍后点击刷新", 503)
+        data = await self.gallery(account, service, "/gallery/user/timeline", query={"albumId": album_id, "isShared": "false"})
+        counts = data.get("dayCount", {}) if isinstance(data, dict) else None
+        if not isinstance(counts, dict):
+            raise XiaomiError("小米云日期索引格式有变化，请稍后再试")
+        for day, count in counts.items():
+            self.validate_day(day)
+            if type(count) is not int or count < 0:
+                raise XiaomiError("小米云日期索引数量无效")
+        return {"days": [{"date": day, "count": counts[day]} for day in sorted(counts, reverse=True) if counts[day]]}
+
+    @staticmethod
+    def validate_day(day):
+        try:
+            if not isinstance(day, str) or not re.fullmatch(DAY_PATTERN, day):
+                raise ValueError
+            datetime.strptime(day, "%Y%m%d")
+        except ValueError:
+            raise XiaomiError("日期必须是有效的 YYYYMMDD", 400) from None
+
+    async def media_page(self, connection, album_id, page, size, day=None):
+        account, service = await self.auth(connection)
+        query = {"albumId": album_id, "pageNum": page, "pageSize": size, "isShared": "false"}
+        if day is not None:
+            self.validate_day(day)
+            query.update(startDate=day, endDate=day)
+        data = await self.gallery(account, service, "/gallery/user/galleries", query=query)
         return page_data(data, "galleries")
+
+    async def day_media(self, connection, album_id, day, page):
+        async with self.day_slots:
+            entries, last = await self.media_page(connection, album_id, page, 30, day)
+        if not entries and not last:
+            raise XiaomiError("小米云未返回完整的当日列表，请刷新日期索引")
+        items = [self.public_media(item, connection) for item in entries if item.get("type") in {"image", "video"}]
+        self.remember_media(connection, album_id, items)
+        return {"items": items, "last": last}
 
     def remember_media(self, connection, album, items):
         for media in items:
@@ -420,11 +479,14 @@ class XiaomiCloud:
             else:
                 return False
             key = (connection, key)
+            if self.thumbnail_sources.get(key) != source:
+                self.forget_thumbnail(key)
             self.thumbnail_source_size += len(source) - len(self.thumbnail_sources.pop(key, ""))
             self.thumbnail_sources[key] = source
             while len(self.thumbnail_sources) > 4096 or self.thumbnail_source_size > 32 * 1024**2:
-                _, expired = self.thumbnail_sources.popitem(last=False)
+                expired_key, expired = self.thumbnail_sources.popitem(last=False)
                 self.thumbnail_source_size -= len(expired)
+                self.forget_thumbnail(expired_key)
             return True
         return False
 
@@ -440,14 +502,70 @@ class XiaomiCloud:
             result["thumbnail"] = f"/api/xiaomi/thumbnail/{media_id}?connection={connection}"
         return result
 
+    def forget_thumbnail(self, key):
+        previous = self.thumbnail_contents.pop(key, None)
+        if previous:
+            self.thumbnail_content_size -= len(previous[0])
+
     async def thumbnail(self, connection, media_id):
+        self.local_owner(connection)
+        key = (connection, media_id)
+        cached = self.thumbnail_contents.get(key)
+        if cached and cached[3] > time.monotonic():
+            self.thumbnail_contents.move_to_end(key)
+            self.thumbnail_sources.move_to_end(key)
+            return cached[:3]
+        self.forget_thumbnail(key)
+        task = self.thumbnail_tasks.get(key)
+        if task is None:
+            task = asyncio.create_task(self.load_thumbnail(connection, media_id))
+            self.thumbnail_tasks[key] = task
+            def finished(done):
+                if self.thumbnail_tasks.get(key) is done:
+                    self.thumbnail_tasks.pop(key)
+                if not done.cancelled():
+                    done.exception()
+            task.add_done_callback(finished)
+        return await asyncio.shield(task)
+
+    async def load_thumbnail(self, connection, media_id):
+        key = (connection, media_id)
+        source = self.thumbnail_sources.get(key)
+        if not source and re.fullmatch(ID_PATTERN, media_id):
+            # Retained album views can outlive the bounded source-address cache.
+            async with self.thumbnail_slots:
+                account, service = await self.auth(connection)
+                data = await self.gallery(account, service, "/gallery/thumbnails", query={"ids": media_id, "type": "small"})
+            entries = data.get("idTothumbnails") if isinstance(data, dict) else None
+            if not isinstance(entries, list):
+                raise XiaomiError("小米未返回可显示的缩略图", 404)
+            for entry in entries:
+                if not isinstance(entry, dict) or str(entry.get("id")) != media_id:
+                    continue
+                thumbnails = entry.get("thumbnails")
+                info = thumbnails.get("small") if isinstance(thumbnails, dict) else None
+                if (isinstance(info, dict) and not entry.get("encryptInfo") and not info.get("encryptInfo")
+                        and self.cache_thumbnail(connection, media_id, info.get("data"))):
+                    source = self.thumbnail_sources[key]
+                    break
+        if not source:
+            raise XiaomiError("缩略图不可用，请刷新相册", 404)
+        data, media_type = await self.fetch_thumbnail(connection, source)
+        self.local_owner(connection)
+        result = (data, media_type, '"' + uuid4().hex + '"')
+        if self.thumbnail_sources.get(key) == source:
+            self.forget_thumbnail(key)
+            self.thumbnail_contents[key] = (*result, time.monotonic() + THUMBNAIL_CACHE_SECONDS)
+            self.thumbnail_content_size += len(data)
+            while len(self.thumbnail_contents) > 1024 or self.thumbnail_content_size > THUMBNAIL_CACHE_BYTES:
+                self.forget_thumbnail(next(iter(self.thumbnail_contents)))
+        return result
+
+    async def fetch_thumbnail(self, connection, url):
         async with self.thumbnail_slots:
             current = self.account()
             if not current or current["connection"] != connection:
                 raise XiaomiError("小米账号连接已变化，请刷新页面", 409)
-            url = self.thumbnail_sources.get((connection, media_id))
-            if not url:
-                raise XiaomiError("缩略图不可用，请刷新相册", 404)
             if url.startswith("data:"):
                 header, _, encoded = url.partition(",")
                 try:
@@ -512,6 +630,12 @@ class XiaomiCloud:
             account, service = await self.auth(connection)
             # The web gallery uses info/delete for trash and separate purge endpoints for permanent deletion.
             await self.gallery(account, service, "/gallery/info/delete", form={"id": media_id})
+            key = (connection, media_id)
+            self.forget_thumbnail(key)
+            self.thumbnail_source_size -= len(self.thumbnail_sources.pop(key, ""))
+            for snapshot in list(self.media_snapshots):
+                if snapshot[0] == connection and snapshot[2] == media_id:
+                    self.media_snapshots.pop(snapshot)
 
     async def upload(self, connection, album, name, kind, mime, size, file, *, modified_at=None):
         account, service = await self.auth(connection)

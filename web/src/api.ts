@@ -2,9 +2,9 @@ export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message) }
 }
 
-export async function api<T = any>(path: string, body?: unknown, method = 'POST'): Promise<T> {
-  const response = await fetch(`/api${path}`, body === undefined ? { cache: 'no-store' } : {
-    method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+export async function api<T = any>(path: string, body?: unknown, method = 'POST', signal?: AbortSignal): Promise<T> {
+  const response = await fetch(`/api${path}`, body === undefined ? { cache: 'no-store', signal } : {
+    method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal,
   })
   const result = await response.json()
   if (!response.ok) throw new ApiError(typeof result.detail === 'string' ? result.detail : '请检查填写内容后重试', response.status)
