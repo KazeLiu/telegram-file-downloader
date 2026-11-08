@@ -9,7 +9,7 @@ import Icon from './Icon.vue'
 import { formatNames, photoDay } from './xiaomiMedia'
 import { useBeforeUnload } from './useBeforeUnload'
 
-interface Recycled { id: string; original: string; size: number; created: number; reason: string; state: string }
+interface Recycled { id: string; original: string; size: number; created: number; reason: string; state: string; is_image: boolean }
 type View = 'all' | 'candidates' | 'recycle'
 const route = useRoute()
 const router = useRouter()
@@ -22,13 +22,17 @@ const imageModel = reactive({ view: 'all' as View, organizing: false, items: [] 
 const props = defineProps<{ lastLocalRecycle: string[] }>()
 const emit = defineEmits<{ message: [value: string]; recycled: [names: string[]] }>()
 const confirmDialog = ref<HTMLDialogElement>()
+const restoreDialog = ref<HTMLDialogElement>()
+const restoreModel = reactive({ selected: new Map<string, Recycled>(), targets: [] as Recycled[], root: '', selectionRoot: 'downloads', done: 0, total: 0, note: '', broken: new Set<string>() })
+const trashPhotos = computed(() => imageModel.trash.map(item => ({ ...item, sort_time: item.created * 1000 })))
+const allTrashSelected = computed(() => imageModel.trash.some(item => item.state !== 'exporting') && imageModel.trash.every(item => item.state === 'exporting' || restoreModel.selected.has(item.id)))
 const namesDialog = ref<HTMLDialogElement>()
 const namesField = ref<HTMLTextAreaElement>()
 const canCopy = typeof navigator !== 'undefined' && !!navigator.clipboard
 const reviewDialog = ref<InstanceType<typeof ImageReviewDialog>>()
 const moreButton = ref<HTMLButtonElement>()
 const selectedCount = computed(() => imageModel.selected.size)
-useBeforeUnload(() => imageModel.organizing && selectedCount.value > 0)
+useBeforeUnload(() => imageModel.organizing && selectedCount.value > 0 || restoreModel.selected.size > 0)
 const blocked = computed(() => imageModel.loading || imageModel.busy)
 const toolbarBlocked = computed(() => blocked.value || imageModel.loadingMore)
 const canLoadMore = computed(() => imageModel.view !== 'recycle' && !imageModel.scan.running && imageModel.nextCursor !== null)
@@ -56,6 +60,7 @@ async function readRoute() {
   const page = queryPage(route.query.page)
   const scope = JSON.stringify([view, search, root, page])
   if (scope !== loadedScope) {
+    if (view !== imageModel.view || root !== restoreModel.selectionRoot) { restoreModel.selected.clear(); restoreModel.broken.clear(); restoreModel.note = ''; restoreModel.selectionRoot = root }
     loadedScope = scope; ++loadRevision
     imageModel.loading = imageModel.loadingMore = false
     Object.assign(imageModel, { view, page, search, appliedSearch: search, recycleRoot: root, items: [], trash: [], total: 0, nextCursor: null })
@@ -257,11 +262,73 @@ async function copyRecycledNames() {
   namesField.value?.focus()
   namesField.value?.select()
 }
-async function restore(item: Recycled) {
+function trashSelected(item: Recycled) { return restoreModel.selected.has(item.id) }
+function toggleTrash(item: Recycled) {
+  if (item.state === 'exporting') return
+  if (trashSelected(item)) restoreModel.selected.delete(item.id)
+  else restoreModel.selected.set(item.id, item)
+}
+function selectTrashDay(_day: string, items: Recycled[]) {
+  const selecting = !items.filter(item => item.state !== 'exporting').every(trashSelected)
+  for (const item of items) {
+    if (item.state === 'exporting') continue
+    if (selecting) restoreModel.selected.set(item.id, item)
+    else restoreModel.selected.delete(item.id)
+  }
+}
+function selectTrashPage() {
+  const selecting = !allTrashSelected.value
+  for (const item of imageModel.trash) {
+    if (item.state === 'exporting') continue
+    if (selecting) restoreModel.selected.set(item.id, item)
+    else restoreModel.selected.delete(item.id)
+  }
+}
+async function selectAllTrash() {
   imageModel.busy = true; imageModel.error = ''
-  try { await api(`/recycle/${item.id}/restore?root=${encodeURIComponent(imageModel.recycleRoot)}`, {}); emit('message', `已还原 ${item.original}`); await load() }
-  catch (error) { imageModel.error = (error as Error).message }
+  const root = imageModel.recycleRoot
+  try {
+    for (let page = 1; ; page++) {
+      const result = await api<{ items: Recycled[]; total: number; page_size: number }>(`/recycle?${new URLSearchParams({ root, page: String(page) })}`)
+      if (imageModel.view !== 'recycle' || imageModel.recycleRoot !== root) return
+      for (const item of result.items) if (item.state !== 'exporting') restoreModel.selected.set(item.id, item)
+      restoreModel.note = `已选择 ${restoreModel.selected.size} 项`
+      if (page * result.page_size >= result.total || !result.items.length) break
+    }
+  } catch (error) { imageModel.error = (error as Error).message }
   finally { imageModel.busy = false }
+}
+function confirmRestore(item?: Recycled) {
+  restoreModel.targets = item ? [item] : [...restoreModel.selected.values()]
+  restoreModel.root = imageModel.recycleRoot
+  restoreModel.done = 0; restoreModel.total = restoreModel.targets.length
+  restoreDialog.value?.showModal()
+}
+async function restore() {
+  imageModel.busy = true; imageModel.error = ''
+  const targets = restoreModel.targets
+  const failures: string[] = []
+  let restored = 0
+  try {
+    for (let offset = 0; offset < targets.length; offset += 200) {
+      const batch = targets.slice(offset, offset + 200)
+      const result = await api<{ restored: string[]; failures: { id: string; error: string }[] }>(`/recycle/restore?root=${encodeURIComponent(restoreModel.root)}`, { ids: batch.map(item => item.id) })
+      restored += result.restored.length
+      if (restoreModel.root === imageModel.recycleRoot) for (const id of result.restored) restoreModel.selected.delete(id)
+      failures.push(...result.failures.map(failure => `${batch.find(item => item.id === failure.id)!.original}：${failure.error}`))
+      restoreModel.done += batch.length
+    }
+  } catch (error) { failures.push((error as Error).message) }
+  finally {
+    restoreDialog.value?.close()
+    restoreModel.note = `已还原 ${restored} 项${restored < targets.length ? `，${targets.length - restored} 项未完成` : ''}`
+    if (restored) emit('message', `已还原 ${restored} 项到原路径`)
+    imageModel.busy = false
+    await load()
+    const last = Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize))
+    if (imageModel.view === 'recycle' && imageModel.page > last) await imageRoute('recycle', last)
+    if (failures.length) imageModel.error = [imageModel.error, ...failures].filter(Boolean).join('；')
+  }
 }
 function loadMore() { void load({ append: true }) }
 watchEffect(() => {
@@ -306,7 +373,7 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
     <template v-if="imageModel.view !== 'recycle'">
       <div class="image-actions">
         <form class="search-box" @submit.prevent="filter"><Icon name="search" :size="17" /><input v-model="imageModel.search" :disabled="toolbarBlocked" maxlength="255" placeholder="搜索根目录图片" aria-label="搜索根目录图片" /><button class="text-button" :disabled="toolbarBlocked">搜索</button></form>
-        <span class="muted" title="拍摄时间优先，其次图片日期、文件创建时间、修改时间">{{ imageModel.total }} 张 · 按照片时间从新到旧</span>
+        <span class="muted" title="拍摄时间优先，其次图片日期，缺失时使用原修改时间">{{ imageModel.total }} 张 · 按照片时间从新到旧</span>
         <button v-if="imageModel.organizing" class="text-button" :disabled="blocked || !imageModel.items.length" @click="selectLoaded">{{ allSelected ? '取消已加载选择' : '全选已加载' }}</button>
       </div>
       <VirtualPhotoWall class="image-grid" :items="imageModel.items" :disabled="blocked" :is-selected="isSelected" :aria-busy="imageModel.loading || imageModel.loadingMore" @toggle-day="selectDay">
@@ -339,11 +406,33 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
       <p v-if="imageModel.cleanup.failed" class="notice error" role="alert">自动清理有 {{ imageModel.cleanup.failed }} 项异常，请查看运行日志。</p>
       <div class="my-3 flex flex-wrap items-end gap-4">
         <label v-if="imageModel.roots.length > 1">回收目录<select v-model="imageModel.recycleRoot" :disabled="blocked" @change="imageRoute('recycle')"><option v-for="root in imageModel.roots" :key="root.id" :value="root.id">{{ root.path }}</option></select></label>
+        <span role="status">共 {{ imageModel.total }} 项 · 已选 {{ restoreModel.selected.size }} 项</span>
+        <button class="secondary" :disabled="blocked || !imageModel.trash.length" @click="selectTrashPage">{{ allTrashSelected ? '取消本页选择' : '全选本页' }}</button>
+        <button class="text-button" :disabled="blocked || !imageModel.total" @click="selectAllTrash">全选本目录</button>
+        <button v-if="restoreModel.selected.size" class="text-button" :disabled="blocked" @click="restoreModel.selected.clear()">清空选择</button>
+        <button class="primary" :disabled="blocked || !restoreModel.selected.size" @click="confirmRestore()"><Icon name="restore" :size="16" />还原所选 {{ restoreModel.selected.size }} 项</button>
       </div>
-      <div class="recycle-list"><article v-for="item in imageModel.trash" :key="item.id"><span class="file-icon"><Icon :name="['image', 'xiaomi_upload', 'xiaomi_cloud'].includes(item.reason) ? 'photo' : 'file'" /></span><div><strong>{{ item.original }}</strong><p>{{ bytes(item.size) }} · {{ new Date(item.created * 1000).toLocaleString('zh-CN') }} · {{ item.reason === 'xiaomi_cloud' ? '云端联动回收' : item.reason === 'xiaomi_upload' ? '小米云上传后回收' : item.reason === 'image' ? '本地图片快筛' : '整理清理' }}</p><p v-if="item.state === 'exporting'" class="break-all">文件已移出项目回收站，需手动核对。记录：{{ item.id }}</p></div><button v-if="item.state !== 'exporting'" class="secondary" :disabled="blocked" @click="restore(item)"><Icon name="restore" :size="16" />还原</button></article></div><div v-if="!imageModel.trash.length" class="empty-list tall"><Icon name="trash" :size="38" /><h2>回收站是空的</h2><p>移入回收站的文件会出现在这里。</p></div>
+      <p v-if="restoreModel.note" class="muted my-3" role="status">{{ restoreModel.note }}</p>
+      <VirtualPhotoWall v-if="trashPhotos.length" class="recycle-wall" :items="trashPhotos" caption :disabled="blocked" :is-selected="trashSelected" @toggle-day="selectTrashDay">
+        <template #default="{ item }"><article class="relative min-w-0">
+          <button class="image-preview" :disabled="blocked || item.state === 'exporting'" :aria-label="'选择还原 ' + item.original" :aria-pressed="trashSelected(item)" @click="toggleTrash(item)"><span class="image-thumb">
+            <img v-if="item.is_image && !restoreModel.broken.has(item.id)" :src="`/api/recycle/${item.id}/thumbnail?root=${encodeURIComponent(imageModel.recycleRoot)}`" alt="" loading="lazy" decoding="async" @error="restoreModel.broken.add(item.id)" />
+            <Icon v-else :name="item.is_image ? 'photo' : 'file'" class="text-muted" :size="28" />
+          </span></button>
+          <button v-if="item.state !== 'exporting'" class="recycle-one" :disabled="blocked" :aria-label="'还原 ' + item.original" @click="confirmRestore(item)"><Icon name="restore" :size="17" /></button>
+          <p class="h-[20px] truncate text-xs leading-[20px] text-muted" :title="`${item.original} · ${bytes(item.size)} · ${new Date(item.created * 1000).toLocaleString('zh-CN')} · ${item.state === 'exporting' ? '文件已移出，需手动核对' : item.reason === 'xiaomi_upload' ? '上传后回收' : item.reason === 'xiaomi_cloud' ? '云端联动回收' : '本地回收'}`">{{ item.original }}</p>
+        </article></template>
+      </VirtualPhotoWall>
+      <div v-else class="empty-list tall"><Icon name="trash" :size="38" /><h2>回收站是空的</h2><p>移入回收站的文件会出现在这里。</p></div>
     </template>
     <div v-if="imageModel.view === 'recycle'" class="pagination"><span>第 {{ imageModel.page }} / {{ Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize)) }} 页</span><button class="secondary" :disabled="blocked || imageModel.page === 1" @click="page(-1)">上一页</button><button class="secondary" :disabled="blocked || imageModel.page * imageModel.pageSize >= imageModel.total" @click="page(1)">下一页</button></div>
     <ImageReviewDialog ref="reviewDialog" :load-page="listImages" :is-selected="isSelected" @change="reviewChanged" @finish="finishReview" />
+    <dialog ref="restoreDialog" class="task-dialog" @cancel="imageModel.busy && $event.preventDefault()">
+      <h2>还原 {{ restoreModel.targets.length }} 项文件？</h2><p class="my-3">还原到各自的原路径，不覆盖已有同名文件。未成功的项目继续保留在回收站。</p>
+      <div class="recycle-confirm-list"><p v-for="item in restoreModel.targets" :key="item.id">{{ item.original }}</p></div>
+      <p v-if="imageModel.busy" role="status">正在还原 {{ restoreModel.done }} / {{ restoreModel.total }} 项…</p>
+      <div class="dialog-actions"><button class="secondary" :disabled="imageModel.busy" @click="restoreDialog?.close()">取消</button><button class="primary" :disabled="imageModel.busy" @click="restore">{{ imageModel.busy ? '正在还原…' : '确认还原' }}</button></div>
+    </dialog>
     <dialog ref="namesDialog" class="task-dialog" aria-labelledby="local-recycle-names">
       <div class="section-heading"><h2 id="local-recycle-names">最近回收 · {{ lastLocalRecycle.length }} 张</h2><button class="icon-button" aria-label="关闭清单" @click="namesDialog?.close()"><Icon name="close" /></button></div>
       <textarea ref="namesField" class="my-4" readonly rows="6" aria-label="实际回收的文件名" :value="formatNames(lastLocalRecycle)" />
@@ -358,3 +447,9 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
     </dialog>
   </section>
 </template>
+
+<style scoped>
+@reference '../app/assets/main.css';
+.recycle-wall { @apply grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
+.recycle-one { @apply absolute top-1 right-1 grid size-11 min-h-11 place-items-center rounded-full bg-canvas p-0 text-blue; }
+</style>

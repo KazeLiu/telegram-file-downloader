@@ -8,6 +8,7 @@ import sqlite3
 import time
 import warnings
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps, UnidentifiedImageError
@@ -48,6 +49,23 @@ def image_time(image, record):
             continue
     # Extraction and copying create a new filesystem birth time, not a new photo date.
     return record["mtime_ns"] // 1_000_000, "modified"
+
+
+def recycle_thumbnail(file):
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(file) as image:
+                image.draft("RGB", (320, 320))
+                image.thumbnail((320, 320), Image.Resampling.LANCZOS)
+                image = ImageOps.exif_transpose(image).convert("RGBA")
+                canvas = Image.new("RGBA", image.size, "white")
+                canvas.alpha_composite(image)
+                output = BytesIO()
+                canvas.convert("RGB").save(output, format="JPEG", quality=82)
+                return output.getvalue()
+    except (Image.DecompressionBombWarning, Image.DecompressionBombError):
+        raise ValueError("图片超过安全像素限制，无法预览") from None
 
 
 def is_monochrome(image):

@@ -26,10 +26,10 @@ from .config import compact_connection_input
 from .web_runtime import WebRuntime, telegram_proxy
 from .diagnostics import configure_logs, read_log
 from .organizer import browse, plan_counts
-from .image_library import ImageLibrary
+from .image_library import IMAGE_EXTENSIONS, ImageLibrary, recycle_thumbnail
 from .linked_recycle import LinkedRecycle
 from .recycle_cleanup import RecycleCleaner
-from .storage import RecycleBin, inside
+from .storage import RecycleBin, inside, restore_batch
 from .xiaomi_batch import XiaomiBatch, local_media
 from .xiaomi_local import XiaomiLocalIndex
 from .xiaomi_cloud import CONNECTION_PATTERN, DAY_PATTERN, ID_PATTERN, UPLOAD_LIMIT, XiaomiCloud, XiaomiError, upload_media
@@ -119,6 +119,10 @@ class ImageSelection(BaseModel):
 
 class ImagesSelection(BaseModel):
     items: list[ImageSelection] = Field(min_length=1, max_length=200)
+
+
+class RestoreSelection(BaseModel):
+    ids: list[Annotated[str, Field(pattern=r"^[a-f0-9]{32}(?:-[0-9]+)?$")]] = Field(min_length=1, max_length=200)
 
 
 class XiaomiConnection(BaseModel):
@@ -695,6 +699,8 @@ def create_app():
                     await asyncio.sleep(0)
         return dict(moved=moved, failures=failures)
 
+    recycle_thumbnail_slots = asyncio.Semaphore(4)
+
     @app.get("/api/recycle/roots")
     async def recycle_roots():
         return {"items": local_index.recycle_roots(download_dir)}
@@ -710,7 +716,40 @@ def create_app():
             if not directory.is_dir():
                 raise ValueError("回收目录不可访问，请检查挂载")
             with RecycleBin(directory) as recycle:
-                return dict(recycle.listing(page), cleanup=dict(recycle_cleaner.state))
+                result = recycle.listing(page)
+                for item in result["items"]:
+                    item["is_image"] = Path(item["original"]).suffix.lower() in IMAGE_EXTENSIONS
+                return dict(result, cleanup=dict(recycle_cleaner.state))
+
+    @app.get("/api/recycle/{record_id}/thumbnail")
+    async def recycle_image(record_id: Annotated[str, FastAPIPath(pattern=r"^[a-f0-9]{32}(?:-[0-9]+)?$")], root: str = "downloads"):
+        directory = local_index.recycle_root(root, download_dir)
+        try:
+            with RecycleBin(directory) as recycle:
+                record, file = recycle.preview(record_id)
+            if Path(record["original"]).suffix.lower() not in IMAGE_EXTENSIONS:
+                raise ValueError("此文件不是可预览的图片")
+            async with recycle_thumbnail_slots:
+                data = await asyncio.to_thread(recycle_thumbnail, file)
+        except (OSError, ValueError, SyntaxError) as exc:
+            raise HTTPException(404, str(exc)) from None
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=60", "Vary": "Cookie", "X-Content-Type-Options": "nosniff"})
+
+    def restored_directory(directory):
+        for source in local_index.db.execute("""SELECT owner,album FROM bindings JOIN roots ON roots.id=bindings.root_id
+                                               WHERE roots.path=?""", (str(directory),)).fetchall():
+            local_index.refresh(source["owner"], source["album"])
+        library.start_scan()
+
+    @app.post("/api/recycle/restore")
+    async def restore_items(body: RestoreSelection, root: str = "downloads"):
+        ensure_library_idle()
+        directory = local_index.recycle_root(root, download_dir)
+        async with runtime.operation_lock:
+            result = await asyncio.to_thread(restore_batch, directory, body.ids)
+        if result["restored"]:
+            restored_directory(directory)
+        return result
 
     @app.post("/api/recycle/{record_id}/restore")
     async def restore_item(record_id: str, root: str = "downloads"):
@@ -719,10 +758,7 @@ def create_app():
             directory = local_index.recycle_root(root, download_dir)
             with RecycleBin(directory) as recycle:
                 original = recycle.restore(record_id)
-        for source in local_index.db.execute("""SELECT owner,album FROM bindings JOIN roots ON roots.id=bindings.root_id
-                                               WHERE roots.path=?""", (str(directory),)).fetchall():
-            local_index.refresh(source["owner"], source["album"])
-        library.start_scan()
+        restored_directory(directory)
         return dict(original=original)
 
     @app.get("/api/logs")

@@ -44,6 +44,18 @@ def is_link(entry):
     return entry.is_symlink() or (os.name == "nt" and entry.stat(follow_symlinks=False).st_file_attributes & 0x400)
 
 
+def restore_batch(root, ids):
+    restored, failures = [], []
+    with RecycleBin(root) as recycle:
+        for record_id in dict.fromkeys(ids):
+            try:
+                recycle.restore(record_id)
+                restored.append(record_id)
+            except (OSError, ValueError) as exc:
+                failures.append(dict(id=record_id, error=str(exc)))
+    return dict(restored=restored, failures=failures)
+
+
 class RecycleBin:
     def __init__(self, root):
         self.root = root
@@ -139,6 +151,15 @@ class RecycleBin:
         rows = self.db.execute(f"SELECT * FROM items WHERE state IN {states} ORDER BY created DESC,id LIMIT 50 OFFSET ?",
                                ((page - 1) * 50,)).fetchall()
         return dict(items=[dict(row) for row in rows], total=total, page=page, page_size=50)
+
+    def preview(self, record_id):
+        record = self.db.execute("SELECT * FROM items WHERE id=? AND state IN ('trashed','restoring','purging')", (record_id,)).fetchone()
+        if not record:
+            raise ValueError("回收文件不存在或不可预览")
+        _, file = self._paths(record)
+        if not file.is_file() or file.stat().st_size != record["size"]:
+            raise ValueError("回收文件缺失或大小已变化")
+        return dict(record), file
 
     def restore(self, record_id):
         with self.db:
