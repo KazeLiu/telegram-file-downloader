@@ -19,6 +19,7 @@ LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif"}
 IMAGE_FIELDS = "id,name,size,mtime_ns,width,height,monochrome,error,created_ms,sort_time,time_source"
 PAGE_SIZE = 60
+READY_IMAGES = "active=1 AND ((time_source IS NOT NULL AND monochrome IS NOT NULL) OR error<>'')"
 
 
 def image_time(image, record):
@@ -149,16 +150,27 @@ class ImageLibrary:
         self.db.execute("DROP INDEX IF EXISTS images_active_name")
         self.db.commit()
         self.task = None
+        self.scan_requested = False
         self.state = dict(running=False, done=0, total=0, error="", last_scan=None)
 
     def start_scan(self):
+        self.scan_requested = True
         if not self.task or self.task.done():
             self.state.update(running=True, done=0, total=0, error="")
             self.task = asyncio.create_task(self.scan(), name="image-library-scan")
         return self.state
 
     async def scan(self):
+        try:
+            while self.scan_requested:
+                self.scan_requested = False
+                await self._scan()
+        finally:
+            self.state["running"] = False
+
+    async def _scan(self):
         started = time.monotonic()
+        self.state.update(done=0, total=0, error="")
         try:
             records = await asyncio.to_thread(root_images, self.root)
             with self.db:
@@ -178,6 +190,7 @@ class ImageLibrary:
             active = self.db.execute(f"SELECT {IMAGE_FIELDS} FROM images WHERE active=1").fetchall()
             pending = [dict(row) for row in active if row["time_source"] is None or row["monochrome"] is None or row["error"] or f"{row['id']}.jpg" not in cached]
             self.state.update(total=len(active), done=len(active) - len(pending))
+            LOGGER.info("image scan starting count=%s pending=%s", len(active), len(pending))
             iterator = iter(pending)
             async def worker():
                 for record in iterator:
@@ -201,13 +214,17 @@ class ImageLibrary:
         except Exception as exc:
             LOGGER.exception("image scan failed")
             self.state["error"] = str(exc)
-        finally:
-            self.state["running"] = False
+
+    def status(self, candidate=False, search=""):
+        condition = READY_IMAGES + " AND instr(lower(name),lower(?))>0" + (" AND monochrome=1" if candidate else "")
+        total = self.db.execute(f"SELECT COUNT(*) FROM images WHERE {condition}", (search,)).fetchone()[0]
+        counts = self.db.execute(f"""SELECT COUNT(*) AS total,SUM(monochrome=1) AS candidates,
+            SUM(error<>'') AS errors,SUM(({READY_IMAGES})) AS ready FROM images WHERE active=1""").fetchone()
+        return dict(total=total, counts=dict(counts), scan=self.state)
 
     def listing(self, page=1, candidate=False, search="", after=None):
-        condition = "active=1 AND instr(lower(name),lower(?))>0" + (" AND monochrome=1" if candidate else "")
+        condition = READY_IMAGES + " AND instr(lower(name),lower(?))>0" + (" AND monochrome=1" if candidate else "")
         args = (search,)
-        total = self.db.execute(f"SELECT COUNT(*) FROM images WHERE {condition}", args).fetchone()[0]
         offset = (page - 1) * PAGE_SIZE
         if after is not None:
             # Recycled images keep their index row, so removing one never shifts the next batch.
@@ -220,8 +237,7 @@ class ImageLibrary:
         rows = self.db.execute(f"SELECT {IMAGE_FIELDS} FROM images WHERE {condition} ORDER BY sort_time DESC,id DESC LIMIT ? OFFSET ?",
                                (*args, PAGE_SIZE + 1, offset)).fetchall()
         items = [self.public(dict(row)) for row in rows[:PAGE_SIZE]]
-        counts = self.db.execute("SELECT COUNT(*) AS total,SUM(monochrome=1) AS candidates,SUM(error<>'') AS errors FROM images WHERE active=1").fetchone()
-        return dict(items=items, total=total, page=page, page_size=PAGE_SIZE, counts=dict(counts), scan=self.state,
+        return dict(items=items, **self.status(candidate, search), page=page, page_size=PAGE_SIZE,
                     next_cursor=items[-1]["id"] if len(rows) > PAGE_SIZE else None)
 
     @staticmethod

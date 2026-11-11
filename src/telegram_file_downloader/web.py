@@ -189,8 +189,8 @@ def create_app():
     download_dir = Path(os.environ.get("DOWNLOAD_DIR", str(Path.cwd() / "downloads"))).resolve()
     log_dir = configure_logs(data_dir)
     store = ConsoleStore(data_dir)
-    runtime = WebRuntime(store, data_dir, download_dir)
     library = ImageLibrary(download_dir, data_dir)
+    runtime = WebRuntime(store, data_dir, download_dir, library.start_scan)
     xiaomi = XiaomiCloud(store)
     batch = XiaomiBatch(xiaomi, download_dir)
     local_index = XiaomiLocalIndex(data_dir, lambda: (
@@ -213,8 +213,8 @@ def create_app():
             await local_index.close()
             await batch.close()
             await xiaomi.close()
-            await library.close()
             await runtime.close()
+            await library.close()
             store.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -670,6 +670,12 @@ def create_app():
         if page < 1 or len(search) > 255 or (after is not None and after < 1):
             raise ValueError("无效的图片查询")
         return library.listing(page, candidate, search, after)
+
+    @app.get("/api/images/status")
+    async def image_status(candidate: bool = False, search: str = ""):
+        if len(search) > 255:
+            raise ValueError("无效的图片查询")
+        return library.status(candidate, search)
 
     @app.get("/api/images/{image_id}")
     async def image_details(image_id: int):

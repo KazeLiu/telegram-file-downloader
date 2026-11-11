@@ -16,7 +16,7 @@ const router = useRouter()
 const imageModel = reactive({ view: 'all' as View, organizing: false, items: [] as Picture[], trash: [] as Recycled[], page: 1,
   total: 0, pageSize: 50, nextCursor: null as number | null, recycleRoot: 'downloads', roots: [] as { id: string; path: string }[],
   cleanup: { running: false, checked: 0, removed: 0, failed: 0 },
-  counts: { total: 0, candidates: 0, errors: 0 }, scan: { running: false, done: 0, total: 0, error: '' },
+  counts: { total: 0, candidates: 0, errors: 0, ready: 0 }, scan: { running: false, done: 0, total: 0, error: '', last_scan: null as number | null },
   search: '', appliedSearch: '', loading: false, loadingMore: false, busy: false, error: '', selected: new Map<number, Picture>(), selectedDays: new Set<string>(),
   confirmation: [] as Picture[], broken: {} as Record<number, boolean> })
 const props = defineProps<{ lastLocalRecycle: string[] }>()
@@ -35,7 +35,9 @@ const selectedCount = computed(() => imageModel.selected.size)
 useBeforeUnload(() => imageModel.organizing && selectedCount.value > 0 || restoreModel.selected.size > 0)
 const blocked = computed(() => imageModel.loading || imageModel.busy)
 const toolbarBlocked = computed(() => blocked.value || imageModel.loadingMore)
-const canLoadMore = computed(() => imageModel.view !== 'recycle' && !imageModel.scan.running && imageModel.nextCursor !== null)
+const canLoadMore = computed(() => imageModel.view !== 'recycle' && imageModel.nextCursor !== null)
+const listedScan = ref<number | null>(null)
+const indexUpdated = computed(() => !imageModel.scan.running && !imageModel.scan.error && imageModel.scan.last_scan !== listedScan.value)
 const allSelected = computed(() => imageModel.items.length > 0 && imageModel.items.every(isSelected))
 let timer: ReturnType<typeof setInterval>
 let observer: IntersectionObserver | undefined
@@ -87,19 +89,21 @@ function reviewChanged(id: number) {
 
 function isSelected(item: Picture) { return imageModel.selected.get(item.id)?.version === item.version }
 function clearSelection() { imageModel.selected.clear(); imageModel.selectedDays.clear() }
+function imageQuery() {
+  return new URLSearchParams({ candidate: String(imageModel.view === 'candidates'), search: imageModel.appliedSearch })
+}
 function listImages(after?: number | null) {
-  const query = new URLSearchParams({ candidate: String(imageModel.view === 'candidates'), search: imageModel.appliedSearch })
+  const query = imageQuery()
   if (after != null) query.set('after', String(after))
   return api<{ items: Picture[]; total: number; next_cursor: number | null;
     scan: typeof imageModel.scan; counts: typeof imageModel.counts }>(`/images?${query}`)
 }
-async function load({ poll = false, append = false } = {}) {
-  if (imageModel.loading || imageModel.loadingMore || (poll && polling) || (append && (!canLoadMore.value || blocked.value))) return
+async function load({ append = false } = {}) {
+  if (imageModel.loading || imageModel.loadingMore || (append && (!canLoadMore.value || blocked.value))) return
   const revision = ++loadRevision
-  if (poll) polling = true
-  else if (append) imageModel.loadingMore = true
+  if (append) imageModel.loadingMore = true
   else imageModel.loading = true
-  if (!poll) imageModel.error = ''
+  imageModel.error = ''
   try {
     if (imageModel.view === 'recycle') {
       imageModel.roots = (await api<{ items: typeof imageModel.roots }>('/recycle/roots')).items
@@ -118,16 +122,33 @@ async function load({ poll = false, append = false } = {}) {
         imageModel.items.push(...added)
         for (const item of added) if (imageModel.selectedDays.has(photoDay(item.sort_time))) imageModel.selected.set(item.id, item)
         imageModel.total = result.total; imageModel.nextCursor = result.next_cursor
-      } else if (!poll || (!imageModel.organizing && activeReview === null && !confirmDialog.value?.open)) {
+      } else {
         imageModel.items = result.items; imageModel.total = result.total; imageModel.nextCursor = result.next_cursor; imageModel.broken = {}
+        listedScan.value = result.scan.last_scan
       }
     }
   } catch (error) { if (revision === loadRevision) imageModel.error = (error as Error).message }
   finally {
-    if (poll) polling = false
-    else if (revision === loadRevision && append) imageModel.loadingMore = false
+    if (revision === loadRevision && append) imageModel.loadingMore = false
     else if (revision === loadRevision) imageModel.loading = false
   }
+}
+async function pollStatus() {
+  if (polling || toolbarBlocked.value || imageModel.view === 'recycle') return
+  polling = true
+  const revision = loadRevision
+  try {
+    const result = await api<{ total: number; scan: typeof imageModel.scan; counts: typeof imageModel.counts }>(`/images/status?${imageQuery()}`)
+    if (revision !== loadRevision) return
+    imageModel.scan = result.scan; imageModel.counts = result.counts; imageModel.total = result.total
+    if (!imageModel.items.length && result.total && activeReview === null && !confirmDialog.value?.open) await load()
+  } catch (error) { if (revision === loadRevision) imageModel.error = (error as Error).message }
+  finally { polling = false }
+}
+async function updateImages() {
+  if (toolbarBlocked.value || activeReview !== null || confirmDialog.value?.open) return
+  clearSelection()
+  await load()
 }
 async function scan() {
   if (toolbarBlocked.value) return
@@ -342,9 +363,9 @@ onMounted(() => {
     observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) loadMore() }, { rootMargin: '0px 0px 240px' })
   }
   timer = setInterval(() => {
-    if (!document.hidden && imageModel.scan.running && imageModel.view !== 'recycle' && !imageModel.busy) void load({ poll: true })
+    if (!document.hidden) void pollStatus()
   }, 2000)
-  void readRoute().then(() => { if (imageModel.view !== 'recycle') void scan() })
+  void readRoute()
 })
 onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
 </script>
@@ -369,7 +390,8 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
     <p v-if="imageModel.error" class="notice error" role="alert">{{ imageModel.error }}</p>
     <p v-if="imageModel.scan.error && imageModel.view !== 'recycle'" class="notice error" role="alert">扫描失败：{{ imageModel.scan.error }}</p>
     <p v-if="imageModel.counts.errors && imageModel.view !== 'recycle'" class="notice">{{ imageModel.counts.errors }} 张图片读取失败，可在“全部图片”中查看；原文件保留。</p>
-    <div v-if="imageModel.scan.running && imageModel.view !== 'recycle'" class="image-scan" role="status"><span><Icon name="loader" class="loading-icon" :size="16" />{{ imageModel.scan.total ? `已检查 ${imageModel.scan.done} / ${imageModel.scan.total} 张，图片会陆续出现` : '正在读取根目录图片…' }}</span><progress v-if="imageModel.scan.total" :value="imageModel.scan.done" :max="imageModel.scan.total" aria-label="图片分析进度" /></div>
+    <div v-if="imageModel.scan.running && imageModel.view !== 'recycle'" class="image-scan" role="status"><span><Icon name="loader" class="loading-icon" :size="16" />{{ imageModel.scan.total ? `后台已检查 ${imageModel.scan.done} / ${imageModel.scan.total} 张 · 已就绪 ${imageModel.counts.ready || 0} 张，可继续浏览` : '正在后台读取根目录图片…' }}</span><progress v-if="imageModel.scan.total" :value="imageModel.scan.done" :max="imageModel.scan.total" aria-label="图片分析进度" /></div>
+    <p v-if="indexUpdated && imageModel.view !== 'recycle'" class="notice" role="status">后台图片检查已完成。<button class="text-button" :disabled="toolbarBlocked || selectedCount > 0" @click="updateImages">更新图片列表</button><span v-if="selectedCount">请先处理或清空已选图片。</span></p>
     <template v-if="imageModel.view !== 'recycle'">
       <div class="image-actions">
         <form class="search-box" @submit.prevent="filter"><Icon name="search" :size="17" /><input v-model="imageModel.search" :disabled="toolbarBlocked" maxlength="255" placeholder="搜索根目录图片" aria-label="搜索根目录图片" /><button class="text-button" :disabled="toolbarBlocked">搜索</button></form>
@@ -450,6 +472,7 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
 
 <style scoped>
 @reference '../app/assets/main.css';
+.image-library { overflow-anchor: none; }
 .recycle-wall { @apply grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
 .recycle-one { @apply absolute top-1 right-1 grid size-11 min-h-11 place-items-center rounded-full bg-canvas p-0 text-blue; }
 </style>

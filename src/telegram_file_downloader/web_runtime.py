@@ -45,8 +45,9 @@ def connection_error_message(error, settings):
 
 
 class WebRuntime:
-    def __init__(self, store: ConsoleStore, data_dir: Path, download_dir: Path):
+    def __init__(self, store: ConsoleStore, data_dir: Path, download_dir: Path, images_changed):
         self.store, self.data_dir, self.download_dir = store, data_dir, download_dir
+        self.images_changed = images_changed
         self.state = AppState()
         self.account = None
         self.phase = "unconfigured"
@@ -75,6 +76,7 @@ class WebRuntime:
 
     async def start(self):
         self.download_dir.mkdir(parents=True, exist_ok=True)
+        self.images_changed()
         self.supervisor = asyncio.create_task(self._supervise(), name="console-supervisor")
         self.schedule_apply()
 
@@ -138,7 +140,7 @@ class WebRuntime:
 
             def processor_factory(client, history, recorder):
                 self.processor = ConsoleProcessor(client, self.download_dir, history, recorder,
-                                                 self.store, settings, self.operation_lock)
+                                                 self.store, settings, self.operation_lock, self.images_changed)
                 return self.processor
 
             self.watcher = TelegramWatcher(config, self.state, processor_factory, self.login_required)
@@ -274,7 +276,7 @@ class WebRuntime:
             if self.processor:
                 await self.processor.unpack(task_id)
                 return
-            processor = ConsoleProcessor(None, self.download_dir, None, None, self.store, self.store.settings(), self.operation_lock)
+            processor = ConsoleProcessor(None, self.download_dir, None, None, self.store, self.store.settings(), self.operation_lock, self.images_changed)
             job = asyncio.create_task(processor._postprocess(group), name=f"local-workflow-{group}")
             self.local_jobs.add(job)
             job.add_done_callback(self.local_jobs.discard)
@@ -456,6 +458,8 @@ class WebRuntime:
                     job["result"] = await execute_plan(self.download_dir, plan, save,
                         save_progress=lambda value: self.store.put(f"progress:{plan_key}", value))
                     job["status"] = "completed"
+                    if job["result"]["moved"]:
+                        self.images_changed()
             except asyncio.CancelledError:
                 job["status"] = "interrupted"
                 raise

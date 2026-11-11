@@ -63,10 +63,11 @@ def size_text(value):
 
 class ConsoleProcessor:
     """Persist intake before advancing Telegram history; execute independently."""
-    def __init__(self, client, directory, history, recorder, store, settings, operation_lock):
+    def __init__(self, client, directory, history, recorder, store, settings, operation_lock, images_changed):
         self.client, self.directory, self.history = client, directory, history
         self.recorder, self.store, self.settings = recorder, store, settings
         self.operation_lock = operation_lock
+        self.images_changed = images_changed
         self.receipt_disabled_until = 0.0
         self.receipt_lock = asyncio.Lock()
         self.running = {}
@@ -338,6 +339,8 @@ class ConsoleProcessor:
             if self.store.task(task_id)["warning"].startswith("下载请求失败"):
                 self.store.update_task(task_id, warning="")
             self.pending_groups.add(task.get("group_id") or str(task_id))
+            if task["kind"] == "photo":
+                self.images_changed()
             LOGGER.info("task=%s download complete path=%s", task_id, path)
         except asyncio.CancelledError:
             current = self.store.task(task_id)
@@ -450,6 +453,8 @@ class ConsoleProcessor:
                     self.store.update_task(member["id"], stage=value, steps=current_steps)
             result = await execute_plan(self.directory, plan, lambda value: self.store.put_plan(plan_key, value), phase,
                                         lambda value: self.store.put(f"progress:{plan_key}", value))
+            if result["moved"]:
+                self.images_changed()
             flattened = plan.get("flatten", self.settings["flatten"])
             final = "organized" if flattened else "extracted"
             steps.update(extract="done", organize="done" if flattened else "skipped",

@@ -52,6 +52,8 @@ class PhotoOrderTests(unittest.TestCase):
             db.commit(); db.close()
             library = ImageLibrary(root, root)
             try:
+                library.db.execute("UPDATE images SET time_source='modified'")
+                library.db.commit()
                 first = library.listing(candidate=True)
                 self.assertEqual([item["id"] for item in first["items"]], list(range(65, 5, -1)))
                 cursor = first["next_cursor"]
