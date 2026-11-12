@@ -432,6 +432,9 @@ class ImageDedup:
                 for source in plan["sources"]:
                     self.local.db.execute("DELETE FROM files WHERE root_id=? AND path=?",
                                           (source["id"], file.relative_to(source["path"]).as_posix()))
+            # An inventory batch already in flight may still publish the old file list.
+            self.local.requested.update(source["id"] for source in plan["sources"])
+            self.local.wake.set()
             for item in plan["cloud"]:
                 if item["done"]:
                     continue
