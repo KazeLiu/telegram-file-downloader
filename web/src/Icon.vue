@@ -19,6 +19,8 @@ const paths: Record<string, string> = {
   telegram: 'M21 3L3 10l7 3 3 7 8-17 M10 13L21 3',
   pause: 'M8 5v14 M16 5v14',
   play: 'M7 4l13 8-13 8z',
+  heart: 'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z',
+  fullscreen: 'M8 3H3v5 M16 3h5v5 M3 16v5h5 M21 16v5h-5',
   search: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16 M17 17l5 5',
   logout: 'M10 4H4v16h6 M10 12h11 M16 7l5 5-5 5',
   chevron: 'M9 5l7 7-7 7',

@@ -13,6 +13,7 @@ import ImagesPanel from '../../src/ImagesPanel.vue'
 import ImageDedupPanel from '../../src/ImageDedupPanel.vue'
 import XiaomiPanel from '../../src/XiaomiPanel.vue'
 import LogsPanel from '../../src/LogsPanel.vue'
+import PlaybackPanel from '../../src/PlaybackPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,7 +29,7 @@ const archiveConfirm = reactive({ action: 'extract_only' as 'extract_only' | 'ma
   members: [] as { id: number; filename: string }[], busy: false, error: '' })
 let timer: ReturnType<typeof setInterval>
 let toastTimer: ReturnType<typeof setTimeout>
-const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '多层路径打平', icon: 'folder' }, { id: 'images', title: '本地图片快筛', icon: 'photo' }, { id: 'dedup', title: '图片去重', icon: 'compare' }, { id: 'xiaomi', title: '小米云相册', icon: 'cloud' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
+const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '多层路径打平', icon: 'folder' }, { id: 'images', title: '本地图片快筛', icon: 'photo' }, { id: 'dedup', title: '图片去重', icon: 'compare' }, { id: 'xiaomi', title: '小米云相册', icon: 'cloud' }, { id: 'playback', title: '节奏播放', icon: 'play' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
 const title = computed(() => navigation.find(n => n.id === appModel.page)?.title)
 const running = computed(() => appModel.status?.phase === 'watching' && appModel.status?.connection === 'Connected')
 const completed = computed(() => (appModel.status?.counts.completed || 0) + (appModel.status?.counts.extracted || 0) + (appModel.status?.counts.organized || 0) + (appModel.status?.counts.manual_extracted || 0))
@@ -193,6 +194,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
         <p v-if="appModel.status?.error && !['history', 'xiaomi', 'dedup'].includes(appModel.page)" class="notice error" role="alert">{{ appModel.status.error }}</p>
         <XiaomiPanel v-if="appModel.page === 'xiaomi'" :last-local-recycle="lastLocalRecycle" @message="message" />
         <ImageDedupPanel v-else-if="appModel.page === 'dedup'" @message="message" />
+        <PlaybackPanel v-else-if="appModel.page === 'playback'" />
         <template v-else-if="appModel.settings && appModel.status">
           <template v-if="appModel.page === 'overview'">
             <section v-if="!configured" class="welcome-panel"><span class="welcome-icon"><Icon name="inbox" :size="28" /></span><div class="grow"><h2>{{ !appModel.status.account ? '尚未连接 Telegram' : '尚未选择收集群' }}</h2><p v-if="!appModel.status.account" class="muted mt-1">首次连接只收集新消息。</p></div><button class="primary" @click="navigate('settings')">{{ !appModel.status.account ? '连接 Telegram' : '选择收集群' }}</button></section>

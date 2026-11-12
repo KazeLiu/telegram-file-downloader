@@ -10,6 +10,8 @@
 
 **[网页部署与迁移说明 → WEB_GUIDE.zh-CN.md](WEB_GUIDE.zh-CN.md)**
 
+网页菜单中的「节奏播放」可将本地图库组合成播放列表，支持图片、视频和混合播放，以及手动切图、自动播放、喜欢收藏和全屏。[播放器使用说明](docs/PLAYBACK.zh-CN.md)。
+
 下面保留原有命令行部署流程；其中扩展名、无网页端口和不解压的说明仅适用于 `telegram-file-downloader-service` 命令行入口。
 
 ## 先了解实际行为

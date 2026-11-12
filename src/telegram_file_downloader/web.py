@@ -32,6 +32,7 @@ from .saved_image_check import SavedImageCheck
 from .linked_recycle import LinkedRecycle
 from .recycle_cleanup import RecycleCleaner
 from .storage import RecycleBin, inside, restore_batch
+from .playback import queue as playback_queue, selected_media
 from .xiaomi_batch import XiaomiBatch, local_media
 from .xiaomi_local import XiaomiLocalIndex
 from .xiaomi_cloud import CONNECTION_PATTERN, DAY_PATTERN, ID_PATTERN, UPLOAD_LIMIT, XiaomiCloud, XiaomiError, upload_media
@@ -121,6 +122,11 @@ class ImageSelection(BaseModel):
 
 class ImagesSelection(BaseModel):
     items: list[ImageSelection] = Field(min_length=1, max_length=200)
+
+
+class PlaybackSelection(BaseModel):
+    roots: list[Annotated[str, Field(pattern=r"^(?:downloads|[a-f0-9]{32})$")]] = Field(min_length=1, max_length=100)
+    kind: Literal["image", "video", "mixed"] = "mixed"
 
 
 class RestoreSelection(BaseModel):
@@ -716,6 +722,23 @@ def create_app():
         return dict(status=job.get("status", ""), error=job.get("error", ""),
                     total=counts["move_total"] + counts["cleanup_total"], done=counts["moved_files"] + counts["cleanup_done"],
                     result=job.get("result"), **counts)
+
+    @app.get("/api/playback/galleries")
+    async def playback_galleries():
+        return {"items": local_index.recycle_roots(download_dir)}
+
+    @app.post("/api/playback/queue")
+    async def load_playback_queue(body: PlaybackSelection):
+        galleries = local_index.recycle_roots(download_dir)
+        items = await asyncio.to_thread(playback_queue, galleries, body.roots, body.kind)
+        return {"items": items}
+
+    @app.get("/api/playback/media")
+    async def playback_media(root: str = Query(pattern=r"^(?:downloads|[a-f0-9]{32})$"),
+                             path: str = Query(min_length=1, max_length=4096),
+                             version: str = Query(min_length=1, max_length=160)):
+        file, mime = selected_media(local_index.recycle_roots(download_dir), root, path, version)
+        return FileResponse(file, media_type=mime, headers={"Cache-Control": "private, no-store"})
 
     @app.post("/api/images/scan")
     async def scan_images():
