@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteUpdate, useRoute, useRouter } from '#imports'
 import { queryPage } from './routeState'
 import { api, bytes } from './api'
@@ -37,11 +37,13 @@ useBeforeUnload(() => cloud.organizing && selectedCount.value > 0)
 const allSelected = computed(() => cloud.items.length > 0 && cloud.items.every(item => cloud.selected.has(item.id)))
 let pollTimer: ReturnType<typeof setTimeout>
 let disposed = false
+let readController = new AbortController()
 let loadedRoute = ''
 const albumModes = new Map<string, boolean>()
 const listViews = new Map<string, { items: Media[]; last: boolean; scroll: number }>()
 function mediaDay(item: Media) { return item.timeline_day ?? photoDay(item.sort_time) }
 onBeforeRouteUpdate(() => {
+  readController.abort(); readController = new AbortController()
   if (cloud.album && !cloud.wall && cloud.ready) {
     listViews.set(`${cloud.album}:${cloud.page}`, { items: cloud.items, last: cloud.last, scroll: window.scrollY })
     if (listViews.size > 16) listViews.delete(listViews.keys().next().value!)
@@ -80,12 +82,14 @@ async function run(label: string, action: () => Promise<void>) {
   if (cloud.busy) return
   cloud.busy = label; cloud.error = ''
   try { await action() }
-  catch (error) { cloud.error = (error as Error).message }
+  catch (error) { if (!disposed && (error as Error).name !== 'AbortError') cloud.error = (error as Error).message }
   finally { cloud.busy = '' }
 }
 
 async function loadMedia(page = 0) {
-  const result = await api<{ items: Media[]; last: boolean }>(`/xiaomi/media?${params({ album: cloud.album, page: String(page), wall: String(cloud.wall) })}`)
+  const signal = readController.signal
+  const result = await api<{ items: Media[]; last: boolean }>(`/xiaomi/media?${params({ album: cloud.album, page: String(page), wall: String(cloud.wall) })}`, undefined, 'GET', signal)
+  if (signal.aborted || disposed) return
   cloud.items = result.items; clearSelection(); cloud.thumbnailErrors.clear()
   cloud.last = result.last; cloud.page = page; cloud.ready = true
 }
@@ -158,8 +162,10 @@ function localStatus(states: Record<string, LocalFileState>, bound: boolean) {
 }
 
 async function loadAccount() {
+  const signal = readController.signal
   const previous = cloud.account?.connection
-  const result = await api<{ account: Account | null }>('/xiaomi/account')
+  const result = await api<{ account: Account | null }>('/xiaomi/account', undefined, 'GET', signal)
+  if (signal.aborted || disposed) return
   cloud.account = result.account; cloud.initialized = true
   if (!cloud.account || cloud.account.connection !== previous) {
     loadedRoute = ''
@@ -168,7 +174,9 @@ async function loadAccount() {
     cloud.albums = []; cloud.album = ''; resetMedia()
   }
   if (!cloud.account) return
-  cloud.albums = (await api<{ items: Album[] }>(`/xiaomi/albums?${params({})}`)).items
+  const albums = await api<{ items: Album[] }>(`/xiaomi/albums?${params({})}`, undefined, 'GET', signal)
+  if (signal.aborted || disposed) return
+  cloud.albums = albums.items
   cloud.coverErrors.clear()
 }
 
@@ -294,7 +302,7 @@ async function uploadFile() {
 onMounted(() => {
   void run('正在读取连接…', loadAccount)
 })
-onUnmounted(() => { disposed = true; clearTimeout(pollTimer) })
+onBeforeUnmount(() => { disposed = true; readController.abort(); clearTimeout(pollTimer) })
 </script>
 
 <template>

@@ -717,9 +717,9 @@ def create_app():
         return {"items": local_index.recycle_roots(download_dir)}
 
     @app.get("/api/recycle")
-    async def recycle_items(page: int = 1, root: str = "downloads"):
-        if page < 1:
-            raise ValueError("无效的回收站页码")
+    async def recycle_items(page: int = 1, root: str = "downloads", search: str = ""):
+        if page < 1 or len(search) > 255:
+            raise ValueError("无效的回收站查询")
         if runtime.operation_lock.locked():
             raise ValueError("文件整理或回收站清理正在进行，请稍后再查看")
         async with runtime.operation_lock:
@@ -727,13 +727,13 @@ def create_app():
             if not directory.is_dir():
                 raise ValueError("回收目录不可访问，请检查挂载")
             with RecycleBin(directory) as recycle:
-                result = recycle.listing(page)
+                result = recycle.listing(page, search)
                 for item in result["items"]:
                     item["is_image"] = Path(item["original"]).suffix.lower() in IMAGE_EXTENSIONS
                 return dict(result, cleanup=dict(recycle_cleaner.state))
 
     @app.get("/api/recycle/{record_id}/thumbnail")
-    async def recycle_image(record_id: Annotated[str, FastAPIPath(pattern=r"^[a-f0-9]{32}(?:-[0-9]+)?$")], root: str = "downloads"):
+    async def recycle_image(record_id: Annotated[str, FastAPIPath(pattern=r"^[a-f0-9]{32}(?:-[0-9]+)?$")], request: Request, root: str = "downloads"):
         directory = local_index.recycle_root(root, download_dir)
         try:
             with RecycleBin(directory) as recycle:
@@ -741,6 +741,8 @@ def create_app():
             if Path(record["original"]).suffix.lower() not in IMAGE_EXTENSIONS:
                 raise ValueError("此文件不是可预览的图片")
             async with recycle_thumbnail_slots:
+                if await request.is_disconnected():
+                    return Response(status_code=499)
                 data = await asyncio.to_thread(recycle_thumbnail, file)
         except (OSError, ValueError, SyntaxError) as exc:
             raise HTTPException(404, str(exc)) from None

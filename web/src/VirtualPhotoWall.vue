@@ -2,10 +2,10 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { defaultRangeExtractor, useWindowVirtualizer } from '@tanstack/vue-virtual'
 import Icon from './Icon.vue'
-import { groupPhotos, photoRows, type PhotoGroup, type WallPhoto } from './photoWall'
+import { groupPhotos, photoRows, type PhotoDemand, type PhotoGroup, type WallPhoto } from './photoWall'
 
 const props = defineProps<{ items: T[]; groups?: PhotoGroup<T>[]; caption?: boolean; topInset?: number; disabled: boolean; isSelected: (item: T) => boolean }>()
-const emit = defineEmits<{ toggleDay: [day: string, items: T[]]; visibleDays: [days: string[]]; activeDay: [day: string] }>()
+const emit = defineEmits<{ toggleDay: [day: string, items: T[]]; demand: [ranges: PhotoDemand[]]; activeDay: [day: string] }>()
 const wall = ref<HTMLDivElement>()
 const columns = ref(1)
 const width = ref(0)
@@ -15,6 +15,12 @@ const viewportHeight = ref(0)
 const focusedRow = ref<string | null>(null)
 const groups = computed(() => props.groups ?? groupPhotos(props.items))
 const rows = computed(() => photoRows(groups.value, columns.value))
+const groupStarts = computed(() => {
+  const starts = new Map<string, number>()
+  let offset = 0
+  for (const group of groups.value) { starts.set(group.key, offset); offset += Math.max(group.count ?? 0, group.items.length) }
+  return starts
+})
 const photoHeight = computed(() => (width.value - gap.value * (columns.value - 1)) / columns.value + (props.caption ? 20 : 0) + gap.value)
 const dayStates = computed(() => new Map(groups.value.map(group => {
   const count = group.items.filter(props.isSelected).length
@@ -25,7 +31,7 @@ const virtualizer = useWindowVirtualizer(computed(() => {
   const height = photoHeight.value
   const focus = data.findIndex(row => row.key === focusedRow.value)
   return {
-    count: data.length, overscan: props.groups ? Math.max(1, Math.ceil(viewportHeight.value / height / 2)) : 4, scrollMargin: margin.value,
+    count: data.length, overscan: props.groups && height > 0 ? Math.max(1, Math.ceil(viewportHeight.value / height / 2)) : 4, scrollMargin: margin.value,
     getItemKey: (index: number) => data[index]!.key,
     estimateSize: (index: number) => data[index]!.kind === 'day' ? 44 : height,
     rangeExtractor: (range: Parameters<typeof defaultRangeExtractor>[0]) => {
@@ -43,9 +49,15 @@ const visibleRows = computed(() => virtualizer.value.getVirtualItems().flatMap(v
 const totalHeight = computed(() => virtualizer.value.getTotalSize())
 const totalCount = computed(() => groups.value.reduce((sum, group) => sum + (group.count ?? group.items.length), 0))
 watch(visibleRows, (visible) => {
+  if (width.value <= 0 || photoHeight.value <= 0) return
   const viewport = visible.filter(({ virtual }) => virtual.end > window.scrollY + (props.topInset ?? 0) + 1 && virtual.start < window.scrollY + window.innerHeight)
-  const buffered = visible.filter(({ virtual }) => virtual.end > window.scrollY - window.innerHeight / 2 && virtual.start < window.scrollY + window.innerHeight * 1.5)
-  emit('visibleDays', [...new Set([...viewport, ...buffered].map(({ row }) => row.group.key))])
+  const buffer = Math.min(photoHeight.value, window.innerHeight / 4)
+  const needed = new Map<string, number>()
+  for (const { virtual, row } of visible) {
+    if (row.kind !== 'photos' || virtual.end <= window.scrollY + (props.topInset ?? 0) - buffer || virtual.start >= window.scrollY + window.innerHeight + buffer) continue
+    needed.set(row.group.key, Math.max(needed.get(row.group.key) ?? 0, row.start + row.count - groupStarts.value.get(row.group.key)!))
+  }
+  emit('demand', [...needed].map(([day, end]) => ({ day, end })))
   if (viewport[0]) emit('activeDay', viewport[0].row.group.key)
 }, { flush: 'post' })
 let observer: ResizeObserver

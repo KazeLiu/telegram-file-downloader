@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from '#imports'
 import { queryText, queryPage } from './routeState'
 import { api, bytes, imageThumbnail as thumbnail, type LibraryPicture as Picture } from './api'
@@ -47,39 +47,49 @@ let press: { pointerId: number; x: number; y: number; timer: ReturnType<typeof s
 let held = false
 let loadedScope = ''
 let activeReview: number | null = null
+let readController = new AbortController()
+let disposed = false
+
+function cancelReads() {
+  readController.abort(); readController = new AbortController(); ++loadRevision
+  imageModel.loading = imageModel.loadingMore = false
+  observer?.disconnect(); stopPress()
+}
 
 function imageRoute(value = imageModel.view, page = 1, search = imageModel.appliedSearch, root = imageModel.recycleRoot) {
   return router.push({ path: value === 'all' ? '/images' : `/images/${value}`, query: value === 'recycle'
-    ? { root: root !== 'downloads' ? root : undefined, page: page > 1 ? String(page) : undefined }
+    ? { root: root !== 'downloads' ? root : undefined, page: page > 1 ? String(page) : undefined, search: search || undefined }
     : { search: search || undefined } })
 }
 async function readRoute() {
-  if (!route.path.startsWith('/images')) return
+  if (disposed || !route.path.startsWith('/images')) return
   const value = route.path.split('/')[2]
   const view: View = value === 'candidates' || value === 'recycle' ? value : 'all'
   const search = queryText(route.query.search)
   const root = queryText(route.query.root) || 'downloads'
   const page = queryPage(route.query.page)
   const scope = JSON.stringify([view, search, root, page])
+  let signal = readController.signal
   if (scope !== loadedScope) {
-    if (view !== imageModel.view || root !== restoreModel.selectionRoot) { restoreModel.selected.clear(); restoreModel.broken.clear(); restoreModel.note = ''; restoreModel.selectionRoot = root }
-    loadedScope = scope; ++loadRevision
-    imageModel.loading = imageModel.loadingMore = false
+    if (view !== imageModel.view || root !== restoreModel.selectionRoot || search !== imageModel.appliedSearch) { restoreModel.selected.clear(); restoreModel.broken.clear(); restoreModel.note = ''; restoreModel.selectionRoot = root }
+    loadedScope = scope; cancelReads()
+    signal = readController.signal
     Object.assign(imageModel, { view, page, search, appliedSearch: search, recycleRoot: root, items: [], trash: [], total: 0, nextCursor: null })
     clearSelection(); reviewDialog.value?.close(); activeReview = null
     if (view === 'recycle') imageModel.organizing = false
     await load()
   }
+  if (signal.aborted || disposed) return
   const photo = Number(queryText(route.query.photo))
   if (view === 'recycle' || !Number.isSafeInteger(photo) || photo < 1) { reviewDialog.value?.close(); return }
   if (photo === activeReview) return
   try {
-    const item = imageModel.items.find(item => item.id === photo) || await api<Picture>(`/images/${photo}`)
-    if (queryText(route.query.photo) !== String(photo)) return
+    const item = imageModel.items.find(item => item.id === photo) || await api<Picture>(`/images/${photo}`, undefined, 'GET', signal)
+    if (signal.aborted || disposed || queryText(route.query.photo) !== String(photo)) return
     const listed = imageModel.items.includes(item)
     activeReview = photo
     reviewDialog.value?.open(listed ? imageModel.items : [item], item, listed ? imageModel.nextCursor : item.id, imageModel.total)
-  } catch (error) { imageModel.error = (error as Error).message }
+  } catch (error) { if (!disposed && (error as Error).name !== 'AbortError') imageModel.error = (error as Error).message }
 }
 watch(() => route.fullPath, () => void readRoute())
 function reviewChanged(id: number) {
@@ -96,19 +106,22 @@ function listImages(after?: number | null) {
   const query = imageQuery()
   if (after != null) query.set('after', String(after))
   return api<{ items: Picture[]; total: number; next_cursor: number | null;
-    scan: typeof imageModel.scan; counts: typeof imageModel.counts }>(`/images?${query}`)
+    scan: typeof imageModel.scan; counts: typeof imageModel.counts }>(`/images?${query}`, undefined, 'GET', readController.signal)
 }
 async function load({ append = false } = {}) {
-  if (imageModel.loading || imageModel.loadingMore || (append && (!canLoadMore.value || blocked.value))) return
+  if (disposed || imageModel.loading || imageModel.loadingMore || (append && (!canLoadMore.value || blocked.value))) return
   const revision = ++loadRevision
+  const signal = readController.signal
   if (append) imageModel.loadingMore = true
   else imageModel.loading = true
   imageModel.error = ''
   try {
     if (imageModel.view === 'recycle') {
-      imageModel.roots = (await api<{ items: typeof imageModel.roots }>('/recycle/roots')).items
-      const query = new URLSearchParams({ page: String(imageModel.page), root: imageModel.recycleRoot })
-      const result = await api(`/recycle?${query}`)
+      const roots = await api<{ items: typeof imageModel.roots }>('/recycle/roots', undefined, 'GET', signal)
+      if (signal.aborted || revision !== loadRevision) return
+      imageModel.roots = roots.items
+      const query = new URLSearchParams({ page: String(imageModel.page), root: imageModel.recycleRoot, search: imageModel.appliedSearch })
+      const result = await api(`/recycle?${query}`, undefined, 'GET', signal)
       if (revision !== loadRevision) return
       imageModel.trash = result.items; imageModel.total = result.total; imageModel.pageSize = result.page_size
       imageModel.cleanup = result.cleanup
@@ -138,7 +151,7 @@ async function pollStatus() {
   polling = true
   const revision = loadRevision
   try {
-    const result = await api<{ total: number; scan: typeof imageModel.scan; counts: typeof imageModel.counts }>(`/images/status?${imageQuery()}`)
+    const result = await api<{ total: number; scan: typeof imageModel.scan; counts: typeof imageModel.counts }>(`/images/status?${imageQuery()}`, undefined, 'GET', readController.signal)
     if (revision !== loadRevision) return
     imageModel.scan = result.scan; imageModel.counts = result.counts; imageModel.total = result.total
     if (!imageModel.items.length && result.total && activeReview === null && !confirmDialog.value?.open) await load()
@@ -158,7 +171,7 @@ async function scan() {
   catch (error) { imageModel.error = (error as Error).message; imageModel.scan.running = false }
 }
 async function view(value: View) {
-  if (toolbarBlocked.value || imageModel.view === value) return
+  if (imageModel.busy || imageModel.view === value) return
   await imageRoute(value)
 }
 async function filter() {
@@ -308,15 +321,17 @@ function selectTrashPage() {
 async function selectAllTrash() {
   imageModel.busy = true; imageModel.error = ''
   const root = imageModel.recycleRoot
+  const search = imageModel.appliedSearch
+  const signal = readController.signal
   try {
     for (let page = 1; ; page++) {
-      const result = await api<{ items: Recycled[]; total: number; page_size: number }>(`/recycle?${new URLSearchParams({ root, page: String(page) })}`)
-      if (imageModel.view !== 'recycle' || imageModel.recycleRoot !== root) return
+      const result = await api<{ items: Recycled[]; total: number; page_size: number }>(`/recycle?${new URLSearchParams({ root, search, page: String(page) })}`, undefined, 'GET', signal)
+      if (signal.aborted || disposed) return
       for (const item of result.items) if (item.state !== 'exporting') restoreModel.selected.set(item.id, item)
       restoreModel.note = `已选择 ${restoreModel.selected.size} 项`
       if (page * result.page_size >= result.total || !result.items.length) break
     }
-  } catch (error) { imageModel.error = (error as Error).message }
+  } catch (error) { if (!signal.aborted) imageModel.error = (error as Error).message }
   finally { imageModel.busy = false }
 }
 function confirmRestore(item?: Recycled) {
@@ -327,6 +342,7 @@ function confirmRestore(item?: Recycled) {
 }
 async function restore() {
   imageModel.busy = true; imageModel.error = ''
+  const scope = loadedScope
   const targets = restoreModel.targets
   const failures: string[] = []
   let restored = 0
@@ -345,6 +361,7 @@ async function restore() {
     restoreModel.note = `已还原 ${restored} 项${restored < targets.length ? `，${targets.length - restored} 项未完成` : ''}`
     if (restored) emit('message', `已还原 ${restored} 项到原路径`)
     imageModel.busy = false
+    if (disposed || scope !== loadedScope) return
     await load()
     const last = Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize))
     if (imageModel.view === 'recycle' && imageModel.page > last) await imageRoute('recycle', last)
@@ -352,31 +369,32 @@ async function restore() {
   }
 }
 function loadMore() { void load({ append: true }) }
-watchEffect(() => {
-  const button = moreButton.value
-  const ready = canLoadMore.value && !toolbarBlocked.value && !imageModel.error
+// Re-observing after every completed page fires again even when the user has not scrolled.
+watch(moreButton, button => {
   observer?.disconnect()
-  if (button && ready) observer?.observe(button)
+  if (button) observer?.observe(button)
 }, { flush: 'post' })
 onMounted(() => {
   if ('IntersectionObserver' in window) {
-    observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) loadMore() }, { rootMargin: '0px 0px 240px' })
+    observer = new IntersectionObserver(entries => {
+      if (!disposed && !imageModel.error && entries.some(entry => entry.isIntersecting && entry.target === moreButton.value)) loadMore()
+    }, { rootMargin: '0px 0px 80px' })
   }
   timer = setInterval(() => {
     if (!document.hidden) void pollStatus()
   }, 2000)
   void readRoute()
 })
-onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
+onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
 </script>
 
 <template>
   <section class="image-library" :class="{ 'has-floating-actions': imageModel.view !== 'recycle' }">
     <div class="image-library-toolbar">
       <div class="image-tabs" role="tablist" aria-label="图片视图">
-        <button role="tab" :aria-selected="imageModel.view === 'all'" :disabled="toolbarBlocked" @click="view('all')">全部图片 <span>{{ imageModel.counts.total || 0 }}</span></button>
-        <button role="tab" :aria-selected="imageModel.view === 'candidates'" :disabled="toolbarBlocked" @click="view('candidates')">黑白候选 <span>{{ imageModel.counts.candidates || 0 }}</span></button>
-        <button role="tab" :aria-selected="imageModel.view === 'recycle'" :disabled="toolbarBlocked" @click="view('recycle')">回收站</button>
+        <button role="tab" :aria-selected="imageModel.view === 'all'" :disabled="imageModel.busy" @click="view('all')">全部图片 <span>{{ imageModel.counts.total || 0 }}</span></button>
+        <button role="tab" :aria-selected="imageModel.view === 'candidates'" :disabled="imageModel.busy" @click="view('candidates')">黑白候选 <span>{{ imageModel.counts.candidates || 0 }}</span></button>
+        <button role="tab" :aria-selected="imageModel.view === 'recycle'" :disabled="imageModel.busy" @click="view('recycle')">回收站</button>
       </div>
       <div class="image-toolbar-actions">
         <template v-if="imageModel.view !== 'recycle'">
@@ -426,11 +444,14 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
       <p v-if="imageModel.cleanup.running" class="muted mt-2" role="status">正在检查到期文件…</p>
       <p v-else-if="imageModel.cleanup.checked" class="muted mt-2">最近检查：{{ new Date(imageModel.cleanup.checked * 1000).toLocaleString('zh-CN') }} · 本轮已永久清理 {{ imageModel.cleanup.removed }} 项</p>
       <p v-if="imageModel.cleanup.failed" class="notice error" role="alert">自动清理有 {{ imageModel.cleanup.failed }} 项异常，请查看运行日志。</p>
-      <div class="my-3 flex flex-wrap items-end gap-4">
+      <div class="recycle-toolbar">
         <label v-if="imageModel.roots.length > 1">回收目录<select v-model="imageModel.recycleRoot" :disabled="blocked" @change="imageRoute('recycle')"><option v-for="root in imageModel.roots" :key="root.id" :value="root.id">{{ root.path }}</option></select></label>
+        <form class="search-box" @submit.prevent="filter"><Icon name="search" :size="17" /><input v-model="imageModel.search" type="search" :disabled="blocked" maxlength="255" placeholder="搜索回收文件名" aria-label="搜索回收文件名" /><button class="text-button" :disabled="blocked">搜索</button></form>
         <span role="status">共 {{ imageModel.total }} 项 · 已选 {{ restoreModel.selected.size }} 项</span>
+      </div>
+      <div class="recycle-actions">
         <button class="secondary" :disabled="blocked || !imageModel.trash.length" @click="selectTrashPage">{{ allTrashSelected ? '取消本页选择' : '全选本页' }}</button>
-        <button class="text-button" :disabled="blocked || !imageModel.total" @click="selectAllTrash">全选本目录</button>
+        <button class="text-button" :disabled="blocked || !imageModel.total" @click="selectAllTrash">{{ imageModel.appliedSearch ? '全选筛选结果' : '全选本目录' }}</button>
         <button v-if="restoreModel.selected.size" class="text-button" :disabled="blocked" @click="restoreModel.selected.clear()">清空选择</button>
         <button class="primary" :disabled="blocked || !restoreModel.selected.size" @click="confirmRestore()"><Icon name="restore" :size="16" />还原所选 {{ restoreModel.selected.size }} 项</button>
       </div>
@@ -440,12 +461,12 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
           <button class="image-preview" :disabled="blocked || item.state === 'exporting'" :aria-label="'选择还原 ' + item.original" :aria-pressed="trashSelected(item)" @click="toggleTrash(item)"><span class="image-thumb">
             <img v-if="item.is_image && !restoreModel.broken.has(item.id)" :src="`/api/recycle/${item.id}/thumbnail?root=${encodeURIComponent(imageModel.recycleRoot)}`" alt="" loading="lazy" decoding="async" @error="restoreModel.broken.add(item.id)" />
             <Icon v-else :name="item.is_image ? 'photo' : 'file'" class="text-muted" :size="28" />
-          </span></button>
+          </span><span v-if="item.state !== 'exporting'" class="recycle-check" :class="{ checked: trashSelected(item) }"><Icon v-if="trashSelected(item)" name="check" :size="15" /></span></button>
           <button v-if="item.state !== 'exporting'" class="recycle-one" :disabled="blocked" :aria-label="'还原 ' + item.original" @click="confirmRestore(item)"><Icon name="restore" :size="17" /></button>
           <p class="h-[20px] truncate text-xs leading-[20px] text-muted" :title="`${item.original} · ${bytes(item.size)} · ${new Date(item.created * 1000).toLocaleString('zh-CN')} · ${item.state === 'exporting' ? '文件已移出，需手动核对' : item.reason === 'xiaomi_upload' ? '上传后回收' : item.reason === 'xiaomi_cloud' ? '云端联动回收' : '本地回收'}`">{{ item.original }}</p>
         </article></template>
       </VirtualPhotoWall>
-      <div v-else class="empty-list tall"><Icon name="trash" :size="38" /><h2>回收站是空的</h2><p>移入回收站的文件会出现在这里。</p></div>
+      <div v-else-if="!imageModel.loading && !imageModel.error" class="empty-list tall"><Icon name="trash" :size="38" /><h2>{{ imageModel.appliedSearch ? '没有匹配的回收文件' : '回收站是空的' }}</h2></div>
     </template>
     <div v-if="imageModel.view === 'recycle'" class="pagination"><span>第 {{ imageModel.page }} / {{ Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize)) }} 页</span><button class="secondary" :disabled="blocked || imageModel.page === 1" @click="page(-1)">上一页</button><button class="secondary" :disabled="blocked || imageModel.page * imageModel.pageSize >= imageModel.total" @click="page(1)">下一页</button></div>
     <ImageReviewDialog ref="reviewDialog" :load-page="listImages" :is-selected="isSelected" @change="reviewChanged" @finish="finishReview" />
@@ -474,5 +495,12 @@ onUnmounted(() => { clearInterval(timer); observer?.disconnect(); stopPress() })
 @reference '../app/assets/main.css';
 .image-library { overflow-anchor: none; }
 .recycle-wall { @apply grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
+.recycle-toolbar { @apply my-3 flex flex-wrap items-end gap-3; }
+.recycle-toolbar .search-box { @apply min-w-0; flex: 1 1 260px; max-width: 360px; }
+.recycle-toolbar > span { @apply whitespace-nowrap text-sm text-muted; }
+.recycle-actions { @apply my-3 flex items-center gap-3 overflow-x-auto whitespace-nowrap; }
+.recycle-actions > button { @apply shrink-0; }
+.recycle-check { @apply pointer-events-none absolute top-2 left-2 grid size-6 place-items-center rounded-full border-2 border-solid border-white bg-ink/30 text-white; }
+.recycle-check.checked { @apply border-blue bg-blue; }
 .recycle-one { @apply absolute top-1 right-1 grid size-11 min-h-11 place-items-center rounded-full bg-canvas p-0 text-blue; }
 </style>

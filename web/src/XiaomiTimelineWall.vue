@@ -5,6 +5,7 @@ import { api } from './api'
 import VirtualPhotoWall from './VirtualPhotoWall.vue'
 import { albumView, invalidateOtherAlbums, mergeDay, removeDayItems, timelineLabel, type TimelineDay } from './xiaomiTimeline'
 import type { CloudMedia } from './xiaomiMedia'
+import type { PhotoDemand } from './photoWall'
 
 const props = defineProps<{ connection: string; album: string; disabled: boolean; isSelected: (item: CloudMedia) => boolean }>()
 const emit = defineEmits<{ items: [items: CloudMedia[]]; ready: [ready: boolean]; toggleDay: [day: string, items: CloudMedia[]] }>()
@@ -13,7 +14,7 @@ const wall = ref<{ jump: (day: string) => void }>()
 const navigation = ref<HTMLElement>()
 const topInset = ref(0)
 const loading = ref(false)
-const visible = ref<string[]>([])
+const visible = ref<PhotoDemand[]>([])
 const items = computed(() => view.days.flatMap(day => day.items))
 const groups = computed(() => view.days.filter(day => day.count > 0).map(day => ({ key: day.date, label: timelineLabel(day.date), count: day.count, items: day.items })))
 const months = computed(() => {
@@ -57,16 +58,17 @@ async function index() {
   } finally { if (current === revision) loading.value = false }
 }
 
-function visibleDays(days: string[]) {
-  visible.value = days
+function demand(ranges: PhotoDemand[]) {
+  visible.value = ranges
   pump()
 }
 function pump() {
   if (disposed || restoring || props.disabled || !view.ready) return
-  for (const date of visible.value) {
+  for (const { day: date, end } of visible.value) {
     if (running >= 2) break
     const day = view.days.find(day => day.date === date)
-    if (day && !day.last && !day.loading && !day.error) void load(day)
+    // A visible day may contain thousands of photos; fetch only through the last needed row.
+    if (day && day.items.length < end && !day.last && !day.loading && !day.error) void load(day)
   }
 }
 async function load(day: TimelineDay) {
@@ -136,7 +138,7 @@ onBeforeUnmount(() => { saveScroll(); disposed = true; revision++; controller.ab
       </nav>
       <div class="timeline-content">
         <div class="timeline-errors"><div v-for="day in view.days.filter(day => day.error)" :key="day.date" class="notice error" role="alert">{{ timelineLabel(day.date) }}：{{ day.error }} <button class="text-button" :disabled="disabled" @click="retry(day)">重试当日</button></div></div>
-        <VirtualPhotoWall ref="wall" class="timeline-wall" :items="items" :groups="groups" :top-inset="topInset" caption :disabled="disabled" :is-selected="isSelected" @toggle-day="(day, items) => emit('toggleDay', day, items)" @visible-days="visibleDays" @active-day="view.active = $event">
+        <VirtualPhotoWall ref="wall" class="timeline-wall" :items="items" :groups="groups" :top-inset="topInset" caption :disabled="disabled" :is-selected="isSelected" @toggle-day="(day, items) => emit('toggleDay', day, items)" @demand="demand" @active-day="view.active = $event">
           <template #default="{ item }"><slot :item="item" /></template>
         </VirtualPhotoWall>
       </div>

@@ -147,11 +147,13 @@ class RecycleBin:
         LOGGER.debug("recycle moved id=%s source=%s reason=%s", record_id, relative, reason)
         return record_id
 
-    def listing(self, page=1):
+    def listing(self, page=1, search=""):
         states = "('trashed','restoring','purging','exporting')"
-        total = self.db.execute(f"SELECT COUNT(*) FROM items WHERE state IN {states}").fetchone()[0]
-        rows = self.db.execute(f"SELECT * FROM items WHERE state IN {states} ORDER BY created DESC,id LIMIT 50 OFFSET ?",
-                               ((page - 1) * 50,)).fetchall()
+        condition = f"state IN {states} AND (?='' OR instr(lower(original),lower(?))>0)"
+        args = (search, search)
+        total = self.db.execute(f"SELECT COUNT(*) FROM items WHERE {condition}", args).fetchone()[0]
+        rows = self.db.execute(f"SELECT * FROM items WHERE {condition} ORDER BY created DESC,id LIMIT 50 OFFSET ?",
+                               (*args, (page - 1) * 50)).fetchall()
         return dict(items=[dict(row) for row in rows], total=total, page=page, page_size=50)
 
     def preview(self, record_id):
