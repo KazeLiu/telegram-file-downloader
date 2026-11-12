@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, watch } from 'vue'
-import { useRoute, useRouter } from '#imports'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from '#imports'
 import { api, type Settings, type Status } from './api'
+import { useBeforeUnload } from './useBeforeUnload'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ settings: Settings; status: Status }>()
@@ -17,6 +18,12 @@ const settingsModel = reactive({ get section() { const id = route.path.split('/'
 const sections = [{ id: 'telegram', title: 'Telegram' }, { id: 'rules', title: '下载规则' }, { id: 'processing', title: '解压与回执' }, { id: 'security', title: '安全' }]
 const configured = computed(() => !!props.settings.api_id && props.settings.api_hash_saved)
 const processing = computed(() => props.status.active_tasks.some(task => ['downloading', 'waiting', 'retrying', 'extracting', 'organizing'].includes(task.status)))
+const unsaved = computed(() => settingsModel.dirty || settingsModel.replace_passwords || !!settingsModel.current_password || !!settingsModel.new_password)
+useBeforeUnload(() => unsaved.value)
+function confirmLeave() { return !unsaved.value || window.confirm('设置尚未保存。离开将放弃这些更改，是否继续？') }
+onBeforeRouteLeave(confirmLeave)
+onBeforeRouteUpdate(to => to.path.split('/')[1] === 'settings' || confirmLeave())
+defineExpose({ confirmLeave })
 
 function resetForm() {
   const { api_hash_saved, proxy_password_saved, archive_passwords_count, chat, chat_title, enabled, ...form } = props.settings
@@ -58,7 +65,7 @@ onBeforeUnmount(clearSecrets)
 </script>
 <template>
   <div class="settings-layout">
-    <nav class="section-nav" aria-label="设置分类"><button v-for="section in sections" :key="section.id" :class="{ selected: settingsModel.section === section.id }" @click="router.push('/settings/' + section.id)">{{ section.title }}</button></nav>
+    <nav class="section-nav" aria-label="设置分类"><button v-for="section in sections" :key="section.id" :class="{ selected: settingsModel.section === section.id }" :aria-current="settingsModel.section === section.id ? 'page' : undefined" @click="router.push('/settings/' + section.id)">{{ section.title }}</button></nav>
     <div class="settings-content">
       <p v-if="settingsModel.error" class="notice error" role="alert">{{ settingsModel.error }}</p>
       <form @submit.prevent="save" @input="settingsModel.dirty = true" @change="settingsModel.dirty = true">

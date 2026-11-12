@@ -345,16 +345,16 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); reads.abort(); scoreRe
 .distance-control input { @apply w-18 py-2; }
 .source-list { @apply mt-3 border-t border-solid border-hairline pt-2; border-width: 1px 0 0; }
 .source-row { @apply flex-row items-center gap-3 border-b border-solid border-soft py-3; border-width: 0 0 1px; }
-.source-row input[type=checkbox], .picture-select input[type=checkbox] { @apply size-5 appearance-auto rounded-sm accent-blue; }
+.source-row input[type=checkbox], .picture-select input[type=checkbox] { @apply size-5 appearance-auto rounded-sm accent-primary; }
 .source-row input::after, .picture-select input::after { display: none; }
 .scan-strip { @apply mb-5 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 text-sm; }
 .scan-strip progress { @apply w-full; }
 .comparison-layout { @apply grid items-start gap-5; grid-template-columns: 260px minmax(0, 1fr); }
-.group-list { @apply sticky top-5 min-w-0 overflow-y-auto rounded-panel bg-canvas p-3; max-height: calc(100dvh - 40px); }
+.group-list { @apply sticky min-w-0 overflow-y-auto rounded-panel bg-canvas p-3; top: calc(var(--workbench-top) + 16px); max-height: calc(100dvh - var(--workbench-top) - 32px); }
 .mobile-group-picker { display: none; }
 .group-heading { @apply flex items-center justify-between gap-2 px-2 pb-3 text-sm; }
 .group-button { @apply mb-2 block w-full rounded-lg border border-solid border-transparent p-2 text-left; }
-.group-button.active { @apply border-blue bg-blue/5; }
+.group-button.active { @apply border-primary bg-primary/5; }
 .group-covers { @apply mb-2 flex h-16 gap-1 overflow-hidden rounded-md; }
 .group-covers img { @apply min-w-0 flex-1 bg-parchment object-contain; }
 .group-button strong { @apply text-sm; }
@@ -366,14 +366,14 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); reads.abort(); scoreRe
 .picture-card { @apply min-w-0 overflow-hidden rounded-xl border-2 border-solid border-transparent bg-canvas; }
 .picture-card.selected { @apply border-danger; }
 .picture-card.removed { @apply opacity-50; }
-.picture-preview { @apply grid w-full place-items-center bg-soft p-0; aspect-ratio: 4 / 3; }
+.picture-preview { @apply grid w-full place-items-center bg-media p-0; aspect-ratio: 4 / 3; }
 .picture-preview img { @apply h-full max-h-80 w-full object-contain; }
 .picture-info { @apply p-3; }
 .picture-select { @apply mb-2 min-h-7 flex-row items-center gap-2.5; }
 .picture-metrics { @apply mt-2 flex items-center gap-3 text-sm text-muted; }
 .score-line { @apply mt-2 flex min-h-11 items-center justify-between gap-2 border-t border-solid border-soft pt-1 text-sm; border-width: 1px 0 0; }
 .score-line .text-button { @apply shrink-0 text-sm; }
-.selection-bar { @apply sticky bottom-0 z-10 mt-5 flex items-center justify-between gap-3 rounded-xl border border-solid border-hairline bg-canvas p-4 shadow-lg; }
+.selection-bar { @apply sticky z-10 mt-5 flex items-center justify-between gap-3 rounded-panel border border-solid border-hairline bg-parchment/90 p-4 backdrop-blur-xl; bottom: env(safe-area-inset-bottom); }
 .pending-panel { @apply mt-5; }
 .pending-row, .confirmation-row { @apply flex items-start justify-between gap-4 border-b border-solid border-soft py-3; border-width: 0 0 1px; }
 .dedup-confirm { width: min(800px, calc(100% - 24px)); }
@@ -382,7 +382,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); reads.abort(); scoreRe
 .review-pair { @apply mt-4 grid gap-5; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
 .review-pair figure { @apply m-0 flex min-w-0 flex-col gap-3; }
 .review-pair figcaption { @apply truncate text-sm; }
-.review-pair img { @apply h-[60vh] w-full bg-parchment object-contain; }
+.review-pair img { @apply h-[60vh] w-full bg-media object-contain; }
 @media (max-width: 1200px) { .comparison-layout { grid-template-columns: 210px minmax(0, 1fr); } .reference-line { @apply flex-col items-start gap-1; } }
 @media (max-width: 800px) {
   .comparison-layout { grid-template-columns: minmax(0, 1fr); }

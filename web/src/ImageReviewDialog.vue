@@ -310,7 +310,7 @@ function needsRecycle(i: number) {
 .review-heading { @apply grid grid-cols-[1fr_auto_1fr] items-center gap-2; }
 .review-heading button { @apply justify-self-end; }
 .review-count { @apply tabular-nums; }
-.review-stage { @apply relative min-h-[140px] flex-1 shrink-0 overflow-hidden rounded-xl bg-parchment; }
+.review-stage { @apply relative min-h-[140px] flex-1 shrink-0 overflow-hidden rounded-lg bg-media; }
 .review-swipe { @apply absolute inset-0 isolate cursor-grab touch-none select-none; }
 .review-swipe:active { @apply cursor-grabbing; }
 .review-slide { @apply pointer-events-none absolute inset-0 flex items-center justify-center px-[52px] py-2.5; }
@@ -321,18 +321,18 @@ function needsRecycle(i: number) {
 .review-comparison figcaption { @apply text-center text-xs text-muted; }
 .review-comparison img { @apply h-0 min-h-0 w-full flex-1 object-contain; }
 .comparison-current { transition: transform .14s ease-out, filter .14s ease-out, opacity .14s ease-out; }
-.comparison-current.in-recycle-zone { transform: scale(.78); filter: grayscale(1); opacity: .55; }
+.comparison-current.in-recycle-zone { transform: scale(.78); opacity: .55; }
 .saved-evidence { @apply flex min-w-0 items-center gap-3 text-xs text-muted; }
 .review-picture { transition: transform .14s ease-out, filter .14s ease-out, opacity .14s ease-out; }
-.review-picture.in-recycle-zone { transform: scale(.78); filter: grayscale(1); opacity: .55; }
+.review-picture.in-recycle-zone { transform: scale(.78); opacity: .55; }
 .review-empty { @apply flex flex-col items-center justify-center gap-2.5 text-center text-muted; }
 .review-drop-zone { height: min(25%, 120px); @apply pointer-events-none absolute inset-x-2 z-[2] flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-danger/30 bg-danger/10 text-xs text-danger; }
 .review-drop-zone.top { @apply top-0; }
 .review-drop-zone.bottom { @apply bottom-0; }
 .review-drop-zone.armed { @apply border-danger bg-danger/20; }
-.review-mark { @apply pointer-events-none absolute bottom-3 left-3 z-[3] inline-flex items-center gap-1.5 rounded-full bg-canvas/95 px-3 py-2 text-xs text-danger shadow-sm; }
+.review-mark { @apply pointer-events-none absolute bottom-3 left-3 z-[3] inline-flex items-center gap-1.5 rounded-full border border-solid border-danger/30 bg-canvas/95 px-3 py-2 text-sm text-danger; }
 .review-mark.releasing { @apply text-success; }
-.review-arrow { @apply absolute top-1/2 z-[4] -translate-y-1/2 bg-canvas shadow-sm; }
+.review-arrow { @apply absolute top-1/2 z-[4] -translate-y-1/2 border border-solid border-hairline bg-canvas; }
 .review-previous { @apply left-1.5; }
 .review-previous svg { rotate: 180deg; }
 .review-next { @apply right-1.5; }
@@ -342,16 +342,16 @@ function needsRecycle(i: number) {
 .review-caption .muted { @apply ml-auto; }
 .review-actions .recycle { @apply text-danger; }
 .review-filmstrip { @apply mx-auto grid w-full max-w-[472px] auto-cols-fr grid-flow-col gap-1.5; }
-.review-slot button { @apply relative grid aspect-square w-full place-items-center rounded-lg bg-parchment p-0 text-muted; }
-.review-slot button[aria-current] { outline: 2px solid var(--color-blue); outline-offset: 2px; }
-.review-slot button:focus-visible { outline: 3px solid var(--color-blue-focus); outline-offset: 3px; }
+.review-slot button { @apply relative grid aspect-square w-full place-items-center rounded-lg bg-media p-0 text-muted; }
+.review-slot button[aria-current] { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.review-slot button:focus-visible { outline: 3px solid var(--color-primary-focus); outline-offset: 3px; }
 .review-slot img { @apply absolute inset-0 size-full object-cover; border-radius: inherit; }
 .review-stamp { @apply absolute right-[3px] bottom-[3px] grid size-5 place-items-center rounded-full bg-danger text-white; }
 .review-status { @apply text-center; }
 .review-options { @apply flex shrink-0 items-center justify-center gap-3; }
 .review-order { @apply inline-flex gap-0.5 rounded-lg bg-soft p-0.5; }
 .review-order button { @apply inline-flex min-h-[44px] items-center justify-center gap-1 rounded-md px-3 text-sm text-muted; }
-.review-order button[aria-pressed=true] { @apply bg-canvas text-blue shadow-xs; }
+.review-order button[aria-pressed=true] { @apply bg-selection font-semibold text-primary; }
 .review-actions { @apply flex shrink-0 flex-wrap items-center justify-center gap-2; }
 .review-actions > button { @apply min-h-[44px] gap-1.5 px-3 py-2; }
 .review-actions kbd { @apply text-muted; }

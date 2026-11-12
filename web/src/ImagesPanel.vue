@@ -399,12 +399,12 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
 <template>
   <section class="image-library" :class="{ 'has-floating-actions': imageModel.view !== 'recycle' }">
     <div class="image-library-toolbar">
-      <div class="image-tabs" role="tablist" aria-label="图片视图">
-        <button role="tab" :aria-selected="imageModel.view === 'all'" :disabled="imageModel.busy" @click="view('all')">全部图片 <span>{{ imageModel.counts.total || 0 }}</span></button>
-        <button role="tab" :aria-selected="imageModel.view === 'candidates'" :disabled="imageModel.busy" @click="view('candidates')">黑白候选 <span>{{ imageModel.counts.candidates || 0 }}</span></button>
-        <button role="tab" :aria-selected="imageModel.view === 'compressed'" :disabled="imageModel.busy" @click="view('compressed')">重复图 <span>{{ imageModel.counts.compressed || 0 }}</span></button>
-        <button role="tab" :aria-selected="imageModel.view === 'recycle'" :disabled="imageModel.busy" @click="view('recycle')">回收站</button>
-      </div>
+      <nav class="image-tabs" aria-label="图片视图">
+        <button :aria-current="imageModel.view === 'all' ? 'page' : undefined" :disabled="imageModel.busy" @click="view('all')">全部图片 <span>{{ imageModel.counts.total || 0 }}</span></button>
+        <button :aria-current="imageModel.view === 'candidates' ? 'page' : undefined" :disabled="imageModel.busy" @click="view('candidates')">黑白候选 <span>{{ imageModel.counts.candidates || 0 }}</span></button>
+        <button :aria-current="imageModel.view === 'compressed' ? 'page' : undefined" :disabled="imageModel.busy" @click="view('compressed')">重复图 <span>{{ imageModel.counts.compressed || 0 }}</span></button>
+        <button :aria-current="imageModel.view === 'recycle' ? 'page' : undefined" :disabled="imageModel.busy" @click="view('recycle')">回收站</button>
+      </nav>
       <div class="image-toolbar-actions">
         <template v-if="imageModel.view !== 'recycle'">
           <button class="secondary" :disabled="toolbarBlocked || imageModel.scan.running" @click="scan"><Icon :name="imageModel.scan.running ? 'loader' : 'refresh'" :class="{ 'loading-icon': imageModel.scan.running }" :size="16" />{{ imageModel.scan.running ? '正在扫描' : '刷新图片' }}</button>
@@ -488,8 +488,8 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
     </template>
     <div v-if="imageModel.view === 'recycle'" class="pagination"><span>第 {{ imageModel.page }} / {{ Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize)) }} 页</span><button class="secondary" :disabled="blocked || imageModel.page === 1" @click="page(-1)">上一页</button><button class="secondary" :disabled="blocked || imageModel.page * imageModel.pageSize >= imageModel.total" @click="page(1)">下一页</button></div>
     <ImageReviewDialog ref="reviewDialog" :load-page="listImages" :is-selected="isSelected" @change="reviewChanged" @finish="finishReview" />
-    <dialog ref="restoreDialog" class="task-dialog" @cancel="imageModel.busy && $event.preventDefault()">
-      <h2>还原 {{ restoreModel.targets.length }} 项文件？</h2><p class="my-3">还原到各自的原路径，不覆盖已有同名文件。未成功的项目继续保留在回收站。</p>
+    <dialog ref="restoreDialog" class="task-dialog" aria-labelledby="restore-title" @cancel="imageModel.busy && $event.preventDefault()">
+      <h2 id="restore-title">还原 {{ restoreModel.targets.length }} 项文件？</h2><p class="my-3">还原到各自的原路径，不覆盖已有同名文件。未成功的项目继续保留在回收站。</p>
       <div class="recycle-confirm-list"><p v-for="item in restoreModel.targets" :key="item.id">{{ item.original }}</p></div>
       <p v-if="imageModel.busy" role="status">正在还原 {{ restoreModel.done }} / {{ restoreModel.total }} 项…</p>
       <div class="dialog-actions"><button class="secondary" :disabled="imageModel.busy" @click="restoreDialog?.close()">取消</button><button class="primary" :disabled="imageModel.busy" @click="restore">{{ imageModel.busy ? '正在还原…' : '确认还原' }}</button></div>
@@ -499,8 +499,8 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
       <textarea ref="namesField" class="mt-4 block" readonly rows="6" aria-label="实际回收的文件名" :value="formatNames(lastLocalRecycle)" />
       <div class="dialog-actions"><button class="secondary" @click="copyRecycledNames">{{ canCopy ? '复制文件名' : '选中文件名' }}</button></div>
     </dialog>
-    <dialog ref="confirmDialog" class="task-dialog recycle-dialog" @cancel="imageModel.busy && $event.preventDefault()">
-      <div class="section-heading"><h2>移入回收站？</h2><button class="icon-button" :disabled="imageModel.busy" aria-label="取消回收" @click="confirmDialog?.close()"><Icon name="close" /></button></div>
+    <dialog ref="confirmDialog" class="task-dialog recycle-dialog" aria-labelledby="recycle-title" @cancel="imageModel.busy && $event.preventDefault()">
+      <div class="section-heading"><h2 id="recycle-title">移入回收站？</h2><button class="icon-button" :disabled="imageModel.busy" aria-label="取消回收" @click="confirmDialog?.close()"><Icon name="close" /></button></div>
       <p>将选中的 {{ imageModel.confirmation.length }} 张图片移入项目回收站，保留 15 天后自动永久删除。</p>
       <div class="recycle-confirm-list"><p v-for="item in imageModel.confirmation" :key="item.id">{{ item.name }}</p></div>
       <p v-if="imageModel.error" class="notice error" role="alert">{{ imageModel.error }}</p>
@@ -517,11 +517,11 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
 .compressed-wall { @apply grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3; }
 .compressed-pair { @apply pointer-events-none grid size-full grid-cols-2 gap-2 p-3; }
 .compressed-pair > span { @apply flex min-h-0 min-w-0 flex-col gap-2; }
-.compressed-pair strong { @apply text-sm font-medium; }
+.compressed-pair strong { @apply text-sm font-semibold; }
 .compressed-pair img { @apply h-0 min-h-0 w-full flex-1 object-contain; }
 .compressed-pair small { @apply truncate text-xs text-muted; }
-.image-preview[aria-pressed=true] .compressed-pair { @apply ring-2 ring-blue ring-inset; }
-.compressed-mark { @apply absolute right-0 bottom-0 grid size-5 place-items-center rounded-tl-md bg-blue text-white; }
+.image-preview[aria-pressed=true] .compressed-pair { @apply ring-2 ring-primary ring-inset; }
+.compressed-mark { @apply absolute right-0 bottom-0 grid size-5 place-items-center rounded-tl-md bg-primary text-white; }
 .recycle-wall { @apply grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
 .recycle-toolbar { @apply my-3 flex flex-wrap items-end gap-3; }
 .recycle-toolbar .search-box { @apply min-w-0; flex: 1 1 260px; max-width: 360px; }
@@ -529,6 +529,6 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
 .recycle-actions { @apply my-3 flex items-center gap-3 overflow-x-auto whitespace-nowrap; }
 .recycle-actions > button { @apply shrink-0; }
 .recycle-check { @apply pointer-events-none absolute top-2 left-2 grid size-6 place-items-center rounded-full border-2 border-solid border-white bg-ink/30 text-white; }
-.recycle-check.checked { @apply border-blue bg-blue; }
-.recycle-one { @apply absolute top-1 right-1 grid size-11 min-h-11 place-items-center rounded-full bg-canvas p-0 text-blue; }
+.recycle-check.checked { @apply border-primary bg-primary; }
+.recycle-one { @apply absolute top-1 right-1 grid size-11 min-h-11 place-items-center rounded-full bg-canvas p-0 text-primary; }
 </style>

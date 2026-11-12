@@ -1,28 +1,29 @@
 ---
 version: alpha
-name: Apple-design-analysis
-description: A photography-first interface that turns marketing into a museum gallery. Edge-to-edge product tiles alternate light and dark canvases, framed by SF Pro Display headlines with negative letter-spacing and a single Action Blue (#0066cc) interactive color. UI chrome recedes so the product can speak — no decorative gradients, no shadows on chrome, only the one signature drop-shadow under product imagery resting on a surface.
+name: Shicun-private-gallery
+description: An image-first private gallery for organizing and reviewing Japanese anime adult-content collections. Pale cherry-pink surfaces, deep rose actions (#A83D68), and plum-gray text create a mature, intimate atmosphere while keeping image browsing, selection, and recovery clear. Images retain their original colors; chrome stays quiet, with no decorative gradients or control shadows.
 
 colors:
-  primary: "#0066cc"
-  primary-focus: "#0071e3"
-  primary-on-dark: "#2997ff"
-  ink: "#1d1d1f"
-  body: "#1d1d1f"
+  primary: "#A83D68"
+  primary-focus: "#8F2D56"
+  primary-on-dark: "#F2AFC9"
+  selection: "#F7D6E3"
+  ink: "#35232D"
+  body: "#35232D"
   body-on-dark: "#ffffff"
-  body-muted: "#cccccc"
-  ink-muted-80: "#333333"
-  ink-muted-48: "#7a7a7a"
-  divider-soft: "#f0f0f0"
-  hairline: "#e0e0e0"
-  canvas: "#ffffff"
-  canvas-parchment: "#f5f5f7"
-  surface-pearl: "#fafafc"
+  body-muted: "#DCCBD3"
+  ink-muted-80: "#5C4652"
+  ink-muted-48: "#735D69"
+  divider-soft: "#F4E8EE"
+  hairline: "#E8D7DF"
+  canvas: "#FFFAFC"
+  canvas-parchment: "#FFF5F8"
+  surface-pearl: "#FFFFFF"
   surface-tile-1: "#272729"
   surface-tile-2: "#2a2a2c"
   surface-tile-3: "#252527"
   surface-black: "#000000"
-  surface-chip-translucent: "#d2d2d7"
+  surface-chip-translucent: "#F7D6E3"
   on-primary: "#ffffff"
   on-dark: "#ffffff"
 
@@ -196,8 +197,8 @@ components:
     textColor: "{colors.primary-on-dark}"
     typography: "{typography.body}"
   global-nav:
-    backgroundColor: "{colors.surface-black}"
-    textColor: "{colors.on-dark}"
+    backgroundColor: "{colors.canvas-parchment}"
+    textColor: "{colors.ink}"
     typography: "{typography.nav-link}"
     height: 44px
   sub-nav-frosted:
@@ -244,7 +245,7 @@ components:
     rounded: "{rounded.pill}"
     padding: 12px 16px
   configurator-option-chip-selected:
-    backgroundColor: "{colors.canvas}"
+    backgroundColor: "{colors.selection}"
     textColor: "{colors.ink}"
     rounded: "{rounded.pill}"
   search-input:
@@ -275,55 +276,64 @@ components:
 
 ## Overview
 
-Apple's web presence is a masterclass in **reverent product photography framed by near-invisible UI**. Every page is a stack of edge-to-edge product "tiles" — alternating light and dark canvases, each centered on a hero headline, a one-line tagline, two tiny blue pill CTAs, and an impossibly crisp product render. Nothing competes with the product. Typography is confident but quiet; color is either pure white, an off-white parchment, or a near-black tile; interactive elements are a single, quiet blue.
+拾存采用**淡粉色、成熟暧昧的日系私人画廊**风格。它服务于日本二次元成人向图片的个人收集、整理、筛选与审阅；视觉应贴近收藏内容，而不是通用办公后台。图片是主体，页面用极浅樱粉、深玫瑰色操作和深梅灰文字营造柔和、私密的氛围。
 
-Density is unusually low even by contemporary SaaS standards. Each tile occupies roughly one viewport, and there is no decorative chrome — no borders, no gradients, no decorative frames, no shadows on headlines. Elevation appears only when a product image rests on a surface (a single soft `rgba(0, 0, 0, 0.22) 3px 5px 30px` drop for visual weight). The result is a catalog that feels more like a museum gallery: the wall disappears and the artifact takes over.
+### Why pale pink / 选择原因
 
-Store and shop surfaces retain the same chassis but switch modes. The product configurator (iPhone 17 Pro, accessories grid) introduces a tight grid of white utility cards at `{rounded.lg}` (18px) radius with a thin border, paired with a persistent thin sub-nav strip. The environment page leans darker and more editorial. Across all five surfaces the typographic system, spacing rhythm, and the single blue accent are consistent — this is one design language expressed at different volumes.
+- **贴合实际用途。** 用户希望界面具有更成熟、暧昧的成人向收藏氛围。淡粉色比蓝灰色后台更符合这一定位；用配色与轻透工具条表达，而不是堆叠露骨文案、蕾丝、爱心或装饰插画。
+- **适合持续筛图。** 极浅粉底和近白面板降低大面积高饱和色的存在感，留出空间给原图；图片不叠加粉色滤镜，也不改变原有色彩。
+- **柔和不等于难读。** 淡粉色用于背景与选中填充；主要按钮和浅色背景上的链接用深玫瑰色，正文用深梅灰。不要使用淡粉底配白字来承载主要动作。
+- **保留工作台效率。** 延续内容优先、清晰层级、克制留白、可见焦点和明确回收确认。桌面密集图片墙与大图审阅各自保留适合的密度，不套用商品宣传页的大标题、整屏留白或强制明暗交替。
 
 **Key Characteristics:**
-- Photography-first presentation; UI recedes so the product can speak.
-- Alternating full-bleed tile sections: white/parchment ↔ near-black, with the color change itself acting as the section divider.
-- Single blue accent (`{colors.primary}` — #0066cc) carries every interactive element. No second brand color exists.
-- Two button grammars: tiny blue pill CTAs (`{rounded.pill}`) and compact utility rects (`{rounded.sm}`).
-- SF Pro Display + SF Pro Text — negative letter-spacing at display sizes for the signature "Apple tight" headline feel.
-- Whisper-soft elevation used only when a product image needs to breathe — exactly one drop-shadow in the entire system.
-- Tight two-row nav: slim `{component.global-nav}` + product-specific `{component.sub-nav-frosted}` with persistent right-aligned primary CTA.
-- Section rhythm across multiple pages: light hero → dark product tile → light utility tile → dark tile → parchment footer — a predictable pulse.
+- Image-first presentation; preserve the collection's original colors and make the review image dominant.
+- Pale pink page canvas, near-white panels, and rose selection fills; neutral dark surfaces only where media viewing benefits.
+- One rose brand family: deep rose actions, darker focus rings, and light rose links on dark media surfaces.
+- Two button grammars: rose pill CTAs (`{rounded.pill}`) and compact utility rects (`{rounded.sm}`).
+- SF Pro Display + SF Pro Text with system-font fallbacks; readable body text and restrained headlines.
+- Flat UI chrome; use surface changes, hairlines, and functional backdrop blur rather than control shadows.
+- Compact navigation with page context and a clear primary action; menus retain all functional destinations on small screens.
+- Express atmosphere through palette and material, not decorative clutter or flirtatious task labels.
+
+### Reference scope
+
+Apple's homepage, environment, store, iPhone 17 Pro buy page, and accessories index supplied the original typography, shape, and component vocabulary below. For 拾存, the pink palette and private-gallery direction in this document govern implementation. Legacy keys such as `product-tile` and `store-utility-card` describe reusable visual shapes; they do not require shopping features, promotional copy, or a marketing layout in the workbench.
 
 ## Colors
 
-> **Source pages analyzed:** homepage, environment, store, iPhone 17 Pro buy page, accessories index. The color system is identical across all five surfaces; only the surface-mode mix differs.
+The palette applies across the workbench, local image views, deduplication, cloud albums, settings, and dialogs. Pale pink defines the theme through large surfaces; deeper rose provides readable interaction contrast.
 
 ### Brand & Accent
-- **Action Blue** (`{colors.primary}` — #0066cc): The single brand-level interactive color. All text links, all blue pill CTAs ("Learn more", "Buy"), and the focus ring root. This is Apple's quiet but universal "click me" signal. Press state shifts to a slightly darker variant via the active scale transform rather than a hex change.
-- **Focus Blue** (`{colors.primary-focus}` — #0071e3): A marginally brighter sibling of Action Blue, reserved for the keyboard focus ring on buttons (`outline: 2px solid`).
-- **Sky Link Blue** (`{colors.primary-on-dark}` — #2997ff): A brighter blue used on dark surfaces for in-copy links and inline callouts, where Action Blue would disappear against the tile background.
+- **Action Rose** (`{colors.primary}` — #A83D68): Main action fills, links, and active controls on light surfaces. Pair filled buttons with `{colors.on-primary}`; pale pink is not a substitute for this readable action color.
+- **Focus Rose** (`{colors.primary-focus}` — #8F2D56): Visible keyboard focus rings (`outline: 2px solid`, with separation from the control).
+- **Rose Link On Dark** (`{colors.primary-on-dark}` — #F2AFC9): Links and focus signals on neutral dark media surfaces, where Action Rose would be too dark.
+- **Selection Pink** (`{colors.selection}` — #F7D6E3): Selected tabs, chips, and selection fills. Pair with plum-gray or deep rose content and an outline, checkmark, or other non-color selection cue.
 
 ### Surface
-- **Pure White** (`{colors.canvas}` — #ffffff): The dominant canvas. Content, utility cards, store tiles, configurator grids.
-- **Parchment** (`{colors.canvas-parchment}` — #f5f5f7): The signature Apple off-white. Used for alternating light tiles, footer region, and the default page canvas in store utility sections. Just different enough from white to create rhythm.
-- **Pearl Button** (`{colors.surface-pearl}` — #fafafc): A near-white used as the fill for secondary "ghost" buttons — lighter than the parchment canvas so the button still reads as a button against `{colors.canvas-parchment}`.
-- **Near-Black Tile 1** (`{colors.surface-tile-1}` — #272729): The primary dark-tile surface on the homepage product grid.
-- **Near-Black Tile 2** (`{colors.surface-tile-2}` — #2a2a2c): A micro-step lighter — used where a dark tile sits directly above or below Tile 1 to create the faintest separation.
-- **Near-Black Tile 3** (`{colors.surface-tile-3}` — #252527): A micro-step darker — used at the bottom of the stack and in embedded video/player frames.
-- **Pure Black** (`{colors.surface-black}` — #000000): Reserved for true void — video player backgrounds, edge-to-edge photographic overlays, the global nav bar background.
-- **Translucent Chip Gray** (`{colors.surface-chip-translucent}` — #d2d2d7): The base hex of the translucent gray chip used over photography for circular control buttons. In production, applied at ~64% alpha as `rgba(210, 210, 215, 0.64)`.
+- **Gallery White** (`{colors.canvas}` — #FFFAFC): Near-white panels, forms, dialogs, and utility containers. Keeps the theme soft without competing with images.
+- **Cherry Pink Canvas** (`{colors.canvas-parchment}` — #FFF5F8): Default page background, navigation, footer, and frosted toolbars; the dominant expression of the pale pink theme.
+- **Pearl White** (`{colors.surface-pearl}` — #FFFFFF): Secondary capsules and neutral image backdrops. Keep image-review backgrounds untinted when color comparison matters.
+- **Neutral Dark 1** (`{colors.surface-tile-1}` — #272729), **2** (`{colors.surface-tile-2}` — #2a2a2c), and **3** (`{colors.surface-tile-3}` — #252527): Optional media-viewing surfaces, not mandatory alternating page sections.
+- **Pure Black** (`{colors.surface-black}` — #000000): Video or image-viewer void only; the default navigation is pale pink, not black.
+- **Translucent Pink Chip** (`{colors.surface-chip-translucent}` — #F7D6E3): Circular controls over imagery. Increase opacity when needed to keep icons readable over arbitrary image content.
 
 ### Text
-- **Near-Black Ink** (`{colors.ink}` — #1d1d1f): The voice of every headline, every body paragraph, and the dark utility button's fill. Chosen instead of pure black to keep the page feeling photographic rather than printed.
-- **Body** (`{colors.body}` — #1d1d1f): Same hex as ink — Apple uses one near-black tone for all text on light surfaces.
-- **Body On Dark** (`{colors.body-on-dark}` — #ffffff): All text on dark tiles and on the global nav bar.
-- **Body Muted** (`{colors.body-muted}` — #cccccc): Secondary copy on dark tiles where pure white would be too loud.
-- **Ink Muted 80** (`{colors.ink-muted-80}` — #333333): Body text on the white Pearl Button surface — slightly softer than pure black.
-- **Ink Muted 48** (`{colors.ink-muted-48}` — #7a7a7a): Disabled button text and legal fine-print.
+- **Plum Gray Ink** (`{colors.ink}` — #35232D): Headlines, primary text, and dark utility fills; softer than pure black and related to the rose palette.
+- **Body** (`{colors.body}` — #35232D): The same plum-gray tone for readable paragraphs and form values.
+- **Body On Dark** (`{colors.body-on-dark}` — #ffffff): Text on dark media surfaces.
+- **Body Muted** (`{colors.body-muted}` — #DCCBD3): Secondary text on dark surfaces only.
+- **Ink Muted 80** (`{colors.ink-muted-80}` — #5C4652): Supporting text on light panels.
+- **Ink Muted 48** (`{colors.ink-muted-48}` — #735D69): Metadata and fine print on light surfaces; do not use low-contrast pale pink for instructions.
 
 ### Hairlines & Borders
-- **Divider Soft** (`{colors.divider-soft}` — #f0f0f0): The "border" tone on secondary buttons — functions as a ring shadow rather than a hard line. In production, often applied as `rgba(0, 0, 0, 0.04)`.
-- **Hairline** (`{colors.hairline}` — #e0e0e0): The 1px hairline border on store utility cards and configurator chips.
+- **Divider Soft** (`{colors.divider-soft}` — #F4E8EE): Quiet separators and capsule borders, not shadows.
+- **Hairline** (`{colors.hairline}` — #E8D7DF): Subtle 1px container borders. Use Action Rose or Focus Rose when a boundary must identify an interactive control or selection.
+
+### Semantic States
+Rose is the only brand accent, not a replacement for error or danger semantics. Preserve distinct destructive-action and error styling, pair state colors with text or icons, and keep recovery conditions beside the affected action. The theme must not make a recycle confirmation look like an ordinary selection.
 
 ### Brand Gradient
-**No decorative gradients.** Atmospheric depth on product photography (the iPhone 17 Pro camera plate, the Apple Watch bands, AirPods reflections) is inherent to the imagery, not a CSS gradient overlay. The environment page's hero uses photographic atmosphere (mountain vista at dawn) but no gradient tokens are defined. Apple is the rare luxury-brand site with zero gradient-based design tokens.
+**No decorative gradients.** The collection supplies the imagery; pale pink surfaces and restrained frosted toolbars supply the atmosphere. Do not add a rose color wash, tint, or filter over thumbnails, originals, or comparison images.
 
 ## Typography
 
@@ -386,7 +396,7 @@ SF Pro is Apple's proprietary system font. When building off-system:
 - **Gutters:** 20–24px between cards in a utility grid.
 
 ### Whitespace Philosophy
-Apple's whitespace is the product's pedestal. Every tile begins with at least 64px of air above its headline and 48–64px below. Product renders are never crowded; the nearest content to a product image is at least 40px away. The footer is the only area that breaks this — there, Apple goes deliberately dense to make the full information architecture visible at a glance.
+Whitespace separates actions from the collection without wasting the browsing area. The original large-tile spacing is reserved for an intentional introductory surface; task lists and image walls use compact spacing. Keep controls away from the review image, but preserve dense thumbnail browsing where it helps selection. Do not add empty hero sections to express the pink theme.
 
 ## Elevation & Depth
 
@@ -394,14 +404,14 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 |---|---|---|
 | Flat | No shadow, no border | Full-bleed tiles, global nav, footer, body sections |
 | Soft hairline | 1px `rgba(0, 0, 0, 0.08)` border | Utility cards, sub-nav frosted-glass separator |
-| Backdrop blur | `backdrop-filter: blur(N)` on Parchment 80% | Sub-nav and the iPhone buy floating sticky bar |
+| Backdrop blur | `backdrop-filter: blur(N)` on Cherry Pink Canvas at 80% | Sub-nav and selection/action bars |
 | Product shadow | `rgba(0, 0, 0, 0.22) 3px 5px 30px 0` | Product renders resting on a surface (the only true "shadow" in the system) |
 
 **Shadow philosophy.** Apple uses **exactly one** drop-shadow, and it is applied to photographic product imagery — never to cards, never to buttons, never to text. Elevation in the UI comes from (a) surface-color change (light tile ↔ dark tile) and (b) backdrop-blur on sticky bars. The single shadow is about giving the product weight, not about UI hierarchy.
 
 ### Decorative Depth
-- **Atmospheric imagery** on the environment page (photographic vista) supplies mood; no CSS gradient involved.
-- **Edge-to-edge tile alternation** creates rhythm without borders or shadows — the color change itself is the divider.
+- **Collection imagery** supplies the visual subject; no decorative image or CSS gradient is needed.
+- **Near-white panels on pale pink canvas** separate functional regions without heavy borders or shadows. Dark media regions are optional, not a required alternating rhythm.
 - **Backdrop-filter blur** on `{component.sub-nav-frosted}` and `{component.floating-sticky-bar}` creates a "floating over content" effect that's functional, not decorative.
 
 ## Shapes
@@ -415,7 +425,7 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 | `{rounded.sm}` | 8px | Dark utility buttons (Sign In, Bag), inline card imagery |
 | `{rounded.md}` | 11px | White Pearl Button capsules |
 | `{rounded.lg}` | 18px | Store utility cards, accessories grid cards |
-| `{rounded.pill}` | 9999px | Primary blue pill CTAs, sub-nav buy button, configurator option chips, search input — the signature Apple pill |
+| `{rounded.pill}` | 9999px | Primary rose CTAs, selection chips, search input, and sticky-bar actions |
 | `{rounded.full}` | 9999px / 50% | Circular control chips floating over photography |
 
 ### Photography Geometry
@@ -429,51 +439,51 @@ Apple's whitespace is the product's pedestal. Every tile begins with at least 64
 
 ### Top Navigation
 
-**`global-nav`** — Persistent, ultra-thin black nav bar pinned to the top of every page. Background `{colors.surface-black}`, height 44px, text `{colors.on-dark}` in `{typography.nav-link}` (12px / 400 / -0.12px tracking). Links are quiet, spaced ~20px apart, running edge-to-edge across the top. Right-aligned cluster: Search, Bag icons — always visible. On mobile, collapses to hamburger at ~834px and the Apple logo centers.
+**`global-nav`** — Compact navigation on `{colors.canvas-parchment}` with `{colors.ink}` text, 44px high. Active destinations use Action Rose and a non-color state cue. Keep the 拾存 brand and existing functional destinations; on mobile, show a clear menu rather than compressing all destinations into tiny labels. Do not restore the source reference's black navigation bar as the default theme.
 
-**`sub-nav-frosted`** — Surface-specific nav that sticks below the global nav. Background `{colors.canvas-parchment}` at 80% opacity with backdrop-filter blur, creating a frosted-glass effect. Height 52px. Content on left: product category name ("iPhone", "Store", "Accessories") in `{typography.tagline}` (21px / 600). Content right: inline nav links in `{typography.button-utility}` (14px), ending in a persistent `{component.button-primary}` ("Buy") or a utility link.
+**`sub-nav-frosted`** — Page context and tools beneath global navigation. Background `{colors.canvas-parchment}` at 80% opacity with functional backdrop blur, height 52px. Left: the current page name in `{typography.tagline}` (21px / 600). Right: related controls in `{typography.button-utility}` (14px) and one clear primary action. Ensure the translucent surface still makes text readable over arbitrary collection imagery.
 
 ### Buttons
 
-**`button-primary`** — The signature Apple action. Background `{colors.primary}` (Action Blue #0066cc), text `{colors.on-primary}` in `{typography.body}` (SF Pro Text 17px / 400), rounded `{rounded.pill}` (full pill — capsule-shaped), padding 11px × 22px. The full-pill radius IS the brand action signal.
+**`button-primary`** — Main workbench action. Background `{colors.primary}` (Action Rose #A83D68), text `{colors.on-primary}` in `{typography.body}` (SF Pro Text 17px / 400), rounded `{rounded.pill}`, padding 11px × 22px. Use a plain action label such as "保存设置" or "上传所选", not mood-setting copy.
 - Active state: `{component.button-primary-active}` — `transform: scale(0.95)` (the system-wide micro-interaction).
 - Focus state: `{component.button-primary-focus}` — 2px solid `{colors.primary-focus}` outline.
 
-**`button-secondary-pill`** — Used as the second CTA when two blue pills appear together ("Learn more" / "Buy"). Background transparent, text `{colors.primary}`, 1px solid `{colors.primary}` border, rounded `{rounded.pill}`, padding 11px × 22px. Reads as a "ghost pill."
+**`button-secondary-pill`** — Secondary action beside a primary action. Background `{colors.canvas}` or transparent, text `{colors.primary}`, 1px solid `{colors.primary}` border, rounded `{rounded.pill}`, padding 11px × 22px. Keep the main action visually dominant.
 
-**`button-dark-utility`** — Global nav actions (Sign In, Bag, language selector). Background `{colors.ink}` (#1d1d1f), text `{colors.on-dark}` in `{typography.button-utility}` (14px / 400 / -0.224px tracking), rounded `{rounded.sm}` (8px), padding 8px × 15px. Active state shrinks via `transform: scale(0.95)`.
+**`button-dark-utility`** — Compact utility action where a dark fill is useful. Background `{colors.ink}` (#35232D), text `{colors.on-dark}` in `{typography.button-utility}` (14px / 400 / -0.224px tracking), rounded `{rounded.sm}` (8px), padding 8px × 15px. Active state shrinks via `transform: scale(0.95)`.
 
-**`button-pearl-capsule`** — Product-card secondary button. Background `{colors.surface-pearl}` (#fafafc), text `{colors.ink-muted-80}` in `{typography.caption}` (14px), 3px solid `{colors.divider-soft}` border (functions as a soft ring rather than a visible line), rounded `{rounded.md}` (11px), padding 8px × 14px.
+**`button-pearl-capsule`** — Quiet utility button. Background `{colors.surface-pearl}` (#FFFFFF), text `{colors.ink-muted-80}` in `{typography.caption}` (14px), 3px solid `{colors.divider-soft}` border, rounded `{rounded.md}` (11px), padding 8px × 14px. The soft border is not a shadow.
 
-**`button-store-hero`** — A larger primary CTA used on store hero surfaces. Same Action Blue + Paper White as `{component.button-primary}`, but with `{typography.button-large}` (18px / 300 — note the rare weight 300) and slightly more padding (14px × 28px). Used sparingly on the store landing.
+**`button-store-hero`** — Larger primary-action variant for a standalone entry or connection screen. Same Action Rose and white text as `{component.button-primary}`, but with `{typography.button-large}` (18px / 300) and padding 14px × 28px. Do not use it throughout task toolbars.
 
-**`button-icon-circular`** — Floats over photography. 44 × 44px, background `{colors.surface-chip-translucent}` at ~64% alpha, icon in `{colors.ink}`, rounded `{rounded.full}`. Used for carousel controls, close buttons, and in-image controls (product image thumbnails on the iPhone buy page).
+**`button-icon-circular`** — Floats over imagery. 44 × 44px, background `{colors.surface-chip-translucent}` with sufficient opacity for icon contrast, icon in `{colors.ink}`, rounded `{rounded.full}`. Use for review navigation, close buttons, and in-image controls; do not tint the image beneath it.
 
-**`text-link`** — Inline body links in `{colors.primary}` (Action Blue). Underlined or non-underlined per context.
+**`text-link`** — Inline body links in `{colors.primary}` (Action Rose). Underlined or non-underlined per context.
 
-**`text-link-on-dark`** — Inline body links on dark tiles in `{colors.primary-on-dark}` (Sky Link Blue #2997ff) — Action Blue would disappear against `{colors.surface-tile-1}`.
+**`text-link-on-dark`** — Inline links on dark media surfaces in `{colors.primary-on-dark}` (Rose Link On Dark #F2AFC9). Use the lighter rose for contrast; Action Rose is reserved for light-surface links and filled actions.
 
 ### Cards & Containers
 
-**`product-tile-light`** — Full-bleed light tile. Background `{colors.canvas}` (white), text `{colors.ink}`, rounded `{rounded.none}` (0 — tiles touch edges), vertical padding `{spacing.section}` (80px). Centered stack: product name in `{typography.display-lg}` (40px / 600) → one-line tagline in `{typography.lead}` (28px / 400) → two `{component.button-primary}` CTAs ("Learn more" / "Buy") → product render resting on the surface with the system shadow.
+**`product-tile-light`** — Optional full-bleed introductory surface. Background `{colors.canvas}` (Gallery White), text `{colors.ink}`, rounded `{rounded.none}`, vertical padding `{spacing.section}` (80px). Reserve the large centered composition for an entry screen; it is not the template for image walls or task pages.
 
-**`product-tile-parchment`** — Same as `{component.product-tile-light}` but on `{colors.canvas-parchment}` (#f5f5f7). Used to break two consecutive white tiles.
+**`product-tile-parchment`** — Same optional large surface on `{colors.canvas-parchment}` (#FFF5F8). Do not add extra sections merely to alternate background colors.
 
-**`product-tile-dark`** — Full-bleed dark tile. Background `{colors.surface-tile-1}` (#272729), text `{colors.on-dark}`, rounded `{rounded.none}`, vertical padding `{spacing.section}` (80px). Same content stack as the light tile but with `{component.text-link-on-dark}` for inline copy and `{component.button-primary}` (Action Blue still works on the dark surface). Used on the homepage product grid as the alternating dark band.
+**`product-tile-dark`** — Optional media-viewing surface. Background `{colors.surface-tile-1}` (#272729), text `{colors.on-dark}`, with `{component.text-link-on-dark}` for links. Keep the image dominant; do not require dark bands on every page. Large introductory compositions may use `{spacing.section}` padding, while image review uses the available viewport.
 
 **`product-tile-dark-2`** — Variant on `{colors.surface-tile-2}` (#2a2a2c). Used where a dark tile sits directly above or below `{component.product-tile-dark}` to create the faintest separation through micro-step lightness change.
 
 **`product-tile-dark-3`** — Variant on `{colors.surface-tile-3}` (#252527). Used at the bottom of the stack and in embedded video/player frames.
 
-**`store-utility-card`** — Used in store grid and accessories grid. Background `{colors.canvas}` (white), 1px solid `{colors.hairline}` border, rounded `{rounded.lg}` (18px), padding `{spacing.lg}` (24px). Top: product image (1:1 crop with `{rounded.sm}` (8px) inner image radius). Below: product name in `{typography.body-strong}` (17px / 600), price in `{typography.body}` (17px / 400), and a `{component.text-link}` ("Buy" or "Learn more"). No shadow by default; product render itself carries the system product-shadow.
+**`store-utility-card`** — Utility container or album card. Background `{colors.canvas}` (Gallery White), 1px solid `{colors.hairline}` border, rounded `{rounded.lg}` (18px), padding `{spacing.lg}` (24px). Use a clear name and relevant metadata, with secondary actions in Action Rose. No shadow; dense image walls do not need a separate card around every thumbnail.
 
-**`configurator-option-chip`** — Pill-shaped tappable cell used in the iPhone 17 Pro buy page. Background `{colors.canvas}`, text `{colors.ink}` in `{typography.caption}`, rounded `{rounded.pill}`, padding 12px × 16px. Contains a small product thumbnail + label + price delta. Arranged in a grid of 4–5 options per row.
+**`configurator-option-chip`** — Pill-shaped filter or option. Background `{colors.canvas}`, text `{colors.ink}` in `{typography.caption}`, rounded `{rounded.pill}`, padding 12px × 16px. Keep labels concise and related options together.
 
-**`configurator-option-chip-selected`** — Selected state. Border upgrades to 2px solid `{colors.primary-focus}`. Same shape, same content.
+**`configurator-option-chip-selected`** — Selected state. Background `{colors.selection}`, border 2px solid `{colors.primary-focus}`; retain the label and expose selected state semantically. Use a checkmark or another visible cue where selection would otherwise depend only on pink fill.
 
-**`environment-quote-card`** — A photographic-canvas hero specific to the environment page. Dark photographic backdrop (mountain vista at dawn) with `{colors.surface-tile-1}` as the fallback color, centered white-text headline in `{typography.display-lg}` (40px), small green "Apple 2030" pictographic logo above the headline, single `{component.button-primary}` below. Padding `{spacing.section}` (80px).
+**`environment-quote-card`** — Reference-only large image-backed composition. It is not needed in the regular workbench; do not introduce decorative scenery, logos, or promotional sections to create atmosphere.
 
-**`floating-sticky-bar`** — Floats at the bottom of the viewport on the iPhone 17 Pro buy page during scroll. Background `{colors.canvas-parchment}` at 80% opacity with `backdrop-filter: blur(N)`, height 64px, padding 12px × 32px. Left: running price total in `{typography.body}`. Right: `{component.button-primary}` ("Add to Bag").
+**`floating-sticky-bar`** — Selection/action bar near the viewport bottom. Background `{colors.canvas-parchment}` at 80% opacity with functional backdrop blur, minimum height 64px, padding 12px × 32px. Left: selection count or processing status. Right: the relevant action; preserve distinct danger styling for destructive confirmation and reserve space for the bottom safe area.
 
 ### Inputs & Forms
 
@@ -483,29 +493,30 @@ Error and validation states were not surfaced in the analyzed pages.
 
 ### Footer
 
-**`footer`** — Background `{colors.canvas-parchment}` (#f5f5f7), text `{colors.ink-muted-80}`. Link columns in `{typography.dense-link}` (17px / 400 / 2.41 line-height — the relaxed leading is what makes the dense columns scannable). Column headings in `{typography.caption-strong}` (14px / 600). Legal row at the very bottom in `{typography.fine-print}` (12px / 400) with `{colors.ink-muted-48}` text. Vertical padding 64px.
+**`footer`** — When needed, background `{colors.canvas-parchment}` (#FFF5F8), text `{colors.ink-muted-80}`. Supporting links use `{typography.caption}` (14px), fine print uses `{typography.fine-print}` (12px). Keep it compact on functional pages rather than adding the source reference's large shopping footer.
 
 ## Do's and Don'ts
 
 ### Do
-- Use `{colors.primary}` (Action Blue #0066cc) for every interactive element — links, pill CTAs, focus signals — and nothing else. The single accent is non-negotiable.
+- Use Action Rose `{colors.primary}` (#A83D68) for brand actions and light-surface links, Focus Rose for keyboard outlines, and `{colors.selection}` for selection fills.
 - Set headlines in `{typography.hero-display}` or `{typography.display-lg}` with negative letter-spacing (`-0.28 → -0.374px`) to get the signature "Apple tight" cadence.
 - Run body copy at `{typography.body}` (17px / 400 / 1.47 / -0.374px) — not 16px. The extra pixel defines the brand's reading pace.
-- Alternate `{component.product-tile-light}` (or parchment) and `{component.product-tile-dark}` for full-bleed section rhythm. The color change IS the divider.
-- Reserve `{rounded.pill}` for the primary blue CTA and any other element that should read as an "action" (configurator chips, search input, sticky bar CTA).
+- Use near-white panels on pale pink canvas to establish hierarchy; reserve neutral dark surfaces for media where useful.
+- Reserve `{rounded.pill}` for the primary rose CTA and related action shapes (filter chips, search input, sticky-bar CTA).
 - Apply the single product-shadow (`rgba(0, 0, 0, 0.22) 3px 5px 30px`) only to product renders resting on a surface — never on cards, buttons, or text.
 - Use `transform: scale(0.95)` as the active/press state on every button — it's the system-wide micro-interaction.
-- Keep the global nav `{colors.surface-black}` (true black) — it's the only place pure black appears on most pages.
+- Keep default navigation pale pink with readable plum-gray text and rose active states.
+- Keep labels literal and operational: "上传", "回收", "还原", "保存设置". Mature atmosphere belongs in the visual treatment, not in ambiguous action wording.
 
 ### Don't
-- Don't introduce a second accent color; every "click me" signal is `{colors.primary}` (Action Blue).
+- Don't reintroduce blue or another brand accent alongside rose; retain distinct semantic colors for errors and destructive operations.
 - Don't add shadows to cards, buttons, or text — shadow is reserved for product imagery.
-- Don't use gradients as decorative backgrounds; atmosphere comes from photography.
+- Don't use gradients, lace frames, repeated hearts, decorative illustrations, or image tints to amplify the theme; pale pink surfaces and the collection carry the atmosphere.
 - Don't set body copy at weight 500 — Apple's ladder is 300 / 400 / 600 / 700, with 500 deliberately absent. Body is always 400; strong inline is 600; display is 600.
 - Don't round full-bleed tiles — tiles are rectangular and edge-to-edge; the color change is the divider.
 - Don't tighten line-height below 1.47 for body copy — the editorial leading is part of the brand.
 - Don't mix radii grammars — use `{rounded.sm}` for compact utility, `{rounded.lg}` for utility cards, `{rounded.pill}` for pills, and nothing in between (except the rare `{rounded.md}` Pearl Button).
-- Don't use `{colors.primary-on-dark}` (Sky Link Blue) on light surfaces — it's the dark-tile-only variant. Action Blue is for light surfaces.
+- Don't use `{colors.primary-on-dark}` (Rose Link On Dark) as text on light surfaces, or pale selection pink behind white button labels. Use Action Rose on light surfaces.
 
 ## Responsive Behavior
 
@@ -530,7 +541,7 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 - Global nav utility links are smaller (~32 × 80px) — they deliberately sit at a tighter target because they're precision desktop actions, and the mobile hamburger replaces them at ≤ 833px.
 
 ### Collapsing Strategy
-- **Global nav**: full horizontal link row on desktop → collapses to Apple logo + hamburger + bag icon at 834px and below.
+- **Global nav**: full functional navigation on desktop → 拾存 brand, clear menu control, and account action at 833px and below.
 - **Sub-nav**: category name + inline links + primary CTA → category name + primary CTA only at mobile; inline links move into a hamburger tray.
 - **Product tiles**: stack from 2-column to 1-column at 834px; vertical padding tightens from 80px → 48px at small-phone.
 - **Utility grids** (store, accessories): 5-col → 4-col (1440px) → 3-col (1068px) → 2-col (834px) → 1-col (640px).
@@ -550,13 +561,13 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 4. Never document hover. Default and Active/Pressed states only.
 5. Display headlines stay SF Pro Display 600 with negative letter-spacing. Body stays SF Pro Text 400 at 17px. The boundary is unbreakable.
 6. The single drop-shadow (`rgba(0, 0, 0, 0.22) 3px 5px 30px`) is reserved for product photography only.
-7. When in doubt about emphasis: alternate surface (light → dark tile) before adding chrome.
+7. When in doubt about emphasis: use spacing, near-white versus pale pink surfaces, and one clear action before adding chrome. Keep image colors unchanged.
 
 ## Known Gaps
 
 - Form validation and error states were not surfaced on the analyzed pages; only the neutral search input is documented.
 - The homepage's embedded video/player frame uses `{colors.surface-black}`; interior player controls are not documented (they're a platform widget, not a web-design token).
 - Some component imagery is dynamic (rotating product hero) and its specific copy varies per surface — component specs name the structure, not the rotating content.
-- Dark-mode counterparts for store and accessories utility cards were not surfaced on the analyzed pages; the system documented is the daytime/light-dominant variant Apple ships by default.
+- A complete dark-mode workbench is not specified. The default is the pale pink light theme; neutral dark media surfaces do not imply a second app theme.
 - Atmospheric photography (environment page mountain vista) is a content asset, not a design token; the documented `{component.environment-quote-card}` describes the structural surface only.
 - The exact backdrop-filter blur radius on `{component.sub-nav-frosted}` and `{component.floating-sticky-bar}` is platform-dependent; production CSS uses `saturate(180%) blur(20px)` as a typical baseline but the value isn't formalized as a token.

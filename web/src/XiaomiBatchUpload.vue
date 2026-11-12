@@ -239,10 +239,12 @@ onUnmounted(() => { disposed = true; jobRead++; clearTimeout(timer) })
 </script>
 
 <template>
-  <button class="primary" :disabled="disabled || model.busy" @click="open">从本地目录上传</button>
-  <button v-if="model.history.length" class="secondary whitespace-nowrap" :disabled="disabled || model.busy" @click="open">上传记录<template v-if="pendingBatches"> · {{ pendingBatches }} 批待清理</template></button>
-  <dialog ref="dialog" class="task-dialog batch-dialog">
-    <div class="section-heading"><h2>{{ model.job?.mode === 'recover' && !model.selecting ? '找回上传记录' : '批量上传' }}{{ albumName ? ` · ${albumName}` : '' }}</h2><button class="icon-button" aria-label="关闭批量上传" :disabled="model.busy" @click="dialog?.close()"><Icon name="close" /></button></div>
+  <slot name="trigger" :open="open" :disabled="disabled || model.busy" :history-count="model.history.length" :pending-batches="pendingBatches">
+    <button class="primary" :disabled="disabled || model.busy" @click="open">从本地目录上传</button>
+    <button v-if="model.history.length" class="secondary whitespace-nowrap" :disabled="disabled || model.busy" @click="open">上传记录<template v-if="pendingBatches"> · {{ pendingBatches }} 批待清理</template></button>
+  </slot>
+  <dialog ref="dialog" class="task-dialog batch-dialog" aria-labelledby="batch-upload-title">
+    <div class="section-heading"><h2 id="batch-upload-title">{{ model.job?.mode === 'recover' && !model.selecting ? '找回上传记录' : '批量上传' }}{{ albumName ? ` · ${albumName}` : '' }}</h2><button class="icon-button" aria-label="关闭批量上传" :disabled="model.busy" @click="dialog?.close()"><Icon name="close" /></button></div>
     <p v-if="model.error" class="notice error" role="alert">{{ model.error }}<button class="text-button" :disabled="model.busy" @click="run(loadDialog)">刷新</button></p>
     <div class="batch-history">
       <select v-if="model.history.length" :value="model.jobId" aria-label="上传批次记录" :disabled="model.busy || working" @change="historyChange">
@@ -258,7 +260,7 @@ onUnmounted(() => { disposed = true; jobRead++; clearTimeout(timer) })
     <template v-if="model.selecting">
       <div class="section-heading batch-tools"><button class="secondary" :disabled="model.busy || !unuploaded.length" @click="selectAll">{{ allSelected ? '取消全选' : '全选未上传' }}</button><span class="muted">已选 {{ model.selected.size }} / {{ model.files.length }} 个 · 已上传 {{ model.files.length - unuploaded.length }} 个</span></div>
       <ul v-if="filesOnPage.length" class="batch-list">
-        <li v-for="item in filesOnPage" :key="item.name"><label><input type="checkbox" :checked="model.selected.has(item.name)" :disabled="model.busy" @change="select(item.name, $event)" /><Icon :name="item.kind === 'video' ? 'video' : 'photo'" :size="17" /><span>{{ item.name }}<small v-if="item.uploaded" class="ml-2 text-blue">已上传</small></span><small class="muted">{{ bytes(item.size) }}</small></label></li>
+        <li v-for="item in filesOnPage" :key="item.name"><label><input type="checkbox" :checked="model.selected.has(item.name)" :disabled="model.busy" @change="select(item.name, $event)" /><Icon :name="item.kind === 'video' ? 'video' : 'photo'" :size="17" /><span>{{ item.name }}<small v-if="item.uploaded" class="ml-2 text-primary">已上传</small></span><small class="muted">{{ bytes(item.size) }}</small></label></li>
       </ul>
       <p v-else-if="!model.error" class="empty-list">{{ model.busy ? '正在读取下载目录…' : '下载根目录没有符合上传大小限制的图片或视频。' }}</p>
       <p v-if="album === '1000'" class="muted">隐私相册请在小米云网页版上传。</p>

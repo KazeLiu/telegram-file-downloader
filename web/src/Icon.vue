@@ -14,6 +14,7 @@ const paths: Record<string, string> = {
   photo: 'M3 3h18v18H3z M3 17l6-6 4 4 3-3 5 5 M15 7h.01',
   check: 'M5 12l4 4L19 6',
   close: 'M6 6l12 12 M6 18L18 6',
+  menu: 'M4 6h16 M4 12h16 M4 18h16',
   lock: 'M6 10h12v11H6z M8 10V6a4 4 0 0 1 8 0v4',
   telegram: 'M21 3L3 10l7 3 3 7 8-17 M10 13L21 3',
   pause: 'M8 5v14 M16 5v14',

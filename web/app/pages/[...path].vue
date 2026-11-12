@@ -16,11 +16,12 @@ import LogsPanel from '../../src/LogsPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
-const appModel = reactive({ booting: true, get page() { return route.path.split('/')[1] || 'overview' }, status: null as Status | null,
+const appModel = reactive({ booting: true, menuOpen: false, get page() { return route.path.split('/')[1] || 'overview' }, status: null as Status | null,
   settings: null as Settings | null, error: '', toast: '', busy: false, refreshing: false, workflowTask: null as number | null })
 const authModel = reactive({ initialized: false, authenticated: false, password: '', confirm: '', busy: false, error: '' })
 const historyModel = reactive({ items: [] as Task[], total: 0, page: 1, status: '', search: '', appliedSearch: '', selected: null as Task | null, busy: false })
 const dialog = ref<HTMLDialogElement>()
+const settingsPanel = ref<InstanceType<typeof SettingsPanel>>()
 const lastLocalRecycle = ref<string[]>([])
 const archiveDialog = ref<HTMLDialogElement>()
 const archiveConfirm = reactive({ action: 'extract_only' as 'extract_only' | 'mark_manual_extracted', taskId: 0,
@@ -34,6 +35,8 @@ const completed = computed(() => (appModel.status?.counts.completed || 0) + (app
 const phase = computed(() => appModel.status?.pending ? '正在应用设置' : appModel.status?.phase === 'watching' && !running.value ? '正在连接' : phaseLabels[appModel.status?.phase || 'unconfigured'])
 const recent = computed(() => historyModel.items.slice(0, 5))
 const workflowTask = computed(() => appModel.status?.active_tasks.find(t => t.id === appModel.workflowTask) || appModel.status?.active)
+const configured = computed(() => !!appModel.status?.account && !!appModel.settings?.chat)
+watch(() => route.fullPath, () => { appModel.menuOpen = false })
 
 function message(value: string) {
   appModel.toast = value; clearTimeout(toastTimer)
@@ -79,6 +82,7 @@ async function toggleWatcher() {
   finally { appModel.busy = false }
 }
 async function logout() {
+  if (settingsPanel.value && !settingsPanel.value.confirmLeave()) return
   try { await api('/auth/logout', {}); authModel.authenticated = false; lastLocalRecycle.value = []; appModel.status = null; appModel.settings = null; historyModel.items = []; archiveDialog.value?.close(); dialog.value?.close() }
   catch (error) { appModel.error = (error as Error).message }
 }
@@ -130,7 +134,9 @@ async function retryExtraction() {
   finally { historyModel.busy = false }
 }
 function navigate(page: string) {
-  void router.push(page === 'overview' ? '/' : `/${page}`)
+  const path = page === 'overview' ? '/' : `/${page}`
+  if (route.path === path) appModel.menuOpen = false
+  void router.push(path)
 }
 let routeRevision = 0
 watch(() => [appModel.page, appModel.page === 'history' ? route.fullPath : '', authModel.authenticated, appModel.booting], async () => {
@@ -168,16 +174,18 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
   <div v-else-if="!authModel.authenticated" class="auth-page">
     <div class="auth-brand"><span class="brand-symbol"><Icon name="inbox" :size="25" /></span><strong>拾存</strong></div>
     <main class="auth-main"><div class="auth-story" aria-hidden="true"><div class="archive-art"><div class="art-file back"><Icon name="video" :size="36" /></div><div class="art-file front"><Icon name="archive" :size="42" /></div><div class="art-tray"><Icon name="check" :size="24" /></div></div><p>Telegram<br />资源工作台</p></div>
-      <section class="auth-form"><Icon name="lock" :size="24" class="text-blue" /><h1>{{ authModel.initialized ? '登录工作台' : '设置管理密码' }}</h1>
+      <section class="auth-form"><Icon name="lock" :size="24" class="text-primary" /><h1>{{ authModel.initialized ? '登录工作台' : '设置管理密码' }}</h1>
         <form @submit.prevent="authenticate"><label>管理密码<input v-model="authModel.password" type="password" :autocomplete="authModel.initialized ? 'current-password' : 'new-password'" :minlength="authModel.initialized ? 1 : 10" maxlength="256" required :placeholder="authModel.initialized ? '输入管理密码' : '至少 10 个字符'" /></label><label v-if="!authModel.initialized">确认密码<input v-model="authModel.confirm" type="password" autocomplete="new-password" minlength="10" maxlength="256" required placeholder="再输入一次" /></label><p v-if="authModel.error" class="form-error" role="alert">{{ authModel.error }}</p><button class="primary" :disabled="authModel.busy">{{ authModel.busy ? '请稍候…' : authModel.initialized ? '进入工作台' : '创建工作台' }}<Icon name="arrow" :size="18" /></button></form>
       </section>
     </main>
   </div>
   <div v-else class="app-shell">
-    <aside class="sidebar"><a href="#" class="brand" aria-label="拾存工作流" @click.prevent="navigate('overview')"><span class="brand-symbol"><Icon name="inbox" :size="25" /></span><span><strong>拾存</strong></span></a>
-      <nav class="main-nav" aria-label="主导航"><button v-for="item in navigation" :key="item.id" :class="{ selected: appModel.page === item.id }" :aria-label="item.title" :title="item.title" :aria-current="appModel.page === item.id ? 'page' : undefined" @click="navigate(item.id)"><Icon :name="item.icon" /><span>{{ item.title }}</span><span v-if="item.id === 'history' && completed" class="nav-count">{{ completed }}</span></button></nav>
-      <div class="sidebar-bottom"><div v-if="appModel.status?.download_dir" class="storage-label" :title="appModel.status.download_dir"><Icon name="folder" :size="16" /><span class="truncate">{{ appModel.status.download_dir }}</span></div><button class="account-menu" aria-label="退出管理页面" @click="logout"><Icon name="logout" :size="18" /><span>退出工作台</span></button></div>
-    </aside>
+    <header class="global-header" @keydown.esc="appModel.menuOpen = false"><div class="global-nav">
+      <button class="mobile-menu-toggle" :aria-expanded="appModel.menuOpen" aria-controls="main-navigation" :aria-label="appModel.menuOpen ? '关闭菜单' : '打开菜单'" @click="appModel.menuOpen = !appModel.menuOpen"><Icon :name="appModel.menuOpen ? 'close' : 'menu'" /></button>
+      <a href="#/" class="brand" aria-label="拾存工作流" @click.prevent="navigate('overview')"><span class="brand-symbol"><Icon name="inbox" :size="20" /></span><strong>拾存</strong></a>
+      <nav id="main-navigation" class="main-nav" :class="{ open: appModel.menuOpen }" aria-label="主导航"><button v-for="item in navigation" :key="item.id" :class="{ selected: appModel.page === item.id }" :aria-current="appModel.page === item.id ? 'page' : undefined" @click="navigate(item.id)"><Icon :name="item.icon" /><span>{{ item.title }}</span><span v-if="item.id === 'history' && completed" class="nav-count">{{ completed }}</span></button></nav>
+      <button class="account-menu" aria-label="退出工作台" title="退出工作台" @click="logout"><Icon name="logout" :size="18" /></button>
+    </div></header>
     <div class="min-w-0">
       <main class="page-content" :class="{ 'image-page': ['images', 'xiaomi', 'dedup'].includes(appModel.page) }">
         <header class="page-heading"><h1>{{ title }}</h1><div v-if="appModel.page === 'overview'" class="flex flex-wrap items-center justify-end gap-2 sm:gap-4"><span class="connection"><span class="status-dot" :class="{ online: running }"></span>{{ phase }}</span><button v-if="appModel.status?.account && appModel.settings?.chat" :class="appModel.settings.enabled ? 'secondary' : 'primary'" :disabled="appModel.busy || appModel.status.pending" @click="toggleWatcher"><Icon :name="appModel.settings.enabled ? 'pause' : 'play'" :size="17" />{{ appModel.settings.enabled ? '暂停收集' : '开始收集' }}</button></div></header>
@@ -187,13 +195,14 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
         <ImageDedupPanel v-else-if="appModel.page === 'dedup'" @message="message" />
         <template v-else-if="appModel.settings && appModel.status">
           <template v-if="appModel.page === 'overview'">
-            <WorkflowSteps :task="workflowTask" :settings="appModel.settings" />
+            <section v-if="!configured" class="welcome-panel"><span class="welcome-icon"><Icon name="inbox" :size="28" /></span><div class="grow"><h2>{{ !appModel.status.account ? '尚未连接 Telegram' : '尚未选择收集群' }}</h2><p v-if="!appModel.status.account" class="muted mt-1">首次连接只收集新消息。</p></div><button class="primary" @click="navigate('settings')">{{ !appModel.status.account ? '连接 Telegram' : '选择收集群' }}</button></section>
+            <WorkflowSteps v-if="configured" :task="workflowTask" :settings="appModel.settings" />
+            <details v-else class="workflow-disclosure"><summary>查看处理步骤</summary><WorkflowSteps :task="workflowTask" :settings="appModel.settings" /></details>
             <section v-if="appModel.status.active_tasks.length || (appModel.status.account && appModel.settings.chat)" class="queue-panel"><div class="section-heading"><h2>下载队列<span v-if="appModel.status.queue_paused" class="badge ml-2">已暂停</span></h2><button class="secondary" :disabled="appModel.busy" @click="toggleQueue"><Icon :name="appModel.status.queue_paused ? 'play' : 'pause'" :size="16" />{{ appModel.status.queue_paused ? '继续下载' : '暂停下载' }}</button></div>
               <div v-for="task in appModel.status.active_tasks.slice(0, 10)" :key="task.id" class="queue-item" :class="{ focused: workflowTask?.id === task.id }"><div class="queue-file"><button class="queue-filename" @click="appModel.workflowTask = task.id"><Icon :name="task.kind === 'archive' ? 'archive' : 'file'" :size="20" /><strong>{{ task.filename }}</strong></button><span class="badge" :class="task.status">{{ taskLabels[task.status] }}</span></div><progress :value="percent(task)" max="100" :aria-label="task.filename + ' 下载进度'" /><div class="queue-meta"><span>{{ bytes(task.downloaded) }} / {{ bytes(task.size) }}</span><span>{{ bytes(task.speed) }}/s</span><span>{{ task.status === 'waiting' ? duration(waitRemaining(task)) + '后恢复' : task.status === 'downloading' ? '剩余 ' + duration(task.eta) : taskLabels[task.status] }}</span><button class="text-button" @click="openTask(task)">详情</button><TaskActions :task="task" :busy="appModel.busy" @action="taskAction(task, $event)" /></div><p v-if="task.error" class="queue-error">{{ task.error }}</p></div><div v-if="!appModel.status.active_tasks.length" class="empty-list"><Icon name="inbox" :size="28" /><p>等待下一次转发</p></div><button v-if="appModel.status.active_tasks.length > 10" class="text-button" @click="navigate('history')">查看全部任务</button>
             </section>
-            <section v-if="!appModel.status.account || !appModel.settings.chat" class="welcome-panel"><span class="welcome-icon"><Icon name="inbox" :size="28" /></span><div class="grow"><h2>{{ !appModel.status.account ? '尚未连接 Telegram' : '尚未选择收集群' }}</h2><p v-if="!appModel.status.account" class="muted mt-1">首次连接只收集新消息。</p></div><button class="primary" @click="navigate('settings')">{{ !appModel.status.account ? '连接 Telegram' : '选择收集群' }}</button></section>
-            <section class="summary-strip" aria-label="收集统计"><div><span>已收集文件</span><strong>{{ completed }}<small>个</small></strong></div><div><span>累计下载</span><strong>{{ bytes(appModel.status.total_bytes) }}</strong></div><div><span>收集入口</span><strong class="group-title">{{ appModel.settings.chat_title || '尚未选择' }}</strong></div></section>
-            <section class="recent-section"><div class="section-heading"><h2>最近收集</h2><button class="text-button" @click="navigate('history')">全部记录<Icon name="chevron" :size="16" /></button></div><TaskList v-if="recent.length" :tasks="recent" compact @select="openTask" /><div v-else class="empty-list"><Icon name="history" :size="28" /><p>还没有下载记录</p></div></section>
+            <section v-if="configured || completed" class="summary-strip" aria-label="收集统计"><div><span>已收集文件</span><strong>{{ completed }}<small>个</small></strong></div><div><span>累计下载</span><strong>{{ bytes(appModel.status.total_bytes) }}</strong></div><div><span>收集入口</span><strong class="group-title">{{ appModel.settings.chat_title || '尚未选择' }}</strong></div></section>
+            <section v-if="configured || recent.length" class="recent-section"><div class="section-heading"><h2>最近收集</h2><button class="text-button" @click="navigate('history')">全部记录<Icon name="chevron" :size="16" /></button></div><TaskList v-if="recent.length" :tasks="recent" compact @select="openTask" /><div v-else class="empty-list"><Icon name="history" :size="28" /><p>还没有下载记录</p></div></section>
           </template>
           <template v-else-if="appModel.page === 'history'">
             <form class="history-toolbar" @submit.prevent="filterHistory"><div class="search-box"><Icon name="search" :size="18" /><input v-model="historyModel.search" type="search" placeholder="搜索文件名" aria-label="搜索文件名" /><button class="text-button" type="submit">搜索</button></div><select v-model="historyModel.status" aria-label="按处理状态筛选" @change="filterHistory"><option value="">全部状态</option><option v-for="(label, status) in taskLabels" :key="status" :value="status">{{ label }}</option></select><span>{{ historyModel.total }} 条记录</span></form>
@@ -203,13 +212,13 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           <FilesPanel v-else-if="appModel.page === 'files'" @message="message" />
           <ImagesPanel v-else-if="appModel.page === 'images'" :last-local-recycle="lastLocalRecycle" @recycled="lastLocalRecycle = $event" @message="message" />
           <LogsPanel v-else-if="appModel.page === 'logs'" />
-          <SettingsPanel v-else :settings="appModel.settings" :status="appModel.status" @refresh="refresh" @message="message" />
+          <SettingsPanel v-else ref="settingsPanel" :settings="appModel.settings" :status="appModel.status" @refresh="refresh" @message="message" />
         </template>
       </main>
     </div>
-    <dialog ref="dialog" class="task-dialog" @close="closeTask" @click="(event: MouseEvent) => { if (event.target === dialog) dialog?.close() }">
+    <dialog ref="dialog" class="task-dialog" aria-labelledby="task-detail-title" @close="closeTask" @click="(event: MouseEvent) => { if (event.target === dialog) dialog?.close() }">
       <template v-if="historyModel.selected">
-        <div class="section-heading"><h2>文件详情</h2><button class="icon-button" aria-label="关闭详情" @click="dialog?.close()"><Icon name="close" /></button></div>
+        <div class="section-heading"><h2 id="task-detail-title">文件详情</h2><button class="icon-button" aria-label="关闭详情" @click="dialog?.close()"><Icon name="close" /></button></div>
         <div class="detail-title"><span class="file-icon large"><Icon :name="historyModel.selected.kind === 'archive' ? 'archive' : 'file'" :size="30" /></span><div><h3>{{ historyModel.selected.archive_name || historyModel.selected.filename }}</h3><p v-if="(historyModel.selected.group_count || 0) > 1" class="muted">{{ historyModel.selected.group_count }} 个分卷 · {{ bytes(historyModel.selected.group_size) }}</p></div></div>
         <span class="badge" :class="historyModel.selected.display_status || historyModel.selected.status">{{ taskLabels[historyModel.selected.display_status || historyModel.selected.status] }}</span>
         <WorkflowSteps :task="historyModel.selected" :settings="appModel.settings || undefined" />

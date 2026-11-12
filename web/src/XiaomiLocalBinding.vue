@@ -107,7 +107,7 @@ onUnmounted(() => { disposed = true; revision++; clearTimeout(timer) })
 .local-legend { @apply flex flex-wrap gap-3 text-xs text-muted; }
 .local-legend span { @apply inline-flex items-center gap-1.5; }
 .local-color { @apply inline-block h-1.5 w-5 rounded-sm; }
-.same { background: #16a34a; }
-.different { background: #eab308; }
-.missing { background: #dc2626; }
+.same { background: var(--color-success); }
+.different { background: var(--color-warning); }
+.missing { background: var(--color-danger); }
 </style>

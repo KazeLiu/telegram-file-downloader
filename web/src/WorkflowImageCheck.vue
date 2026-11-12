@@ -106,7 +106,7 @@ onUnmounted(() => { disposed = true; revision++; clearTimeout(timer); reads.abor
 .source-heading { @apply mt-3 flex items-center justify-between gap-3 border-t border-solid border-hairline pt-2; border-width: 1px 0 0; }
 .automatic-sources { @apply max-h-80 overflow-y-auto; }
 .automatic-source { @apply min-h-16 flex-row items-center gap-3 border-b border-solid border-soft py-3; border-width: 0 0 1px; }
-.automatic-source input[type=checkbox] { @apply size-5 appearance-auto rounded-sm accent-blue; }
+.automatic-source input[type=checkbox] { @apply size-5 appearance-auto rounded-sm accent-primary; }
 .automatic-source input::after { display: none; }
 .cache-status { @apply mt-3 flex items-center justify-between gap-3; }
 @media (max-width: 600px) {
