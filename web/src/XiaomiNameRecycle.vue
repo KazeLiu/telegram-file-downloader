@@ -115,7 +115,7 @@ function recycle() {
 .name-recycle { width: min(880px, calc(100% - 24px)); }
 .name-preview { @apply grid grid-cols-2 gap-3 sm:grid-cols-4; }
 .name-preview-card { @apply min-w-0 gap-1.5 rounded-lg border border-solid border-hairline p-2; }
-.name-preview-card input[type=checkbox] { @apply size-4 appearance-auto accent-blue; }
+.name-preview-card input[type=checkbox] { @apply size-4 appearance-auto accent-primary; }
 .name-preview-card input::after { display: none; }
 .name-confirm { @apply sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t border-solid border-hairline bg-canvas py-2; border-width: 1px 0 0; }
 </style>

@@ -28,6 +28,8 @@ const cloud = reactive({ account: null as Account | null, albums: [] as Album[],
 const upload = reactive({ file: null as File | null, name: '', error: '' })
 const recycleDialog = ref<InstanceType<typeof XiaomiRecycleDialog>>()
 const uploadDialog = ref<HTMLDialogElement>()
+const uploadMenu = ref<HTMLDetailsElement>()
+function closeUploadMenu() { if (uploadMenu.value) { uploadMenu.value.open = false; uploadMenu.value.querySelector('summary')?.focus() } }
 const fileInput = ref<HTMLInputElement>()
 const albumHeading = ref<HTMLHeadingElement>()
 const timelineWall = ref<InstanceType<typeof XiaomiTimelineWall>>()
@@ -357,9 +359,19 @@ onBeforeUnmount(() => { disposed = true; readController.abort(); clearTimeout(po
             <button class="floating-manage" :class="cloud.organizing ? 'primary' : 'secondary'" :aria-pressed="cloud.organizing" :disabled="!!cloud.busy || !cloud.ready" @click="toggleOrganizing">{{ cloud.organizing ? '完成' : '管理' }}</button>
             <XiaomiNameRecycle :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :album-name="albumName"
               :last-local-recycle="props.lastLocalRecycle" :disabled="!!cloud.busy || cloud.organizing" @confirm="recycleDialog?.open($event)" />
-            <button class="secondary" :disabled="!!cloud.busy || cloud.organizing || !albumName || cloud.album === '1000'" @click="openUpload">从此设备上传</button>
             <XiaomiBatchUpload :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :albums="cloud.albums" :disabled="!!cloud.busy || cloud.organizing || !albumName"
-              @message="emit('message', $event)" @finished="batchFinished" />
+              @message="emit('message', $event)" @finished="batchFinished">
+              <template #trigger="{ open, disabled, historyCount, pendingBatches }">
+                <details ref="uploadMenu" class="upload-menu" @keydown.esc.stop="closeUploadMenu">
+                  <summary class="primary">上传<Icon name="chevron" class="rotate-90" :size="16" /></summary>
+                  <div class="upload-options">
+                    <button :disabled="disabled || cloud.album === '1000'" @click="closeUploadMenu(); openUpload()">从此设备上传</button>
+                    <button :disabled="disabled || cloud.album === '1000'" @click="closeUploadMenu(); open()">从本地目录上传</button>
+                    <button v-if="historyCount" :disabled="disabled" @click="closeUploadMenu(); open()">上传记录<small v-if="pendingBatches">{{ pendingBatches }} 批待清理</small></button>
+                  </div>
+                </details>
+              </template>
+            </XiaomiBatchUpload>
           </div>
         </div>
         <XiaomiLocalBinding :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :items="cloud.items" @status="localStatus" />
@@ -405,8 +417,8 @@ onBeforeUnmount(() => { disposed = true; readController.abort(); clearTimeout(po
       </section>
     </template>
 
-    <dialog ref="uploadDialog" class="task-dialog cloud-upload" @cancel="(event) => { if (cloud.busy) event.preventDefault() }">
-      <h2>上传到「{{ albumName }}」</h2>
+    <dialog ref="uploadDialog" class="task-dialog cloud-upload" aria-labelledby="device-upload-title" @cancel="(event) => { if (cloud.busy) event.preventDefault() }">
+      <h2 id="device-upload-title">上传到「{{ albumName }}」</h2>
       <form class="dialog-form" @submit.prevent="uploadFile">
         <label>选择图片或视频<input ref="fileInput" type="file" accept="image/*,video/*,.heic,.heif,.avci" :disabled="!!cloud.busy" required @change="chooseFile" /></label>
         <label v-if="upload.file">上传文件名<input v-model="upload.name" :disabled="!!cloud.busy" maxlength="255" required /></label>
@@ -427,13 +439,19 @@ onBeforeUnmount(() => { disposed = true; readController.abort(); clearTimeout(po
 .cloud-connect .cloud-actions { @apply mt-4; }
 .cloud-qr { @apply mt-3.5 block h-auto w-[200px] max-w-full; }
 .cloud-account, .cloud-toolbar, .cloud-actions { @apply flex flex-wrap items-center gap-3; }
+.upload-menu { @apply relative; }
+.upload-menu > summary { @apply min-h-11 cursor-pointer list-none; }
+.upload-menu > summary::-webkit-details-marker { display: none; }
+.upload-options { @apply absolute top-full right-0 z-10 mt-2 grid min-w-[220px] gap-1 rounded-panel border border-solid border-hairline bg-canvas p-2; }
+.upload-options > button { @apply flex min-h-11 items-center justify-between gap-3 rounded-lg px-3 text-left text-sm text-supporting; }
+.upload-options small { @apply whitespace-nowrap text-xs text-muted; }
 .cloud-account, .cloud-toolbar { @apply justify-between; }
 .cloud-account { @apply mb-2; }
 .cloud-account > div { @apply flex items-center gap-2.5; }
-.cloud-account svg { @apply text-blue; }
+.cloud-account svg { @apply text-primary; }
 .cloud-albums { @apply grid grid-cols-2 gap-2 min-[760px]:grid-cols-3 xl:grid-cols-5; }
 .cloud-album { @apply flex min-h-16 min-w-0 items-center gap-2 rounded-lg border border-solid border-hairline bg-canvas px-3 py-2 text-left; }
-.album-cover { @apply grid size-9 shrink-0 place-items-center overflow-hidden rounded-lg bg-blue/10 text-blue; }
+.album-cover { @apply grid size-9 shrink-0 place-items-center overflow-hidden rounded-lg bg-primary/10 text-primary; }
 .album-cover img { @apply size-full object-cover; }
 .album-cover.album-private { @apply bg-soft text-muted; }
 .album-label { @apply flex min-w-0 flex-1 items-center justify-between gap-2; }
@@ -450,18 +468,18 @@ onBeforeUnmount(() => { disposed = true; readController.abort(); clearTimeout(po
   --file-gap: 10px;
   @apply m-0 grid list-none p-0;
   gap: var(--file-gap);
-  grid-template-columns: repeat(auto-fill, minmax(clamp(calc((100% - 11 * var(--file-gap)) / 12), 260px, calc((100% - 2 * var(--file-gap)) / 3)), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
 }
-.wall-recycle { @apply absolute top-1 right-1 grid size-8 min-h-0 place-items-center rounded-full bg-canvas p-0 text-danger; }
+.wall-recycle { @apply absolute top-1 right-1 grid size-11 min-h-11 place-items-center rounded-full border border-solid border-hairline bg-canvas p-0 text-danger; }
 .cloud-files li { @apply relative min-w-0 rounded-lg border border-solid border-hairline py-2 pr-1 pl-2; }
 .cloud-file { @apply min-w-0; }
 .cloud-file-select { @apply min-h-11 w-full border-0 bg-transparent p-0 text-left; }
-.cloud-files li.is-selected { @apply border-blue bg-blue/5; }
-.cloud-file-check { @apply pointer-events-none absolute top-2 right-2 text-blue; }
-.cloud-file-name { @apply mr-7 flex min-w-0 items-center gap-1.5 text-sm font-normal; }
+.cloud-files li.is-selected { @apply border-primary bg-primary/5; }
+.cloud-file-check { @apply pointer-events-none absolute top-2 right-2 text-primary; }
+.cloud-file-name { @apply mr-12 flex min-w-0 items-center gap-1.5 text-sm font-normal; }
 .cloud-file-name svg { @apply text-muted; }
 .cloud-file-meta { @apply mt-2 flex items-center gap-1.5 text-xs text-muted; }
-.cloud-file-delete { @apply absolute top-0.5 right-0.5 grid min-h-8 w-7 place-items-center rounded-md p-0 text-danger; }
+.cloud-file-delete { @apply absolute top-0.5 right-0.5 grid size-11 min-h-11 place-items-center rounded-lg p-0 text-danger; }
 .cloud-upload { width: min(560px, calc(100% - 32px)); }
 .recycle-dialog p { overflow-wrap: anywhere; }
 @media (max-width: 560px) {

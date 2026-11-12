@@ -19,6 +19,6 @@ watch(() => props.item, () => { broken.value = false })
 
 <style scoped>
 @reference '../app/assets/main.css';
-.cloud-thumbnail { @apply relative grid aspect-square w-full place-items-center overflow-hidden rounded-lg bg-soft text-muted; }
+.cloud-thumbnail { @apply relative grid aspect-square w-full place-items-center overflow-hidden rounded-lg bg-media text-muted; }
 .cloud-thumbnail > img { @apply absolute inset-0 size-full object-cover; }
 </style>

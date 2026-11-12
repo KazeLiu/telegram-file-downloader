@@ -40,7 +40,10 @@ watch(items, value => emit('items', value), { immediate: true })
 watch(() => view.ready, value => emit('ready', value), { immediate: true })
 watch(() => props.disabled, () => pump())
 watch(() => view.days.map(day => day.loading), () => pump(), { flush: 'post' })
-function measureNavigation() { topInset.value = window.innerWidth < 760 ? navigation.value?.offsetHeight ?? 0 : 0 }
+function measureNavigation() {
+  topInset.value = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--workbench-top'))
+    + (window.innerWidth < 760 ? navigation.value?.offsetHeight ?? 0 : 0)
+}
 watch(navigation, measureNavigation, { flush: 'post' })
 
 async function index() {
@@ -153,17 +156,17 @@ onBeforeUnmount(() => { saveScroll(); disposed = true; revision++; controller.ab
 .timeline-summary { @apply mb-3 flex flex-wrap justify-between gap-2 text-sm text-muted; }
 .timeline-layout { @apply relative grid min-w-0 gap-4; grid-template-columns: minmax(0, 1fr) 100px; }
 .timeline-content { @apply col-start-1 row-start-1 min-w-0; }
-.timeline-errors { @apply sticky top-0 z-10 bg-canvas; }
-.timeline-nav { @apply sticky top-4 col-start-2 row-start-1 self-start overflow-auto border-l border-solid border-hairline pl-3; max-height: calc(100dvh - 32px); }
+.timeline-errors { @apply sticky z-10 bg-canvas; top: var(--workbench-top); }
+.timeline-nav { @apply sticky col-start-2 row-start-1 self-start overflow-auto border-l border-solid border-hairline pl-3; top: calc(var(--workbench-top) + 16px); max-height: calc(100dvh - var(--workbench-top) - 32px); }
 .timeline-year { @apply mt-4 mb-1 block text-sm font-semibold first:mt-0; }
 .timeline-month { @apply flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2 text-sm text-muted; }
 .timeline-month span:last-child { @apply text-xs; }
-.timeline-month.active { @apply bg-blue/10 font-medium text-blue; }
+.timeline-month.active { @apply bg-primary/10 font-semibold text-primary; }
 .timeline-picker { @apply hidden; }
 .timeline-wall { @apply grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
 @media (max-width: 759px) {
   .timeline-layout { @apply block; }
-  .timeline-nav { @apply z-10 mb-3 border-0 bg-canvas p-0; top: 0; }
+  .timeline-nav { @apply z-10 mb-3 border-0 bg-canvas p-0; top: var(--workbench-top); }
   .timeline-picker { @apply flex min-h-11 flex-row items-center gap-3 py-2 text-sm; }
   .timeline-picker select { @apply min-h-11 min-w-0 flex-1; }
   .timeline-months { @apply hidden; }

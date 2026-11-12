@@ -141,9 +141,9 @@ onUnmounted(() => { observer.disconnect(); window.removeEventListener('resize', 
 .virtual-photo-space { @apply relative col-span-full min-w-0; }
 .virtual-photo-row { @apply absolute top-0 left-0 grid w-full items-start; }
 .virtual-photo-cell { @apply min-w-0; }
-.wall-day { @apply col-span-full m-0 min-w-0 text-sm font-medium; }
+.wall-day { @apply col-span-full m-0 min-w-0 text-sm font-semibold; }
 .day-select { @apply flex min-h-[44px] max-w-full items-center gap-2 p-0 text-left; }
 .day-check { @apply grid size-[18px] shrink-0 place-items-center rounded-sm border border-solid border-hairline bg-canvas; }
-.day-check.checked { @apply border-blue bg-blue text-white; }
+.day-check.checked { @apply border-primary bg-primary text-white; }
 .day-mixed { @apply h-0.5 w-2 bg-current; }
 </style>
