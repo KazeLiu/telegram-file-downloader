@@ -27,6 +27,7 @@ from .web_runtime import WebRuntime, telegram_proxy
 from .diagnostics import configure_logs, read_log
 from .organizer import browse, plan_counts
 from .image_library import IMAGE_EXTENSIONS, ImageLibrary, recycle_thumbnail
+from .image_dedup import ImageDedup
 from .linked_recycle import LinkedRecycle
 from .recycle_cleanup import RecycleCleaner
 from .storage import RecycleBin, inside, restore_batch
@@ -184,6 +185,25 @@ class XiaomiBatchRecycle(XiaomiBatchAction):
     revision: int = Field(ge=0)
 
 
+class DedupScan(XiaomiConnection):
+    roots: list[Annotated[str, Field(pattern=CONNECTION_PATTERN)]] = Field(min_length=1, max_length=100)
+    distance: int = Field(default=10, ge=0, le=24)
+
+
+class DedupSelection(XiaomiConnection):
+    run: str = Field(pattern=CONNECTION_PATTERN)
+    ids: list[Annotated[int, Field(gt=0)]] = Field(min_length=1, max_length=200)
+
+
+class DedupScores(DedupSelection):
+    reference: int = Field(gt=0)
+    ids: list[Annotated[int, Field(gt=0)]] = Field(min_length=1, max_length=40)
+
+
+class DedupRecycle(XiaomiConnection):
+    token: str = Field(pattern=CONNECTION_PATTERN)
+
+
 def create_app():
     data_dir = Path(os.environ.get("DATA_DIR", str(Path.cwd() / "data"))).resolve()
     download_dir = Path(os.environ.get("DOWNLOAD_DIR", str(Path.cwd() / "downloads"))).resolve()
@@ -198,6 +218,7 @@ def create_app():
         or bool(runtime.local_jobs) or bool(runtime.processor and runtime.processor.running)
         or bool(runtime.manual_task and not runtime.manual_task.done())))
     linked_recycle = LinkedRecycle(store, xiaomi, local_index)
+    dedup = ImageDedup(data_dir, store, xiaomi, local_index)
     recycle_cleaner = RecycleCleaner(local_index, download_dir, runtime.operation_lock)
     failures: dict[str, list[float]] = {}
 
@@ -209,6 +230,7 @@ def create_app():
         try:
             yield
         finally:
+            await dedup.close()
             await recycle_cleaner.close()
             await local_index.close()
             await batch.close()
@@ -786,6 +808,78 @@ def create_app():
         if not file.is_file():
             raise HTTPException(404, "日志文件不存在")
         return FileResponse(file, filename=name, media_type="text/plain")
+
+    @app.get("/api/dedup/sources")
+    async def dedup_sources(connection: str = Query(pattern=CONNECTION_PATTERN)):
+        return {"items": await dedup.sources(connection)}
+
+    @app.get("/api/dedup/status")
+    async def dedup_status(connection: str = Query(pattern=CONNECTION_PATTERN)):
+        return {"job": dedup.status(connection), "preview": dedup.preview(connection), "pending": dedup.pending(connection)}
+
+    @app.post("/api/dedup/scan")
+    async def dedup_scan(body: DedupScan):
+        return await dedup.start(body.connection, body.roots, body.distance)
+
+    @app.post("/api/dedup/cancel")
+    async def dedup_cancel(body: XiaomiConnection):
+        dedup.cancel(body.connection)
+        return {"ok": True}
+
+    @app.get("/api/dedup/groups")
+    async def dedup_groups(connection: str = Query(pattern=CONNECTION_PATTERN), run: str = Query(pattern=CONNECTION_PATTERN),
+                           page: int = Query(default=1, ge=1)):
+        return dedup.groups(connection, run, page)
+
+    @app.get("/api/dedup/groups/{group_id}")
+    async def dedup_pictures(group_id: int, connection: str = Query(pattern=CONNECTION_PATTERN),
+                             run: str = Query(pattern=CONNECTION_PATTERN), page: int = Query(default=1, ge=1)):
+        return dedup.pictures(connection, run, group_id, page)
+
+    @app.get("/api/dedup/errors")
+    async def dedup_errors(connection: str = Query(pattern=CONNECTION_PATTERN), run: str = Query(pattern=CONNECTION_PATTERN),
+                           page: int = Query(default=1, ge=1)):
+        return {"items": dedup.errors(connection, run, page)}
+
+    @app.post("/api/dedup/scores")
+    async def dedup_scores(body: DedupScores, request: Request):
+        return await dedup.scores(body.connection, body.run, body.reference, body.ids, request.is_disconnected)
+
+    @app.get("/api/dedup/files/{file_id}/thumbnail")
+    async def dedup_thumbnail(file_id: int, connection: str = Query(pattern=CONNECTION_PATTERN), run: str = Query(pattern=CONNECTION_PATTERN)):
+        dedup.file(connection, run, file_id)
+        target = dedup.cache / f"{file_id}.jpg"
+        if not target.is_file():
+            raise HTTPException(404, "缩略图不可用，请重新扫描")
+        return FileResponse(target, media_type="image/jpeg")
+
+    @app.get("/api/dedup/files/{file_id}/original")
+    async def dedup_original(file_id: int, connection: str = Query(pattern=CONNECTION_PATTERN), run: str = Query(pattern=CONNECTION_PATTERN)):
+        return FileResponse(dedup.file(connection, run, file_id))
+
+    @app.post("/api/dedup/preview")
+    async def dedup_preview(body: DedupSelection):
+        return await dedup.prepare(body.connection, body.run, body.ids)
+
+    @app.post("/api/dedup/preview/cancel")
+    async def dedup_preview_cancel(body: XiaomiConnection):
+        dedup.cancel_preview(body.connection)
+        return {"ok": True}
+
+    @app.post("/api/dedup/recycle")
+    async def dedup_recycle(body: DedupRecycle):
+        ensure_library_idle()
+        async with runtime.operation_lock:
+            result = await dedup.execute(body.connection, body.token)
+        if result["local_done"]:
+            library.start_scan()
+        return result
+
+    @app.post("/api/dedup/recycle/dismiss")
+    async def dedup_dismiss(body: DedupRecycle):
+        ensure_library_idle()
+        dedup.dismiss(body.connection, body.token)
+        return {"ok": True}
 
     static = Path(__file__).parent / "static"
     if static.exists():

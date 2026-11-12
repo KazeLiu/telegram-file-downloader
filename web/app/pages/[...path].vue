@@ -10,6 +10,7 @@ import WorkflowSteps from '../../src/WorkflowSteps.vue'
 import TaskActions from '../../src/TaskActions.vue'
 import FilesPanel from '../../src/FilesPanel.vue'
 import ImagesPanel from '../../src/ImagesPanel.vue'
+import ImageDedupPanel from '../../src/ImageDedupPanel.vue'
 import XiaomiPanel from '../../src/XiaomiPanel.vue'
 import LogsPanel from '../../src/LogsPanel.vue'
 
@@ -26,7 +27,7 @@ const archiveConfirm = reactive({ action: 'extract_only' as 'extract_only' | 'ma
   members: [] as { id: number; filename: string }[], busy: false, error: '' })
 let timer: ReturnType<typeof setInterval>
 let toastTimer: ReturnType<typeof setTimeout>
-const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '多层路径打平', icon: 'folder' }, { id: 'images', title: '本地图片快筛', icon: 'photo' }, { id: 'xiaomi', title: '小米云相册', icon: 'cloud' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
+const navigation = [{ id: 'overview', title: '工作流', icon: 'workflow' }, { id: 'history', title: '下载记录', icon: 'history' }, { id: 'files', title: '多层路径打平', icon: 'folder' }, { id: 'images', title: '本地图片快筛', icon: 'photo' }, { id: 'dedup', title: '图片去重', icon: 'compare' }, { id: 'xiaomi', title: '小米云相册', icon: 'cloud' }, { id: 'logs', title: '运行日志', icon: 'file' }, { id: 'settings', title: '设置', icon: 'settings' }]
 const title = computed(() => navigation.find(n => n.id === appModel.page)?.title)
 const running = computed(() => appModel.status?.phase === 'watching' && appModel.status?.connection === 'Connected')
 const completed = computed(() => (appModel.status?.counts.completed || 0) + (appModel.status?.counts.extracted || 0) + (appModel.status?.counts.organized || 0) + (appModel.status?.counts.manual_extracted || 0))
@@ -178,11 +179,12 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
       <div class="sidebar-bottom"><div v-if="appModel.status?.download_dir" class="storage-label" :title="appModel.status.download_dir"><Icon name="folder" :size="16" /><span class="truncate">{{ appModel.status.download_dir }}</span></div><button class="account-menu" aria-label="退出管理页面" @click="logout"><Icon name="logout" :size="18" /><span>退出工作台</span></button></div>
     </aside>
     <div class="min-w-0">
-      <main class="page-content" :class="{ 'image-page': ['images', 'xiaomi'].includes(appModel.page) }">
+      <main class="page-content" :class="{ 'image-page': ['images', 'xiaomi', 'dedup'].includes(appModel.page) }">
         <header class="page-heading"><h1>{{ title }}</h1><div v-if="appModel.page === 'overview'" class="flex flex-wrap items-center justify-end gap-2 sm:gap-4"><span class="connection"><span class="status-dot" :class="{ online: running }"></span>{{ phase }}</span><button v-if="appModel.status?.account && appModel.settings?.chat" :class="appModel.settings.enabled ? 'secondary' : 'primary'" :disabled="appModel.busy || appModel.status.pending" @click="toggleWatcher"><Icon :name="appModel.settings.enabled ? 'pause' : 'play'" :size="17" />{{ appModel.settings.enabled ? '暂停收集' : '开始收集' }}</button></div></header>
-        <p v-if="appModel.error && appModel.page !== 'xiaomi'" class="notice error" role="alert">{{ appModel.error }}<button class="text-button" @click="refresh">重试</button></p>
-        <p v-if="appModel.status?.error && !['history', 'xiaomi'].includes(appModel.page)" class="notice error" role="alert">{{ appModel.status.error }}</p>
+        <p v-if="appModel.error && !['xiaomi', 'dedup'].includes(appModel.page)" class="notice error" role="alert">{{ appModel.error }}<button class="text-button" @click="refresh">重试</button></p>
+        <p v-if="appModel.status?.error && !['history', 'xiaomi', 'dedup'].includes(appModel.page)" class="notice error" role="alert">{{ appModel.status.error }}</p>
         <XiaomiPanel v-if="appModel.page === 'xiaomi'" :last-local-recycle="lastLocalRecycle" @message="message" />
+        <ImageDedupPanel v-else-if="appModel.page === 'dedup'" @message="message" />
         <template v-else-if="appModel.settings && appModel.status">
           <template v-if="appModel.page === 'overview'">
             <WorkflowSteps :task="workflowTask" :settings="appModel.settings" />

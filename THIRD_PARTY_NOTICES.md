@@ -14,6 +14,8 @@ The web console uses Vue, Nuxt, Tailwind CSS and Motion for Vue (MIT),
 FastAPI (MIT), and Uvicorn (BSD-3-Clause).
 Local image decoding and thumbnails use Pillow; pip retains its packaged license
 notices in the installed distribution. Project and license: https://github.com/python-pillow/Pillow
+Local image similarity calculations use NumPy (BSD-3-Clause); pip retains its
+packaged license notices. Project and license: https://github.com/numpy/numpy
 The visual reference DESIGN.md was generated from the Apple design analysis at
 https://getdesign.md/apple/design-md. No Apple logo, proprietary font file or
 product image is redistributed.

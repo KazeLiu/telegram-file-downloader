@@ -5,3 +5,5 @@ python-socks[asyncio]>=2.4,<3
 fastapi==0.162.0
 uvicorn==0.54.0
 httpx==0.28.1
+Pillow==13.0.0
+numpy>=2,<3
