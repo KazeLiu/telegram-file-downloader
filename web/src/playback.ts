@@ -1,15 +1,16 @@
 export type MediaKind = 'image' | 'video' | 'mixed'
+export type ImageTiming = 'time' | 'beat'
 export interface Gallery { id: string; path: string }
 export interface PlaybackMedia { root: string; path: string; name: string; kind: 'image' | 'video'; version: string }
 export interface Playlist {
   id: string; name: string; roots: string[]; kind: MediaKind; order: 'sequential' | 'shuffle'
-  imageSeconds: number; minutes: number; loop: boolean; bpm: number; metronome: boolean; speech: boolean; favoritesOnly: boolean
+  imageSeconds: number; imageTiming: ImageTiming; minutes: number; loop: boolean; bpm: number; metronome: boolean; speech: boolean; favoritesOnly: boolean
 }
 export interface PlaybackPreferences { playlists: Playlist[]; selected: string; favorites: string[] }
 export const playbackStorageKey = 'shicun.playback.v1'
 
 export function newPlaylist(): Playlist {
-  return { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, name: '新播放列表', roots: [], kind: 'mixed', order: 'shuffle', imageSeconds: 8,
+  return { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, name: '新播放列表', roots: [], kind: 'mixed', order: 'shuffle', imageSeconds: 8, imageTiming: 'time',
     minutes: 10, loop: true, bpm: 100, metronome: false, speech: false, favoritesOnly: false }
 }
 
@@ -19,6 +20,8 @@ export function readPreferences(value: string): PlaybackPreferences {
     || !data.playlists.every(validPlaylist)) {
     throw new Error('本机播放列表数据不完整；可重置播放设置后重新创建，图库原文件不受影响。')
   }
+  // Existing playlists retain their fixed-time image playback.
+  for (const item of data.playlists) item.imageTiming ??= 'time'
   return data
 }
 
@@ -28,6 +31,7 @@ export function validPlaylist(item: Playlist) {
   return item && typeof item.id === 'string' && typeof item.name === 'string' && !!item.name.trim() && item.name.length <= 80
     && strings(item.roots) && ['image', 'video', 'mixed'].includes(item.kind) && ['sequential', 'shuffle'].includes(item.order)
     && numberIn(item.imageSeconds, 1, 300) && numberIn(item.minutes, 0, 180) && numberIn(item.bpm, 30, 180)
+    && [undefined, 'time', 'beat'].includes(item.imageTiming)
     && typeof item.loop === 'boolean' && typeof item.metronome === 'boolean' && typeof item.speech === 'boolean' && typeof item.favoritesOnly === 'boolean'
 }
 
@@ -38,6 +42,11 @@ export function mediaKey(item: PlaybackMedia) { return JSON.stringify([item.root
 export function clockTime(milliseconds: number) {
   const seconds = Math.max(0, Math.ceil(milliseconds / 1000))
   return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`
+}
+export function nextBeatTime(previous: number, now: number, bpm: number) {
+  const interval = 60000 / bpm
+  const next = previous + interval
+  return previous > 0 && next > now ? next : now + interval
 }
 export function orderedMedia(items: PlaybackMedia[], order: Playlist['order']) {
   const result = items.slice()

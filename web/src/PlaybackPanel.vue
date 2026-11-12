@@ -2,8 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { api } from './api'
 import Icon from './Icon.vue'
-import { clockTime, mediaKey, mediaUrl, newPlaylist, orderedMedia, playbackStorageKey, readPreferences, validPlaylist,
-  type Gallery, type PlaybackMedia, type PlaybackPreferences, type Playlist } from './playback'
+import { clockTime, mediaKey, mediaUrl, newPlaylist, nextBeatTime, orderedMedia, playbackStorageKey, readPreferences, validPlaylist,
+  type Gallery, type ImageTiming, type PlaybackMedia, type PlaybackPreferences, type Playlist } from './playback'
 
 const preferences = reactive<PlaybackPreferences>({ playlists: [], selected: '', favorites: [] })
 const setupModel = reactive({ galleries: [] as Gallery[], loading: false, starting: false, error: '', storageError: '', storageBlocked: false, ready: false })
@@ -13,6 +13,8 @@ const player = reactive({ mode: 'setup' as 'setup' | 'playing' | 'finished', ind
   error: '', note: '', elapsed: 0, imageElapsed: 0, phaseElapsed: 0, phaseDuration: 24000, phase: 0, autoImages: true,
   imageSeconds: 8, zoom: 1, fullscreen: false, finishedReason: '', beat: false })
 const options = shallowRef<Playlist>()
+const imageBeatMode = computed(() => options.value?.kind === 'image' && options.value.imageTiming === 'beat')
+const metronomeEnabled = computed(() => options.value?.metronome || imageBeatMode.value)
 const phases = [{ label: '慢速', ratio: .6 }, { label: '快速', ratio: 1 }, { label: '休息', ratio: 0 }]
 const current = computed(() => queue.value[player.index])
 const phase = computed(() => phases[player.phase]!)
@@ -24,14 +26,24 @@ const playerElement = ref<HTMLElement>()
 const imageViewport = ref<HTMLElement>()
 const video = ref<HTMLVideoElement>()
 const controls = ref<HTMLButtonElement>()
+const imageIntervalInput = ref('8')
+const bpmInput = ref('100')
 let request = new AbortController()
 let timer: ReturnType<typeof setInterval>
 let previousTick = 0
 let nextBeat = 0
 let audio: AudioContext | undefined
+let upcomingImage: HTMLImageElement | undefined
 let disposed = false
 let pointer: { id: number; x: number; y: number; left: number; top: number; moved: boolean } | undefined
 let suppressClick = false
+
+watch([current, imageBeatMode], ([item, byBeat]) => {
+  upcomingImage?.removeAttribute('src'); upcomingImage = undefined
+  if (!item || !byBeat || (player.index === queue.value.length - 1 && !options.value?.loop)) return
+  upcomingImage = new Image()
+  upcomingImage.src = mediaUrl(queue.value[(player.index + 1) % queue.value.length]!)
+})
 
 function persist() {
   if (!setupModel.ready || setupModel.storageBlocked) return
@@ -74,7 +86,7 @@ function checkGallery(id: string, checked: boolean) {
   playlist.value.roots = checked ? [...playlist.value.roots, id] : playlist.value.roots.filter(root => root !== id)
 }
 async function prepareAudio() {
-  if (!options.value?.metronome) return
+  if (!metronomeEnabled.value) return
   try {
     audio ||= new AudioContext()
     if (audio.state === 'suspended') await audio.resume()
@@ -93,10 +105,16 @@ function silence() {
   if ('speechSynthesis' in window && options.value?.speech) speechSynthesis.cancel()
 }
 function beat(now: number) {
-  if (!bpm.value) { player.beat = false; return }
-  if (now < nextBeat) { player.beat = nextBeat - now > 60000 / bpm.value - 120; return }
-  nextBeat = now + 60000 / bpm.value; player.beat = true
-  if (!options.value?.metronome || audio?.state !== 'running') return
+  if (!bpm.value || (imageBeatMode.value && !player.autoImages)) { player.beat = false; nextBeat = 0; return }
+  if (!nextBeat) { nextBeat = nextBeatTime(0, now, bpm.value); player.beat = false; return }
+  if (now < nextBeat) { player.beat = player.beat && nextBeat - now > 60000 / bpm.value - 120; return }
+  nextBeat = nextBeatTime(nextBeat, now, bpm.value)
+  if (imageBeatMode.value) {
+    step(1)
+    if (player.mode !== 'playing') return
+  }
+  player.beat = true
+  if (!metronomeEnabled.value || audio?.state !== 'running') return
   const oscillator = audio.createOscillator(), gain = audio.createGain()
   oscillator.frequency.value = 660
   gain.gain.setValueAtTime(.055, audio.currentTime)
@@ -119,6 +137,7 @@ async function start() {
   setupModel.starting = true
   player.note = ''
   options.value = { ...item, roots: item.roots.slice() }
+  imageIntervalInput.value = String(item.imageSeconds); bpmInput.value = String(item.bpm)
   // Unlock audio while the start button's user activation is still available.
   void prepareAudio()
   try {
@@ -188,12 +207,15 @@ function changePhase() {
 function tick() {
   const now = performance.now(), elapsed = now - previousTick
   previousTick = now
-  if (!active.value) return
+  if (!active.value) {
+    if (imageBeatMode.value && !player.ready) { nextBeat = 0; player.beat = false }
+    return
+  }
   player.elapsed += elapsed; player.phaseElapsed += elapsed
   if (options.value?.minutes && remaining.value <= 0) { finish('本次计时已完成'); return }
   if (player.phaseElapsed >= player.phaseDuration) changePhase()
   beat(now)
-  if (current.value?.kind === 'image' && player.autoImages) {
+  if (current.value?.kind === 'image' && player.autoImages && !imageBeatMode.value) {
     player.imageElapsed += elapsed
     if (player.imageElapsed >= player.imageSeconds * 1000) step(1)
   }
@@ -237,11 +259,32 @@ function updateInterval(event: Event) {
   const input = event.target as HTMLInputElement
   const seconds = Number(input.value)
   if (!Number.isInteger(seconds) || seconds < 1 || seconds > 300) {
-    player.note = '图片间隔请输入 1–300 之间的整数秒。'; input.value = String(player.imageSeconds); return
+    player.note = '图片间隔请输入 1–300 之间的整数秒。'; imageIntervalInput.value = String(player.imageSeconds); return
   }
   player.imageSeconds = seconds; player.imageElapsed = 0; player.note = ''
+  imageIntervalInput.value = String(seconds)
   const saved = preferences.playlists.find(item => item.id === options.value?.id)
   if (saved) saved.imageSeconds = seconds
+}
+async function updateImageTiming(event: Event) {
+  const imageTiming = (event.target as HTMLSelectElement).value as ImageTiming
+  options.value = { ...options.value!, imageTiming }
+  player.imageElapsed = 0; nextBeat = 0; player.beat = false; player.note = ''
+  const saved = preferences.playlists.find(item => item.id === options.value?.id)
+  if (saved) saved.imageTiming = imageTiming
+  await prepareAudio()
+}
+function updateBpm(event: Event) {
+  const input = event.target as HTMLInputElement
+  const value = Number(input.value)
+  if (!Number.isInteger(value) || value < 30 || value > 180) {
+    player.note = '快速节拍请输入 30–180 之间的整数 BPM。'; bpmInput.value = String(options.value!.bpm); return
+  }
+  options.value = { ...options.value!, bpm: value }
+  bpmInput.value = String(value)
+  nextBeat = 0; player.note = ''
+  const saved = preferences.playlists.find(item => item.id === options.value?.id)
+  if (saved) saved.bpm = value
 }
 function toggleFavorite() {
   if (!current.value) return
@@ -313,7 +356,7 @@ onMounted(() => {
   setupModel.ready = true
   if (!setupModel.storageBlocked) persist()
   void loadGalleries()
-  previousTick = performance.now(); timer = setInterval(tick, 100)
+  previousTick = performance.now(); timer = setInterval(tick, 25)
   document.addEventListener('keydown', keydown)
   document.addEventListener('visibilitychange', visibilityChanged)
   document.addEventListener('fullscreenchange', fullscreenChanged)
@@ -321,6 +364,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposed = true; request.abort(); clearInterval(timer); pause()
   if (audio) void audio.close()
+  upcomingImage?.removeAttribute('src')
   document.removeEventListener('keydown', keydown)
   document.removeEventListener('visibilitychange', visibilityChanged)
   document.removeEventListener('fullscreenchange', fullscreenChanged)
@@ -342,10 +386,11 @@ onBeforeUnmount(() => {
           <p class="gallery-help muted">包含子目录。其他图库可在小米云相册中绑定本地目录后选择。</p>
           <details class="playback-settings"><summary>播放设置</summary><div class="settings-grid">
             <label>播放顺序<select v-model="playlist.order"><option value="shuffle">随机</option><option value="sequential">文件名顺序</option></select></label>
-            <label>图片间隔（秒）<input v-model.number="playlist.imageSeconds" type="number" min="1" max="300" required /></label>
+            <label v-if="playlist.kind === 'image'">图片切换<select v-model="playlist.imageTiming"><option value="time">按时间</option><option value="beat">按 BPM · 每拍一张</option></select></label>
+            <label v-if="playlist.kind !== 'image' || playlist.imageTiming === 'time'">图片间隔（秒）<input v-model.number="playlist.imageSeconds" type="number" min="1" max="300" required /></label>
             <label>总时长（分钟，0 为不限）<input v-model.number="playlist.minutes" type="number" min="0" max="180" required /></label>
             <label>快速节拍（BPM）<input v-model.number="playlist.bpm" type="number" min="30" max="180" required /></label>
-          </div><div class="playback-toggles"><label><input v-model="playlist.loop" type="checkbox" />循环列表</label><label><input v-model="playlist.favoritesOnly" type="checkbox" />仅播放喜欢</label><label><input v-model="playlist.metronome" type="checkbox" />节拍器</label><label><input v-model="playlist.speech" type="checkbox" />语音提示</label></div></details>
+          </div><p v-if="playlist.kind === 'image' && playlist.imageTiming === 'beat'" class="muted">每拍发声并切换一张图片，跟随当前显示的 BPM；休息阶段不发声、不自动切图。</p><div class="playback-toggles"><label><input v-model="playlist.loop" type="checkbox" />循环列表</label><label><input v-model="playlist.favoritesOnly" type="checkbox" />仅播放喜欢</label><label v-if="playlist.kind !== 'image' || playlist.imageTiming !== 'beat'"><input v-model="playlist.metronome" type="checkbox" />节拍器</label><label><input v-model="playlist.speech" type="checkbox" />语音提示</label></div></details>
         </fieldset>
         <p v-if="setupModel.error" class="notice error" role="alert">{{ setupModel.error }}</p>
         <div class="playback-start"><span class="muted">已选 {{ playlist.roots.length }} 个图库</span><button class="primary" :disabled="setupModel.loading || setupModel.starting || !playlist.roots.length"><Icon :name="setupModel.starting ? 'loader' : 'play'" :size="18" />{{ setupModel.starting ? '正在读取媒体…' : '开始播放' }}</button></div>
@@ -368,7 +413,7 @@ onBeforeUnmount(() => {
         <progress v-if="options?.minutes" :value="player.elapsed" :max="options.minutes * 60000" aria-label="本次播放进度" />
         <div class="player-file"><span :title="current?.path">{{ current?.name }}</span><small>{{ player.index + 1 }} / {{ queue.length }}</small></div>
         <div class="player-controls"><button class="player-button" :disabled="player.mode !== 'playing' || (!options?.loop && player.index === 0)" aria-label="上一项" title="上一项（←）" @click="step(-1)"><Icon name="chevron" class="previous-icon" /></button><button ref="controls" class="player-button main-play" :disabled="player.mode !== 'playing' || !!player.error" :aria-label="player.paused ? '继续播放' : '暂停播放'" @click="player.paused ? resume() : pause()"><Icon :name="player.paused ? 'play' : 'pause'" :size="24" /></button><button class="player-button" :disabled="player.mode !== 'playing'" aria-label="下一项" title="下一项（→）" @click="step(1)"><Icon name="chevron" /></button><span class="control-divider"></span><button class="player-button" :class="{ liked: favorite }" :aria-pressed="favorite" :aria-label="favorite ? '取消喜欢' : '喜欢'" @click="toggleFavorite"><Icon name="heart" /><span class="favorite-label">{{ favorite ? '已喜欢' : '喜欢' }}</span></button><button class="player-button stop-button" :disabled="player.mode !== 'playing'" @click="finish('已结束播放')">结束</button></div>
-        <div v-if="current?.kind === 'image' && player.mode === 'playing'" class="image-controls"><label><input v-model="player.autoImages" type="checkbox" @change="player.imageElapsed = 0; player.zoom = 1" />自动切图</label><label class="interval-control"><input :value="player.imageSeconds" type="number" min="1" max="300" aria-label="自动切图间隔（秒）" @change="updateInterval" />秒</label><span class="zoom-controls"><button class="player-button" :disabled="player.zoom <= 1" aria-label="缩小图片" @click="zoom(-.5)">−</button><button class="player-button" title="还原图片" @click="zoom(0)">{{ Math.round(player.zoom * 100) }}%</button><button class="player-button" :disabled="player.zoom >= 4" aria-label="放大图片" @click="zoom(.5)">＋</button></span></div>
+        <div v-if="current?.kind === 'image' && player.mode === 'playing'" class="image-controls"><label><input v-model="player.autoImages" type="checkbox" @change="player.imageElapsed = 0; nextBeat = 0; player.zoom = 1" />自动切图</label><select v-if="options?.kind === 'image'" :value="options.imageTiming" aria-label="图片切换方式" @change="updateImageTiming"><option value="time">按时间</option><option value="beat">按 BPM</option></select><label v-if="imageBeatMode" class="interval-control"><input v-model="bpmInput" type="number" min="30" max="180" aria-label="快速节拍（BPM）" @change="updateBpm" />快速 BPM</label><label v-else class="interval-control"><input v-model="imageIntervalInput" type="number" min="1" max="300" aria-label="自动切图间隔（秒）" @change="updateInterval" />秒</label><span class="zoom-controls"><button class="player-button" :disabled="player.zoom <= 1" aria-label="缩小图片" @click="zoom(-.5)">−</button><button class="player-button" title="还原图片" @click="zoom(0)">{{ Math.round(player.zoom * 100) }}%</button><button class="player-button" :disabled="player.zoom >= 4" aria-label="放大图片" @click="zoom(.5)">＋</button></span></div>
         <p v-if="player.note" class="player-note" role="status">{{ player.note }}</p>
       </div>
     </section>
@@ -400,6 +445,7 @@ onBeforeUnmount(() => {
 .playback-settings { margin: 24px 0; border-block: 1px solid var(--color-hairline); }
 .playback-settings summary { padding: 16px 0; cursor: pointer; font-size: 14px; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.playback-settings > p { margin-top: 12px; }
 .playback-toggles { display: flex; flex-wrap: wrap; gap: 16px 24px; margin: 20px 0; }
 .playback-toggles label { flex-direction: row; align-items: center; min-height: 44px; }
 .playback-start { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
@@ -442,6 +488,7 @@ onBeforeUnmount(() => {
 .image-controls { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 8px; }
 .image-controls label { flex-direction: row; align-items: center; color: #dccbd3; white-space: nowrap; }
 .image-controls .interval-control input { width: 72px; min-height: 44px; background: #272729; border-color: #5c4652; color: #fff; padding: 6px 8px; text-align: center; }
+.image-controls select { width: auto; min-height: 44px; background-color: #272729; border-color: #5c4652; color: #fff; }
 .zoom-controls { display: flex; align-items: center; gap: 0; }
 .zoom-controls button { font-variant-numeric: tabular-nums; padding-inline: 8px; }
 .player-note { margin-top: 8px; text-align: center; color: #dccbd3; font-size: 14px; }
