@@ -32,6 +32,7 @@ export interface Task {
   group_count?: number; group_size?: number; group_downloaded?: number; display_status?: string; archive_name?: string
   archive_group_warning?: string; manual_extract_only?: boolean; manual_source?: 'app' | 'external'
   manual_processed_at?: string; manual_previous_error?: string
+  image_check_total?: number; image_check_done?: number; image_check_compressed?: number; image_check_error?: string; image_check_reason?: string
 }
 export type TaskAction = 'pause' | 'resume' | 'retry' | 'extract_only' | 'mark_manual_extracted'
 export interface Status {
@@ -45,6 +46,8 @@ export interface LibraryPicture {
   id: number; name: string; size: number; width: number | null; height: number | null
   version: string; monochrome: boolean | null; error: string
   sort_time: number; time_source: 'taken' | 'digitized' | 'image' | 'created' | 'modified' | null
+  saved_match?: { root_id: string; path: string; root: string; version: string; width: number; height: number; size: number; ssim: number } | null
+  saved_error?: string
 }
 export function imageThumbnail(item: LibraryPicture) {
   return `/api/images/${item.id}/thumbnail?version=${encodeURIComponent(item.version)}`

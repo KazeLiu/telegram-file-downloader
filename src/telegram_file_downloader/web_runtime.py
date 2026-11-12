@@ -48,6 +48,7 @@ class WebRuntime:
     def __init__(self, store: ConsoleStore, data_dir: Path, download_dir: Path, images_changed):
         self.store, self.data_dir, self.download_dir = store, data_dir, download_dir
         self.images_changed = images_changed
+        self.check_images = None
         self.state = AppState()
         self.account = None
         self.phase = "unconfigured"
@@ -140,7 +141,7 @@ class WebRuntime:
 
             def processor_factory(client, history, recorder):
                 self.processor = ConsoleProcessor(client, self.download_dir, history, recorder,
-                                                 self.store, settings, self.operation_lock, self.images_changed)
+                                                 self.store, settings, self.operation_lock, self.images_changed, self.check_images)
                 return self.processor
 
             self.watcher = TelegramWatcher(config, self.state, processor_factory, self.login_required)
@@ -276,7 +277,7 @@ class WebRuntime:
             if self.processor:
                 await self.processor.unpack(task_id)
                 return
-            processor = ConsoleProcessor(None, self.download_dir, None, None, self.store, self.store.settings(), self.operation_lock, self.images_changed)
+            processor = ConsoleProcessor(None, self.download_dir, None, None, self.store, self.store.settings(), self.operation_lock, self.images_changed, self.check_images)
             job = asyncio.create_task(processor._postprocess(group), name=f"local-workflow-{group}")
             self.local_jobs.add(job)
             job.add_done_callback(self.local_jobs.discard)

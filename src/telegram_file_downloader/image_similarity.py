@@ -105,6 +105,34 @@ def similarity(left_file, left, right_file, right):
     return float(score.mean())
 
 
+class PerceptualIndex:
+    def __init__(self):
+        self.tree = None
+
+    def add(self, value):
+        if self.tree is None:
+            self.tree = (value, {})
+            return
+        node = self.tree
+        while True:
+            delta = (value ^ node[0]).bit_count()
+            if delta == 0:
+                return
+            if delta not in node[1]:
+                node[1][delta] = (value, {})
+                return
+            node = node[1][delta]
+
+    def neighbours(self, value, distance):
+        pending = [self.tree] if self.tree else []
+        while pending:
+            node = pending.pop()
+            delta = (value ^ node[0]).bit_count()
+            if delta <= distance:
+                yield node[0]
+            pending.extend(child for edge, child in node[1].items() if delta - distance <= edge <= delta + distance)
+
+
 def group_images(records, distance, cancelled):
     """Union exact matches and BK-tree neighbours without enumerating every image pair."""
     parents = {record["id"]: record["id"] for record in records}
@@ -118,7 +146,7 @@ def group_images(records, distance, cancelled):
     def join(left, right):
         parents[find(right)] = find(left)
 
-    tree, hashes = None, {}
+    index, hashes, representatives = PerceptualIndex(), {}, {}
     for record in records:
         if cancelled.is_set():
             return None
@@ -126,25 +154,11 @@ def group_images(records, distance, cancelled):
         if record["digest"] in hashes:
             join(item, hashes[record["digest"]])
         hashes[record["digest"]] = item
-        pending = [tree] if tree else []
-        while pending:
-            node = pending.pop()
-            delta = (value ^ node[0]).bit_count()
-            if delta <= distance:
-                join(item, node[1])
-            pending.extend(child for edge, child in node[2].items() if delta - distance <= edge <= delta + distance)
-        if tree is None:
-            tree = (value, item, {})
-        else:
-            node = tree
-            while True:
-                delta = (value ^ node[0]).bit_count()
-                if delta == 0:
-                    break
-                if delta not in node[2]:
-                    node[2][delta] = (value, item, {})
-                    break
-                node = node[2][delta]
+        for neighbour in index.neighbours(value, distance):
+            join(item, representatives[neighbour])
+        if value not in representatives:
+            representatives[value] = item
+            index.add(value)
     groups = {}
     for item in parents:
         groups.setdefault(find(item), []).append(item)

@@ -28,6 +28,7 @@ from .diagnostics import configure_logs, read_log
 from .organizer import browse, plan_counts
 from .image_library import IMAGE_EXTENSIONS, ImageLibrary, recycle_thumbnail
 from .image_dedup import ImageDedup
+from .saved_image_check import SavedImageCheck
 from .linked_recycle import LinkedRecycle
 from .recycle_cleanup import RecycleCleaner
 from .storage import RecycleBin, inside, restore_batch
@@ -219,6 +220,10 @@ def create_app():
         or bool(runtime.manual_task and not runtime.manual_task.done())))
     linked_recycle = LinkedRecycle(store, xiaomi, local_index)
     dedup = ImageDedup(data_dir, store, xiaomi, local_index)
+    saved_check = SavedImageCheck(library, dedup, local_index, xiaomi, store,
+        lambda: runtime.operation_lock.locked() or library.state["running"] or bool(dedup.task and not dedup.task.done()))
+    library.saved_check = saved_check
+    runtime.check_images = saved_check.queue_batch
     recycle_cleaner = RecycleCleaner(local_index, download_dir, runtime.operation_lock)
     failures: dict[str, list[float]] = {}
 
@@ -226,10 +231,12 @@ def create_app():
     async def lifespan(app):
         await runtime.start()
         local_index.start()
+        saved_check.start()
         recycle_cleaner.start()
         try:
             yield
         finally:
+            await saved_check.close()
             await dedup.close()
             await recycle_cleaner.close()
             await local_index.close()
@@ -685,19 +692,20 @@ def create_app():
 
     @app.post("/api/images/scan")
     async def scan_images():
+        saved_check.request(refresh=False, force=True)
         return library.start_scan()
 
     @app.get("/api/images")
-    async def images(page: int = 1, candidate: bool = False, search: str = "", after: int | None = None):
+    async def images(page: int = 1, candidate: bool = False, search: str = "", after: int | None = None, compressed: bool = False):
         if page < 1 or len(search) > 255 or (after is not None and after < 1):
             raise ValueError("无效的图片查询")
-        return library.listing(page, candidate, search, after)
+        return library.listing(page, candidate, search, after, compressed)
 
     @app.get("/api/images/status")
-    async def image_status(candidate: bool = False, search: str = ""):
+    async def image_status(candidate: bool = False, search: str = "", compressed: bool = False):
         if len(search) > 255:
             raise ValueError("无效的图片查询")
-        return library.status(candidate, search)
+        return library.status(candidate, search, compressed)
 
     @app.get("/api/images/{image_id}")
     async def image_details(image_id: int):
@@ -710,6 +718,25 @@ def create_app():
         if record["error"] or not target.is_file():
             raise HTTPException(404, "缩略图尚未生成或图片读取失败")
         return FileResponse(target, media_type="image/jpeg")
+
+    @app.get("/api/images/{image_id}/saved/thumbnail")
+    async def saved_image_thumbnail(image_id: int, version: str):
+        match, _ = saved_check.selected_reference(image_id, version)
+        row = dedup.db.execute("SELECT version FROM features WHERE id=?", (match["feature_id"],)).fetchone()
+        target = dedup.cache / f"{match['feature_id']}.jpg"
+        if not row or row["version"] != match["version"] or not target.is_file():
+            raise HTTPException(409, "参考图缓存已变化，请刷新图片后重新检查")
+        return FileResponse(target, media_type="image/jpeg")
+
+    @app.get("/api/images/{image_id}/original")
+    async def original_image(image_id: int, version: str):
+        _, file = library.selected(image_id, version)
+        return FileResponse(file)
+
+    @app.get("/api/images/{image_id}/saved/original")
+    async def saved_image_original(image_id: int, version: str):
+        _, file = saved_check.selected_reference(image_id, version)
+        return FileResponse(file)
 
     def ensure_library_idle():
         if runtime.operation_lock.locked() or store.get("manual_job", {}).get("status") in {"running", "failed", "interrupted"}:

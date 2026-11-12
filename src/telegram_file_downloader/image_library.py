@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
 import os
 import sqlite3
 import time
@@ -17,7 +18,7 @@ from .storage import inside, is_link
 
 LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif"}
-IMAGE_FIELDS = "id,name,size,mtime_ns,width,height,monochrome,error,created_ms,sort_time,time_source"
+IMAGE_FIELDS = "id,name,size,mtime_ns,width,height,monochrome,error,created_ms,sort_time,time_source,saved_scope,saved_match,saved_error"
 PAGE_SIZE = 60
 READY_IMAGES = "active=1 AND ((time_source IS NOT NULL AND monochrome IS NOT NULL) OR error<>'')"
 
@@ -144,6 +145,9 @@ class ImageLibrary:
         for name, kind in (("created_ms", "INTEGER"), ("sort_time", "INTEGER"), ("time_source", "TEXT")):
             if name not in columns:
                 self.db.execute(f"ALTER TABLE images ADD COLUMN {name} {kind}")
+        for name in ("saved_scope", "saved_match", "saved_error"):
+            if name not in columns:
+                self.db.execute(f"ALTER TABLE images ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
         self.db.execute("UPDATE images SET sort_time=mtime_ns / 1000000 WHERE sort_time IS NULL")
         self.db.execute("UPDATE images SET sort_time=mtime_ns / 1000000,time_source='modified' WHERE time_source='created'")
         self.db.execute("CREATE INDEX IF NOT EXISTS images_active_time ON images(active,sort_time DESC,id DESC)")
@@ -151,6 +155,7 @@ class ImageLibrary:
         self.db.commit()
         self.task = None
         self.scan_requested = False
+        self.saved_check = None
         self.state = dict(running=False, done=0, total=0, error="", last_scan=None)
 
     def start_scan(self):
@@ -181,6 +186,9 @@ class ImageLibrary:
                     height=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.height END,
                     score=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.score END,
                     features=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.features END,
+                    saved_scope=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.saved_scope ELSE '' END,
+                    saved_match=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.saved_match ELSE '' END,
+                    saved_error=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.saved_error ELSE '' END,
                     monochrome=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.monochrome END,
                     error=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.error ELSE '' END,
                     sort_time=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns AND images.time_source IS NOT NULL THEN images.sort_time ELSE excluded.sort_time END,
@@ -210,21 +218,37 @@ class ImageLibrary:
                     self.state["done"] += 1
             await worker()
             self.state["last_scan"] = time.time()
+            if self.saved_check:
+                self.saved_check.request()
             LOGGER.info("image scan complete count=%s analyzed=%s elapsed=%.3fs", len(active), len(pending), time.monotonic() - started)
         except Exception as exc:
             LOGGER.exception("image scan failed")
             self.state["error"] = str(exc)
 
-    def status(self, candidate=False, search=""):
-        condition = READY_IMAGES + " AND instr(lower(name),lower(?))>0" + (" AND monochrome=1" if candidate else "")
-        total = self.db.execute(f"SELECT COUNT(*) FROM images WHERE {condition}", (search,)).fetchone()[0]
-        counts = self.db.execute(f"""SELECT COUNT(*) AS total,SUM(monochrome=1) AS candidates,
-            SUM(error<>'') AS errors,SUM(({READY_IMAGES})) AS ready FROM images WHERE active=1""").fetchone()
-        return dict(total=total, counts=dict(counts), scan=self.state)
+    def saved_scope(self):
+        return (self.saved_check.scope() if self.saved_check else "") or "unavailable"
 
-    def listing(self, page=1, candidate=False, search="", after=None):
+    def status(self, candidate=False, search="", compressed=False):
+        scope = self.saved_scope()
         condition = READY_IMAGES + " AND instr(lower(name),lower(?))>0" + (" AND monochrome=1" if candidate else "")
         args = (search,)
+        if compressed:
+            condition += " AND saved_scope=? AND saved_match<>''"
+            args += (scope,)
+        total = self.db.execute(f"SELECT COUNT(*) FROM images WHERE {condition}", args).fetchone()[0]
+        counts = self.db.execute(f"""SELECT COUNT(*) AS total,SUM(monochrome=1) AS candidates,
+            SUM(error<>'') AS errors,SUM(({READY_IMAGES})) AS ready,
+            SUM(saved_scope=? AND saved_match<>'') AS compressed,
+            SUM(saved_scope=? AND saved_error<>'') AS comparison_errors FROM images WHERE active=1""", (scope, scope)).fetchone()
+        return dict(total=total, counts=dict(counts), scan=self.state,
+                    comparison=self.saved_check.state if self.saved_check else None)
+
+    def listing(self, page=1, candidate=False, search="", after=None, compressed=False):
+        condition = READY_IMAGES + " AND instr(lower(name),lower(?))>0" + (" AND monochrome=1" if candidate else "")
+        args = (search,)
+        if compressed:
+            condition += " AND saved_scope=? AND saved_match<>''"
+            args += (self.saved_scope(),)
         offset = (page - 1) * PAGE_SIZE
         if after is not None:
             # Recycled images keep their index row, so removing one never shifts the next batch.
@@ -236,12 +260,18 @@ class ImageLibrary:
             offset = 0
         rows = self.db.execute(f"SELECT {IMAGE_FIELDS} FROM images WHERE {condition} ORDER BY sort_time DESC,id DESC LIMIT ? OFFSET ?",
                                (*args, PAGE_SIZE + 1, offset)).fetchall()
-        items = [self.public(dict(row)) for row in rows[:PAGE_SIZE]]
-        return dict(items=items, **self.status(candidate, search), page=page, page_size=PAGE_SIZE,
+        scope = self.saved_scope()
+        items = [self.public(dict(row), scope) for row in rows[:PAGE_SIZE]]
+        return dict(items=items, **self.status(candidate, search, compressed), page=page, page_size=PAGE_SIZE,
                     next_cursor=items[-1]["id"] if len(rows) > PAGE_SIZE else None)
 
     @staticmethod
-    def public(record):
+    def public(record, saved_scope=""):
+        scope = record.pop("saved_scope", "")
+        match = record.pop("saved_match", "")
+        error = record.pop("saved_error", "")
+        record["saved_match"] = json.loads(match) if match and saved_scope and scope == saved_scope else None
+        record["saved_error"] = error if saved_scope and scope == saved_scope else ""
         record["version"] = f"{record['mtime_ns']}:{record['size']}"
         if record["monochrome"] is not None:
             record["monochrome"] = bool(record["monochrome"])
@@ -251,7 +281,7 @@ class ImageLibrary:
         row = self.db.execute(f"SELECT {IMAGE_FIELDS} FROM images WHERE id=? AND active=1", (image_id,)).fetchone()
         if not row:
             raise ValueError("图片已移走或不存在，请刷新")
-        record = self.public(dict(row))
+        record = self.public(dict(row), self.saved_scope())
         file = inside(self.root, record["name"])
         stat = file.stat()
         if version != record["version"] or (stat.st_size, stat.st_mtime_ns) != (record["size"], record["mtime_ns"]):
@@ -262,7 +292,7 @@ class ImageLibrary:
         row = self.db.execute(f"SELECT {IMAGE_FIELDS} FROM images WHERE id=? AND active=1", (image_id,)).fetchone()
         if not row:
             raise ValueError("图片已移走或不存在，请刷新")
-        record = self.public(dict(row))
+        record = self.public(dict(row), self.saved_scope())
         return self.selected(image_id, record["version"])[0]
 
     def remove(self, image_id):

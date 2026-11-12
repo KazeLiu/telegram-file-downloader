@@ -39,9 +39,10 @@ let panning: { position: typeof position.value; axis: ReviewAxis; height: number
 const decisions = reactive(new Map<number, Decision>())
 const history = reactive<{ index: number; previous?: Decision }[]>([])
 const broken = reactive(new Set<number>())
+const referenceFailed = ref(false)
 const current = computed<Picture | undefined>(() => queue.value[index.value])
 const timeSources = { taken: '拍摄时间', digitized: '数字化时间', image: '图片日期', created: '文件创建时间', modified: '修改时间' }
-watch(current, item => { if (item && dialog.value?.open) emit('change', item.id) })
+watch(current, item => { referenceFailed.value = false; if (item && dialog.value?.open) emit('change', item.id) })
 const pending = computed(() => queue.value.filter((_, i) => needsRecycle(i)))
 const currentMarked = computed(() => needsRecycle(index.value))
 useBeforeUnload(() => pending.value.length > 0)
@@ -234,8 +235,12 @@ function needsRecycle(i: number) {
           <motion.div class="review-swipe" @panStart="startPan" @pan="trackPan" @panEnd="panEnd">
             <AnimatePresence :initial="false" :custom="direction">
               <motion.div v-if="current" :key="current.id" class="review-slide" :custom="direction" :variants="slide" initial="enter" animate="visible" exit="exit">
-                <motion.div class="review-drag" :style="position"><div class="review-picture" :class="{ 'in-recycle-zone': armedEdge !== 0 && !currentMarked }">
-                <img v-if="hasPreview(current)" :src="imageThumbnail(current)" :alt="current.name" :data-image-id="current.id" draggable="false" @error="markBroken" />
+                <motion.div class="review-drag" :style="current.saved_match ? undefined : position"><div class="review-picture" :class="{ 'in-recycle-zone': !current.saved_match && armedEdge !== 0 && !currentMarked }">
+                <div v-if="current.saved_match && hasPreview(current)" class="review-comparison">
+                  <motion.figure class="comparison-current" :style="position" :class="{ 'in-recycle-zone': armedEdge !== 0 && !currentMarked }"><figcaption>下载图片 · {{ current.width }} × {{ current.height }} · {{ bytes(current.size) }}</figcaption><img :src="/\.(tif|tiff)$/i.test(current.name) ? imageThumbnail(current) : `/api/images/${current.id}/original?version=${encodeURIComponent(current.version)}`" :alt="current.name" :data-image-id="current.id" draggable="false" @error="markBroken" /></motion.figure>
+                  <figure><figcaption>已存图片 · {{ current.saved_match.width }} × {{ current.saved_match.height }} · {{ bytes(current.saved_match.size) }}</figcaption><img v-if="!referenceFailed" :src="`/api/images/${current.id}/saved/${/\.(tif|tiff)$/i.test(current.saved_match.path) ? 'thumbnail' : 'original'}?version=${encodeURIComponent(current.version)}`" :alt="current.saved_match.path" draggable="false" @error="referenceFailed = true" /><p v-else class="review-empty">已存原图不可用，请刷新后重新检查</p></figure>
+                </div>
+                <img v-else-if="hasPreview(current)" :src="imageThumbnail(current)" :alt="current.name" :data-image-id="current.id" draggable="false" @error="markBroken" />
                 <p v-else class="review-empty"><Icon name="photo" :size="34" />{{ current.error || (broken.has(current.id) ? '图片预览加载失败' : '图片预览尚未生成') }}</p>
                 </div></motion.div>
               </motion.div>
@@ -261,6 +266,9 @@ function needsRecycle(i: number) {
         <span v-else class="muted">已审阅 {{ decisions.size }} 张</span>
       </div>
 
+      <div v-if="current?.saved_match" class="saved-evidence"><span class="badge">重复图</span><span class="min-w-0 truncate" :title="`${current.saved_match.root}/${current.saved_match.path}`">已存于 {{ current.saved_match.root }}/{{ current.saved_match.path }}</span><span class="shrink-0">SSIM {{ current.saved_match.ssim.toFixed(5) }}</span></div>
+      <p v-if="current?.saved_error" class="notice error" role="alert">已存检查未完成：{{ current.saved_error }}</p>
+
       <div class="review-filmstrip" role="group" aria-label="审阅队列">
         <div v-for="(position, slot) in filmstrip" :key="slot" class="review-slot">
           <button v-if="queue[position]" :key="queue[position].id" :aria-current="position === index ? 'true' : undefined" :disabled="loading"
@@ -283,7 +291,7 @@ function needsRecycle(i: number) {
             <button type="button" :aria-pressed="step === 'next'" :disabled="loading" @click="step = 'next'">下一张<Icon name="chevron" :size="14" /></button>
           </div>
         </div>
-        <button class="secondary recycle" :disabled="!current || loading" aria-keyshortcuts="ArrowUp ArrowDown" @click="decide(currentMarked ? 'keep' : 'recycle')"><Icon :name="currentMarked ? 'restore' : 'trash'" :size="17" />{{ currentMarked ? '取消回收' : '标记回收' }} <kbd>↑ / ↓</kbd></button>
+        <button class="secondary recycle" :disabled="!current || loading" aria-keyshortcuts="ArrowUp ArrowDown" @click="decide(currentMarked ? 'keep' : 'recycle')"><Icon :name="currentMarked ? 'restore' : 'trash'" :size="17" />{{ currentMarked ? '取消回收' : current?.saved_match ? '标记回收下载图' : '标记回收' }} <kbd>↑ / ↓</kbd></button>
         <button class="secondary" :disabled="!history.length || loading" aria-keyshortcuts="Control+Z Meta+Z" @click="undo">撤销</button>
         <button v-if="pending.length" class="danger" @click="dialog?.close('recycle')">移入回收站 · {{ pending.length }} 张</button>
       </footer>
@@ -308,6 +316,13 @@ function needsRecycle(i: number) {
 .review-slide { @apply pointer-events-none absolute inset-0 flex items-center justify-center px-[52px] py-2.5; }
 .review-slide img { @apply block size-full min-h-0 object-contain; }
 .review-drag, .review-picture { @apply flex size-full min-h-0 items-center justify-center; }
+.review-comparison { @apply grid size-full min-h-0 grid-cols-2 gap-3; }
+.review-comparison figure { @apply m-0 flex min-h-0 min-w-0 flex-col gap-2; }
+.review-comparison figcaption { @apply text-center text-xs text-muted; }
+.review-comparison img { @apply h-0 min-h-0 w-full flex-1 object-contain; }
+.comparison-current { transition: transform .14s ease-out, filter .14s ease-out, opacity .14s ease-out; }
+.comparison-current.in-recycle-zone { transform: scale(.78); filter: grayscale(1); opacity: .55; }
+.saved-evidence { @apply flex min-w-0 items-center gap-3 text-xs text-muted; }
 .review-picture { transition: transform .14s ease-out, filter .14s ease-out, opacity .14s ease-out; }
 .review-picture.in-recycle-zone { transform: scale(.78); filter: grayscale(1); opacity: .55; }
 .review-empty { @apply flex flex-col items-center justify-center gap-2.5 text-center text-muted; }

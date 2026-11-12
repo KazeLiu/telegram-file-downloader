@@ -69,6 +69,7 @@ class ImageDedup:
         self.cancelled = threading.Event()
         self.preview_cancelled = False
         self.score_slots = asyncio.Semaphore(1)
+        self.feature_lock = asyncio.Lock()
         self.job = None
 
     def save_job(self, job):
@@ -143,6 +144,33 @@ class ImageDedup:
         if self.job and self.job["owner"] == owner:
             self.cancelled.set()
 
+    async def index_file(self, source, entry):
+        _, size, relative, version = entry
+        file = inside(Path(source["path"]), relative)
+        async with self.feature_lock:
+            row = self.db.execute("SELECT * FROM features WHERE root_id=? AND path=?", (source["id"], relative)).fetchone()
+            cached = bool(row and row["version"] == version and row["algorithm"] == ALGORITHM
+                          and not row["error"] and (self.cache / f"{row['id']}.jpg").is_file())
+            if cached:
+                verify_file(file, version)
+                return dict(row)
+            with self.db:
+                self.db.execute("""INSERT INTO features(root_id,path,version,algorithm,size) VALUES (?,?,?,?,?)
+                    ON CONFLICT(root_id,path) DO UPDATE SET version=excluded.version,algorithm=excluded.algorithm,
+                    size=excluded.size,width=NULL,height=NULL,digest=NULL,phash=NULL,error=''""",
+                    (source["id"], relative, version, ALGORITHM, size))
+            row = self.db.execute("SELECT * FROM features WHERE root_id=? AND path=?", (source["id"], relative)).fetchone()
+            try:
+                result = await asyncio.to_thread(features, file, version, self.cache / f"{row['id']}.jpg")
+            except IMAGE_ERRORS as exc:
+                with self.db:
+                    self.db.execute("UPDATE features SET error=? WHERE id=?", (str(exc), row["id"]))
+            else:
+                with self.db:
+                    self.db.execute("UPDATE features SET width=?,height=?,digest=?,phash=? WHERE id=?",
+                        (result["width"], result["height"], result["digest"], result["phash"], row["id"]))
+            return dict(self.db.execute("SELECT * FROM features WHERE id=?", (row["id"],)).fetchone())
+
     async def scan(self, job):
         seen = set()
         try:
@@ -165,26 +193,8 @@ class ImageDedup:
                             if self.cancelled.is_set():
                                 break
                             job.update(total=job["total"] + 1, current=name)
-                            row = self.db.execute("SELECT * FROM features WHERE root_id=? AND path=?", (source["id"], relative)).fetchone()
-                            cached = bool(row and row["version"] == version and row["algorithm"] == ALGORITHM
-                                          and not row["error"] and (self.cache / f"{row['id']}.jpg").is_file())
-                            if not cached:
-                                with self.db:
-                                    self.db.execute("""INSERT INTO features(root_id,path,version,algorithm,size) VALUES (?,?,?,?,?)
-                                        ON CONFLICT(root_id,path) DO UPDATE SET version=excluded.version,algorithm=excluded.algorithm,
-                                        size=excluded.size,width=NULL,height=NULL,digest=NULL,phash=NULL,error=''""",
-                                        (source["id"], relative, version, ALGORITHM, size))
-                                row = self.db.execute("SELECT * FROM features WHERE root_id=? AND path=?", (source["id"], relative)).fetchone()
-                                try:
-                                    result = await asyncio.to_thread(features, file, version, self.cache / f"{row['id']}.jpg")
-                                except IMAGE_ERRORS as exc:
-                                    with self.db:
-                                        self.db.execute("UPDATE features SET error=? WHERE id=?", (str(exc), row["id"]))
-                                    job["errors"] += 1
-                                else:
-                                    with self.db:
-                                        self.db.execute("UPDATE features SET width=?,height=?,digest=?,phash=? WHERE id=?",
-                                                        (result["width"], result["height"], result["digest"], result["phash"], row["id"]))
+                            row = await self.index_file(source, entry)
+                            job["errors"] += bool(row["error"])
                             with self.db:
                                 self.db.execute("INSERT INTO members(run,file_id,version) VALUES (?,?,?)", (job["id"], row["id"], version))
                             job["done"] += 1
@@ -264,31 +274,36 @@ class ImageDedup:
     async def scores(self, connection, run, reference, ids, disconnected):
         left, left_root = self.record(connection, run, reference)
         result = {}
-        async with self.score_slots:
-            for file_id in dict.fromkeys(ids):
-                if await disconnected():
-                    break
-                try:
-                    right, right_root = self.record(connection, run, file_id)
-                    if right["group_id"] != left["group_id"]:
-                        raise ValueError("请选择当前分组内的参考图")
-                    left_file = inside(Path(left_root["path"]), left["path"])
-                    right_file = inside(Path(right_root["path"]), right["path"])
-                    verify_file(left_file, left["version"])
-                    verify_file(right_file, right["version"])
-                    cached = self.db.execute("""SELECT value FROM scores WHERE left_id=? AND right_id=?
-                        AND left_version=? AND right_version=? AND algorithm=?""",
-                        (left["id"], file_id, left["version"], right["version"], ALGORITHM)).fetchone()
-                    score = cached[0] if cached else await asyncio.to_thread(similarity, left_file, left, right_file, right)
-                    if not cached:
-                        with self.db:
-                            self.db.execute("INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?,?)",
-                                (left["id"], file_id, left["version"], right["version"], ALGORITHM, score))
-                    result[str(file_id)] = dict(ssim=score, distance=(int(left["phash"], 16) ^ int(right["phash"], 16)).bit_count(),
-                                                exact=left["digest"] == right["digest"], error="")
-                except IMAGE_ERRORS as exc:
-                    result[str(file_id)] = dict(error=str(exc))
+        for file_id in dict.fromkeys(ids):
+            if await disconnected():
+                break
+            try:
+                right, right_root = self.record(connection, run, file_id)
+                if right["group_id"] != left["group_id"]:
+                    raise ValueError("请选择当前分组内的参考图")
+                left_file = inside(Path(left_root["path"]), left["path"])
+                right_file = inside(Path(right_root["path"]), right["path"])
+                score = await self.pair_score(left_file, left, right_file, right)
+                result[str(file_id)] = dict(ssim=score, distance=(int(left["phash"], 16) ^ int(right["phash"], 16)).bit_count(),
+                                            exact=left["digest"] == right["digest"], error="")
+            except IMAGE_ERRORS as exc:
+                result[str(file_id)] = dict(error=str(exc))
         return result
+
+    async def pair_score(self, left_file, left, right_file, right):
+        async with self.score_slots:
+            verify_file(left_file, left["version"])
+            verify_file(right_file, right["version"])
+            cached = self.db.execute("""SELECT value FROM scores WHERE left_id=? AND right_id=?
+                AND left_version=? AND right_version=? AND algorithm=?""",
+                (left["id"], right["id"], left["version"], right["version"], ALGORITHM)).fetchone()
+            if cached:
+                return cached[0]
+            score = await asyncio.to_thread(similarity, left_file, left, right_file, right)
+            with self.db:
+                self.db.execute("INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?,?)",
+                    (left["id"], right["id"], left["version"], right["version"], ALGORITHM, score))
+            return score
 
     def preview(self, connection):
         owner = self.cloud.local_owner(connection)

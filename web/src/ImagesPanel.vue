@@ -10,13 +10,15 @@ import { formatNames, photoDay } from './xiaomiMedia'
 import { useBeforeUnload } from './useBeforeUnload'
 
 interface Recycled { id: string; original: string; size: number; created: number; reason: string; state: string; is_image: boolean }
-type View = 'all' | 'candidates' | 'recycle'
+type View = 'all' | 'candidates' | 'compressed' | 'recycle'
+type Comparison = { running: boolean; phase: string; done: number; total: number; baselines: number; errors: number; error: string; current: string; last_check: number | null }
 const route = useRoute()
 const router = useRouter()
 const imageModel = reactive({ view: 'all' as View, organizing: false, items: [] as Picture[], trash: [] as Recycled[], page: 1,
   total: 0, pageSize: 50, nextCursor: null as number | null, recycleRoot: 'downloads', roots: [] as { id: string; path: string }[],
   cleanup: { running: false, checked: 0, removed: 0, failed: 0 },
-  counts: { total: 0, candidates: 0, errors: 0, ready: 0 }, scan: { running: false, done: 0, total: 0, error: '', last_scan: null as number | null },
+  counts: { total: 0, candidates: 0, compressed: 0, comparison_errors: 0, errors: 0, ready: 0 }, scan: { running: false, done: 0, total: 0, error: '', last_scan: null as number | null },
+  comparison: null as Comparison | null,
   search: '', appliedSearch: '', loading: false, loadingMore: false, busy: false, error: '', selected: new Map<number, Picture>(), selectedDays: new Set<string>(),
   confirmation: [] as Picture[], broken: {} as Record<number, boolean> })
 const props = defineProps<{ lastLocalRecycle: string[] }>()
@@ -37,7 +39,9 @@ const blocked = computed(() => imageModel.loading || imageModel.busy)
 const toolbarBlocked = computed(() => blocked.value || imageModel.loadingMore)
 const canLoadMore = computed(() => imageModel.view !== 'recycle' && imageModel.nextCursor !== null)
 const listedScan = ref<number | null>(null)
-const indexUpdated = computed(() => !imageModel.scan.running && !imageModel.scan.error && imageModel.scan.last_scan !== listedScan.value)
+const listedComparison = ref<number | null>(null)
+const indexUpdated = computed(() => !imageModel.scan.running && !imageModel.scan.error && imageModel.scan.last_scan !== listedScan.value
+  || !!imageModel.comparison?.last_check && !imageModel.comparison.running && imageModel.comparison.last_check !== listedComparison.value)
 const allSelected = computed(() => imageModel.items.length > 0 && imageModel.items.every(isSelected))
 let timer: ReturnType<typeof setInterval>
 let observer: IntersectionObserver | undefined
@@ -64,7 +68,7 @@ function imageRoute(value = imageModel.view, page = 1, search = imageModel.appli
 async function readRoute() {
   if (disposed || !route.path.startsWith('/images')) return
   const value = route.path.split('/')[2]
-  const view: View = value === 'candidates' || value === 'recycle' ? value : 'all'
+  const view: View = value === 'candidates' || value === 'compressed' || value === 'recycle' ? value : 'all'
   const search = queryText(route.query.search)
   const root = queryText(route.query.root) || 'downloads'
   const page = queryPage(route.query.page)
@@ -100,13 +104,13 @@ function reviewChanged(id: number) {
 function isSelected(item: Picture) { return imageModel.selected.get(item.id)?.version === item.version }
 function clearSelection() { imageModel.selected.clear(); imageModel.selectedDays.clear() }
 function imageQuery() {
-  return new URLSearchParams({ candidate: String(imageModel.view === 'candidates'), search: imageModel.appliedSearch })
+  return new URLSearchParams({ candidate: String(imageModel.view === 'candidates'), compressed: String(imageModel.view === 'compressed'), search: imageModel.appliedSearch })
 }
 function listImages(after?: number | null) {
   const query = imageQuery()
   if (after != null) query.set('after', String(after))
   return api<{ items: Picture[]; total: number; next_cursor: number | null;
-    scan: typeof imageModel.scan; counts: typeof imageModel.counts }>(`/images?${query}`, undefined, 'GET', readController.signal)
+    scan: typeof imageModel.scan; counts: typeof imageModel.counts; comparison: Comparison | null }>(`/images?${query}`, undefined, 'GET', readController.signal)
 }
 async function load({ append = false } = {}) {
   if (disposed || imageModel.loading || imageModel.loadingMore || (append && (!canLoadMore.value || blocked.value))) return
@@ -129,6 +133,7 @@ async function load({ append = false } = {}) {
       const result = await listImages(append ? imageModel.nextCursor : null)
       if (revision !== loadRevision) return
       imageModel.scan = result.scan; imageModel.counts = result.counts
+      imageModel.comparison = result.comparison
       if (append) {
         const loaded = new Set(imageModel.items.map(item => item.id))
         const added = result.items.filter(item => !loaded.has(item.id))
@@ -138,6 +143,7 @@ async function load({ append = false } = {}) {
       } else {
         imageModel.items = result.items; imageModel.total = result.total; imageModel.nextCursor = result.next_cursor; imageModel.broken = {}
         listedScan.value = result.scan.last_scan
+        listedComparison.value = result.comparison?.last_check ?? null
       }
     }
   } catch (error) { if (revision === loadRevision) imageModel.error = (error as Error).message }
@@ -151,9 +157,10 @@ async function pollStatus() {
   polling = true
   const revision = loadRevision
   try {
-    const result = await api<{ total: number; scan: typeof imageModel.scan; counts: typeof imageModel.counts }>(`/images/status?${imageQuery()}`, undefined, 'GET', readController.signal)
+    const result = await api<{ total: number; scan: typeof imageModel.scan; counts: typeof imageModel.counts; comparison: Comparison | null }>(`/images/status?${imageQuery()}`, undefined, 'GET', readController.signal)
     if (revision !== loadRevision) return
     imageModel.scan = result.scan; imageModel.counts = result.counts; imageModel.total = result.total
+    imageModel.comparison = result.comparison
     if (!imageModel.items.length && result.total && activeReview === null && !confirmDialog.value?.open) await load()
   } catch (error) { if (revision === loadRevision) imageModel.error = (error as Error).message }
   finally { polling = false }
@@ -279,6 +286,7 @@ async function recycle() {
       imageModel.total = Math.max(0, imageModel.total - moved.size)
       imageModel.counts.total = Math.max(0, imageModel.counts.total - moved.size)
       imageModel.counts.candidates = Math.max(0, imageModel.counts.candidates - removed.filter(item => item.monochrome).length)
+      imageModel.counts.compressed = Math.max(0, imageModel.counts.compressed - removed.filter(item => item.saved_match).length)
       imageModel.counts.errors = Math.max(0, imageModel.counts.errors - removed.filter(item => item.error).length)
       emit('message', `已将 ${moved.size} 张图片移入回收站`)
     }
@@ -394,6 +402,7 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
       <div class="image-tabs" role="tablist" aria-label="图片视图">
         <button role="tab" :aria-selected="imageModel.view === 'all'" :disabled="imageModel.busy" @click="view('all')">全部图片 <span>{{ imageModel.counts.total || 0 }}</span></button>
         <button role="tab" :aria-selected="imageModel.view === 'candidates'" :disabled="imageModel.busy" @click="view('candidates')">黑白候选 <span>{{ imageModel.counts.candidates || 0 }}</span></button>
+        <button role="tab" :aria-selected="imageModel.view === 'compressed'" :disabled="imageModel.busy" @click="view('compressed')">重复图 <span>{{ imageModel.counts.compressed || 0 }}</span></button>
         <button role="tab" :aria-selected="imageModel.view === 'recycle'" :disabled="imageModel.busy" @click="view('recycle')">回收站</button>
       </div>
       <div class="image-toolbar-actions">
@@ -407,6 +416,9 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
     </div>
     <p v-if="imageModel.error" class="notice error" role="alert">{{ imageModel.error }}</p>
     <p v-if="imageModel.scan.error && imageModel.view !== 'recycle'" class="notice error" role="alert">扫描失败：{{ imageModel.scan.error }}</p>
+    <p v-if="imageModel.comparison?.error && imageModel.view !== 'recycle'" class="notice error" role="alert">已存图片检查：{{ imageModel.comparison.error }}</p>
+    <div v-if="imageModel.comparison?.running && imageModel.view !== 'recycle'" class="image-scan" role="status"><span><Icon name="compare" :size="16" />{{ imageModel.comparison.phase === 'indexing' ? `正在缓存绑定目录图片 · ${imageModel.comparison.baselines} 张` : `正在与已存图片比对 · ${imageModel.comparison.done} / ${imageModel.comparison.total} 张` }}</span><progress v-if="imageModel.comparison.phase === 'comparing'" :value="imageModel.comparison.done" :max="imageModel.comparison.total" aria-label="已存图片比对进度" /></div>
+    <p v-if="imageModel.counts.comparison_errors && imageModel.view !== 'recycle'" class="notice">{{ imageModel.counts.comparison_errors }} 张图片的已存检查未完成，可点“刷新图片”重试；原文件保留。</p>
     <p v-if="imageModel.counts.errors && imageModel.view !== 'recycle'" class="notice">{{ imageModel.counts.errors }} 张图片读取失败，可在“全部图片”中查看；原文件保留。</p>
     <div v-if="imageModel.scan.running && imageModel.view !== 'recycle'" class="image-scan" role="status"><span><Icon name="loader" class="loading-icon" :size="16" />{{ imageModel.scan.total ? `后台已检查 ${imageModel.scan.done} / ${imageModel.scan.total} 张 · 已就绪 ${imageModel.counts.ready || 0} 张，可继续浏览` : '正在后台读取根目录图片…' }}</span><progress v-if="imageModel.scan.total" :value="imageModel.scan.done" :max="imageModel.scan.total" aria-label="图片分析进度" /></div>
     <p v-if="indexUpdated && imageModel.view !== 'recycle'" class="notice" role="status">后台图片检查已完成。<button class="text-button" :disabled="toolbarBlocked || selectedCount > 0" @click="updateImages">更新图片列表</button><span v-if="selectedCount">请先处理或清空已选图片。</span></p>
@@ -416,16 +428,21 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
         <span class="muted" title="拍摄时间优先，其次图片日期，缺失时使用原修改时间">{{ imageModel.total }} 张 · 按照片时间从新到旧</span>
         <button v-if="imageModel.organizing" class="text-button" :disabled="blocked || !imageModel.items.length" @click="selectLoaded">{{ allSelected ? '取消已加载选择' : '全选已加载' }}</button>
       </div>
-      <VirtualPhotoWall class="image-grid" :items="imageModel.items" :disabled="blocked" :is-selected="isSelected" :aria-busy="imageModel.loading || imageModel.loadingMore" @toggle-day="selectDay">
+      <VirtualPhotoWall :class="imageModel.view === 'compressed' ? 'compressed-wall' : 'image-grid'" :items="imageModel.items" :disabled="blocked" :is-selected="isSelected" :aria-busy="imageModel.loading || imageModel.loadingMore" @toggle-day="selectDay">
         <template #default="{ item }">
         <article class="image-card">
-          <button type="button" class="image-preview" :title="item.name" :disabled="blocked"
-            :aria-label="(imageModel.organizing ? '选择 ' : '快速审阅 ') + item.name" :aria-pressed="imageModel.organizing ? isSelected(item) : undefined"
+          <button type="button" class="image-preview" :title="(item.saved_match ? '重复图 · ' : '') + item.name" :disabled="blocked"
+            :aria-label="(imageModel.organizing ? '选择 ' : '快速审阅 ') + (item.saved_match ? '重复图 ' : '') + item.name" :aria-pressed="imageModel.organizing ? isSelected(item) : undefined"
             aria-keyshortcuts="Shift+Enter" @click="activateImage($event, item)" @keydown.shift.enter.prevent="!$event.repeat && review(item)"
             @pointerdown="startPress($event, item)" @pointermove="movePress" @pointerup="stopPress" @pointerleave="stopPress" @pointercancel="stopPress" @contextmenu.prevent>
-            <span class="image-thumb">
+            <span v-if="imageModel.view === 'compressed' && item.saved_match" class="compressed-pair">
+              <span><strong>下载图片</strong><img :src="thumbnail(item)" alt="下载图片" draggable="false" loading="lazy" /><small>{{ item.width }} × {{ item.height }} · {{ bytes(item.size) }}</small></span>
+              <span><strong>已存图片</strong><img :src="`/api/images/${item.id}/saved/thumbnail?version=${encodeURIComponent(item.version)}`" alt="绑定目录中的已存图片" draggable="false" loading="lazy" /><small>{{ item.saved_match.width }} × {{ item.saved_match.height }} · {{ bytes(item.saved_match.size) }}</small></span>
+            </span>
+            <span v-else class="image-thumb">
               <img v-if="item.width && !item.error && !imageModel.broken[item.id]" :src="thumbnail(item)" alt="" draggable="false" loading="lazy" decoding="async" @error="imageModel.broken[item.id] = true" />
               <Icon v-else name="photo" class="text-muted" :size="16" />
+              <span v-if="item.saved_match" class="compressed-mark" title="重复图"><Icon name="compare" :size="13" /></span>
             </span>
           </button>
         </article>
@@ -434,7 +451,7 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
       <div v-if="canLoadMore" class="image-more"><button ref="moreButton" class="text-button" :disabled="toolbarBlocked" @click="loadMore">{{ imageModel.loadingMore ? '正在加载…' : '加载更多' }}</button></div>
       <div v-if="!imageModel.items.length && !canLoadMore && !imageModel.loading && !imageModel.error" class="empty-list tall">
         <Icon name="photo" :size="38" />
-        <h2>{{ imageModel.scan.running ? '正在整理图片索引' : imageModel.appliedSearch ? '没有匹配的图片' : imageModel.view === 'candidates' ? '暂无黑白候选' : '根目录还没有图片' }}</h2>
+        <h2>{{ imageModel.scan.running ? '正在整理图片索引' : imageModel.appliedSearch ? '没有匹配的图片' : imageModel.view === 'compressed' ? imageModel.comparison?.running ? '正在与已存图片比对' : imageModel.comparison?.phase === 'unbound' ? '请先在小米相册绑定本地目录' : imageModel.comparison?.phase === 'waiting' ? '等待目录索引和当前文件操作完成' : '暂无重复图' : imageModel.view === 'candidates' ? '暂无黑白候选' : '根目录还没有图片' }}</h2>
         <p v-if="!imageModel.scan.running && !imageModel.appliedSearch && imageModel.view === 'all'">这里只展示直接放在下载根目录的图片，不进入子文件夹。</p>
       </div>
       <button v-if="imageModel.organizing && selectedCount" class="danger recycle-selection" :disabled="blocked" @click="confirm()"><Icon name="trash" :size="16" />移入回收站 · {{ selectedCount }} 张</button>
@@ -494,6 +511,16 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
 <style scoped>
 @reference '../app/assets/main.css';
 .image-library { overflow-anchor: none; }
+.image-tabs { @apply max-w-full overflow-x-auto whitespace-nowrap; }
+.image-tabs button { @apply shrink-0; }
+.compressed-wall { @apply grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3; }
+.compressed-pair { @apply pointer-events-none grid size-full grid-cols-2 gap-2 p-3; }
+.compressed-pair > span { @apply flex min-h-0 min-w-0 flex-col gap-2; }
+.compressed-pair strong { @apply text-sm font-medium; }
+.compressed-pair img { @apply h-0 min-h-0 w-full flex-1 object-contain; }
+.compressed-pair small { @apply truncate text-xs text-muted; }
+.image-preview[aria-pressed=true] .compressed-pair { @apply ring-2 ring-blue ring-inset; }
+.compressed-mark { @apply absolute right-0 bottom-0 grid size-5 place-items-center rounded-tl-md bg-blue text-white; }
 .recycle-wall { @apply grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
 .recycle-toolbar { @apply my-3 flex flex-wrap items-end gap-3; }
 .recycle-toolbar .search-box { @apply min-w-0; flex: 1 1 260px; max-width: 360px; }

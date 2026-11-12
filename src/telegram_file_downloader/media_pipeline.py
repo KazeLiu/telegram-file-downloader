@@ -63,11 +63,12 @@ def size_text(value):
 
 class ConsoleProcessor:
     """Persist intake before advancing Telegram history; execute independently."""
-    def __init__(self, client, directory, history, recorder, store, settings, operation_lock, images_changed):
+    def __init__(self, client, directory, history, recorder, store, settings, operation_lock, images_changed, check_images=None):
         self.client, self.directory, self.history = client, directory, history
         self.recorder, self.store, self.settings = recorder, store, settings
         self.operation_lock = operation_lock
         self.images_changed = images_changed
+        self.check_images = check_images
         self.receipt_disabled_until = 0.0
         self.receipt_lock = asyncio.Lock()
         self.running = {}
@@ -341,6 +342,8 @@ class ConsoleProcessor:
             self.pending_groups.add(task.get("group_id") or str(task_id))
             if task["kind"] == "photo":
                 self.images_changed()
+                if self.check_images:
+                    self.check_images([task_id], [Path(path).name])
             LOGGER.info("task=%s download complete path=%s", task_id, path)
         except asyncio.CancelledError:
             current = self.store.task(task_id)
@@ -469,6 +472,9 @@ class ConsoleProcessor:
                     result_files=result["moved"], deleted_psds=result["deleted_psds"], deleted_txts=result["deleted_txts"],
                     recycled_psds=result["recycled_psds"], recycled_txts=result["recycled_txts"])
                 self.final_receipts.add(task["id"])
+            if self.check_images:
+                self.check_images([task["id"] for task in members],
+                    [Path(move["target"]).name for move in plan["moves"] if move["done"]] if flattened else [])
             LOGGER.info("group=%s workflow complete moved=%s recycled_psds=%s recycled_txts=%s", group, result["moved"], result["recycled_psds"], result["recycled_txts"])
             self.store.refresh_archive_sets(leader["scope"], leader.get("volume_signature") or None)
         except (ExtractionError, OSError, ValueError) as exc:
