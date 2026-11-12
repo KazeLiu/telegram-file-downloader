@@ -241,7 +241,7 @@ class ImageLibrary:
             SUM(saved_scope=? AND saved_match<>'') AS compressed,
             SUM(saved_scope=? AND saved_error<>'') AS comparison_errors FROM images WHERE active=1""", (scope, scope)).fetchone()
         return dict(total=total, counts=dict(counts), scan=self.state,
-                    comparison=self.saved_check.state if self.saved_check else None)
+                    comparison=self.saved_check.status() if self.saved_check else None)
 
     def listing(self, page=1, candidate=False, search="", after=None, compressed=False):
         condition = READY_IMAGES + " AND instr(lower(name),lower(?))>0" + (" AND monochrome=1" if candidate else "")

@@ -5,6 +5,7 @@ import { api, bytes } from './api'
 import { queryPage, queryText } from './routeState'
 import { useBeforeUnload } from './useBeforeUnload'
 import Icon from './Icon.vue'
+import WorkflowImageCheck from './WorkflowImageCheck.vue'
 
 type Source = { id: string; path: string; albums: { id: string; name: string }[]; available: boolean }
 type Job = { id: string; roots: Source[]; distance: number; running: boolean; phase: string; done: number; total: number; errors: number; groups: number; matched: number; error: string; current: string }
@@ -242,6 +243,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); reads.abort(); scoreRe
     <div v-if="!model.initialized" class="empty-list" role="status">正在读取绑定目录…</div>
     <div v-else-if="!model.account" class="empty-list tall"><Icon name="cloud" :size="36" /><h2>先连接小米云相册</h2><button class="primary mt-4" @click="router.push('/xiaomi')">连接小米云</button></div>
     <template v-else>
+      <WorkflowImageCheck :connection="model.account.connection" :sources="model.sources" @refresh="refreshSources().catch(error => model.error = error.message)" />
       <section class="dedup-setup">
         <div class="setup-toolbar">
           <button class="text-button min-w-0" :aria-expanded="model.foldersOpen" @click="model.foldersOpen = !model.foldersOpen"><Icon name="folder" />选择目录 · {{ model.roots.size }}<Icon name="down" :size="15" /></button>

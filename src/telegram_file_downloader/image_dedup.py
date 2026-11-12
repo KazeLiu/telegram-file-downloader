@@ -150,7 +150,8 @@ class ImageDedup:
         async with self.feature_lock:
             row = self.db.execute("SELECT * FROM features WHERE root_id=? AND path=?", (source["id"], relative)).fetchone()
             cached = bool(row and row["version"] == version and row["algorithm"] == ALGORITHM
-                          and not row["error"] and (self.cache / f"{row['id']}.jpg").is_file())
+                          and not row["error"] and row["phash"] and row["digest"]
+                          and row["width"] and row["height"] and (self.cache / f"{row['id']}.jpg").is_file())
             if cached:
                 verify_file(file, version)
                 return dict(row)

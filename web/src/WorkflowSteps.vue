@@ -22,7 +22,7 @@ const nodes = computed(() => [
   { id: 'extract', title: props.task?.manual_extract_only ? '手动解压' : '完整解压', icon: 'folder', detail: props.task?.manual_source === 'external' ? '由你确认已在外部解压，只更新记录，不检查原包。' : props.task?.manual_extract_only ? '整组仅解压到资源文件夹，保留原包；后续由你手动整理和处理图片。' : props.settings?.extract === false ? '自动解压已关闭。' : '先无密码，再尝试保存的密码；失败保留原包。' },
   { id: 'organize', title: '平铺到根目录', icon: 'workflow', detail: props.task?.result_files ? `已整理 ${props.task.result_files} 个文件到下载根目录。` : '资源A/第一套/001.jpg → 资源A-第一套-001.jpg' },
   { id: legacyPdf.value ? 'pdf' : legacyPsd.value ? 'psd' : 'cleanup', title: legacyPdf.value ? '旧版 PDF 清理' : legacyPsd.value ? '旧版 PSD 清理' : '回收 PSD / TXT', icon: 'trash', detail: cleanupDetail.value },
-  { id: 'image_check', title: '已存图片检查', icon: 'compare', detail: props.task?.image_check_error || props.task?.image_check_reason || (props.task?.image_check_total ? `本批已检查 ${props.task.image_check_done || 0} / ${props.task.image_check_total} 张，重复图 ${props.task.image_check_compressed || 0} 张。在「本地图片快筛 → 重复图」对照后决定是否回收。` : '整理后的图片会在后台与已绑定目录比对，疑似压缩版本放入「本地图片快筛 → 重复图」，由你决定是否保留。') },
+  { id: 'image_check', title: '已存图片检查', icon: 'compare', detail: props.task?.image_check_error || props.task?.image_check_reason || (props.task?.image_check_total ? `本批已检查 ${props.task.image_check_done || 0} / ${props.task.image_check_total} 张，重复图 ${props.task.image_check_compressed || 0} 张。在「本地图片快筛 → 重复图」对照后决定是否回收。` : '在「图片去重」中开启工作流自动检查并保存目录后，整理后的图片只与所选目录比对，结果在「本地图片快筛 → 重复图」查看。') },
   { id: 'cloud', title: '小米云相册', icon: 'cloud', detail: '在侧栏打开「小米云相册」手动上传；此工作流不自动上传。' },
 ])
 function state(id: string) {

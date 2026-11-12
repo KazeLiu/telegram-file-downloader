@@ -76,6 +76,7 @@ class XiaomiLocalIndex:
         if os.name != "nt":
             self.database.chmod(0o600)
         self.requested = set()
+        self.priority = set()
         self.progress = {}
         self.scan_errors = {}
         self.wake = asyncio.Event()
@@ -222,6 +223,10 @@ class XiaomiLocalIndex:
             while not self.closing:
                 if not self.db.execute("SELECT 1 FROM bindings WHERE root_id=? LIMIT 1", (root_id,)).fetchone():
                     break
+                if root_id not in self.priority and self.priority & self.requested:
+                    self.requested.add(root_id)
+                    self.wake.set()
+                    break
                 if self.busy():
                     self.progress[root_id]["state"] = "waiting"
                     await asyncio.sleep(2)
@@ -254,12 +259,17 @@ class XiaomiLocalIndex:
         while not self.closing:
             self.wake.clear()
             sources = self.db.execute("SELECT * FROM roots WHERE EXISTS (SELECT 1 FROM bindings WHERE bindings.root_id=roots.id)").fetchall()
+            self.priority.intersection_update(source["id"] for source in sources)
+            sources.sort(key=lambda source: source["id"] not in self.priority)
             for source in sources:
                 if self.closing:
                     break
                 if source["id"] in self.requested or source["attempted"] < time.time() - REFRESH_INTERVAL:
                     self.requested.discard(source["id"])
                     await self.scan(source)
+                    if self.priority & self.requested:
+                        self.wake.set()
+                        break
             if not self.closing and not self.wake.is_set():
                 try:
                     await asyncio.wait_for(self.wake.wait(), timeout=60)

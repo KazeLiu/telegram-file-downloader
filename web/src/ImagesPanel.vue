@@ -451,7 +451,8 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
       <div v-if="canLoadMore" class="image-more"><button ref="moreButton" class="text-button" :disabled="toolbarBlocked" @click="loadMore">{{ imageModel.loadingMore ? '正在加载…' : '加载更多' }}</button></div>
       <div v-if="!imageModel.items.length && !canLoadMore && !imageModel.loading && !imageModel.error" class="empty-list tall">
         <Icon name="photo" :size="38" />
-        <h2>{{ imageModel.scan.running ? '正在整理图片索引' : imageModel.appliedSearch ? '没有匹配的图片' : imageModel.view === 'compressed' ? imageModel.comparison?.running ? '正在与已存图片比对' : imageModel.comparison?.phase === 'unbound' ? '请先在小米相册绑定本地目录' : imageModel.comparison?.phase === 'waiting' ? '等待目录索引和当前文件操作完成' : '暂无重复图' : imageModel.view === 'candidates' ? '暂无黑白候选' : '根目录还没有图片' }}</h2>
+        <h2>{{ imageModel.scan.running ? '正在整理图片索引' : imageModel.appliedSearch ? '没有匹配的图片' : imageModel.view === 'compressed' ? imageModel.comparison?.running ? '正在与已存图片比对' : imageModel.comparison?.phase === 'disabled' ? '工作流自动检查已关闭' : imageModel.comparison?.phase === 'unbound' ? '尚未选择有效的工作流检查目录' : imageModel.comparison?.phase === 'waiting' ? '等待目录索引和当前文件操作完成' : '暂无重复图' : imageModel.view === 'candidates' ? '暂无黑白候选' : '根目录还没有图片' }}</h2>
+        <button v-if="imageModel.view === 'compressed' && ['disabled', 'unbound'].includes(imageModel.comparison?.phase ?? '')" class="secondary" @click="router.push('/dedup')">设置工作流自动检查</button>
         <p v-if="!imageModel.scan.running && !imageModel.appliedSearch && imageModel.view === 'all'">这里只展示直接放在下载根目录的图片，不进入子文件夹。</p>
       </div>
       <button v-if="imageModel.organizing && selectedCount" class="danger recycle-selection" :disabled="blocked" @click="confirm()"><Icon name="trash" :size="16" />移入回收站 · {{ selectedCount }} 张</button>

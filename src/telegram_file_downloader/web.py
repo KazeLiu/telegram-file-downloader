@@ -205,6 +205,11 @@ class DedupRecycle(XiaomiConnection):
     token: str = Field(pattern=CONNECTION_PATTERN)
 
 
+class WorkflowImageSettings(XiaomiConnection):
+    enabled: bool
+    roots: list[Annotated[str, Field(pattern=CONNECTION_PATTERN)]] = Field(default_factory=list, max_length=100)
+
+
 def create_app():
     data_dir = Path(os.environ.get("DATA_DIR", str(Path.cwd() / "data"))).resolve()
     download_dir = Path(os.environ.get("DOWNLOAD_DIR", str(Path.cwd() / "downloads"))).resolve()
@@ -432,6 +437,7 @@ def create_app():
     @app.post("/api/xiaomi/disconnect")
     async def xiaomi_disconnect(body: XiaomiConnection):
         xiaomi.disconnect(body.connection)
+        saved_check.request()
         return {"ok": True}
 
     @app.post("/api/xiaomi/qr")
@@ -488,6 +494,7 @@ def create_app():
             local_index.bind(owner, body.album, body.path.strip())
         except OSError:
             raise ValueError("无法读取此目录，请检查路径、挂载和读取权限") from None
+        saved_check.request()
         return {"ok": True}
 
     @app.post("/api/xiaomi/local/refresh")
@@ -692,7 +699,7 @@ def create_app():
 
     @app.post("/api/images/scan")
     async def scan_images():
-        saved_check.request(refresh=False, force=True)
+        saved_check.request(refresh=True, force=True)
         return library.start_scan()
 
     @app.get("/api/images")
@@ -835,6 +842,22 @@ def create_app():
         if not file.is_file():
             raise HTTPException(404, "日志文件不存在")
         return FileResponse(file, filename=name, media_type="text/plain")
+
+    @app.get("/api/dedup/automatic")
+    async def automatic_image_settings(connection: str = Query(pattern=CONNECTION_PATTERN)):
+        return saved_check.settings(connection)
+
+    @app.post("/api/dedup/automatic")
+    async def save_automatic_image_settings(body: WorkflowImageSettings):
+        return saved_check.save_settings(body.connection, body.enabled, body.roots)
+
+    @app.post("/api/dedup/automatic/refresh")
+    async def refresh_automatic_image_cache(body: XiaomiConnection):
+        settings = saved_check.settings(body.connection)
+        if not settings["enabled"] or not settings["roots"]:
+            raise ValueError("请先开启工作流自动检查并保存目录")
+        saved_check.request(refresh=True, force=True)
+        return {"ok": True}
 
     @app.get("/api/dedup/sources")
     async def dedup_sources(connection: str = Query(pattern=CONNECTION_PATTERN)):
