@@ -358,7 +358,7 @@ onBeforeUnmount(() => { disposed = true; readController.abort(); clearTimeout(po
             <XiaomiNameRecycle :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :album-name="albumName"
               :last-local-recycle="props.lastLocalRecycle" :disabled="!!cloud.busy || cloud.organizing" @confirm="recycleDialog?.open($event)" />
             <button class="secondary" :disabled="!!cloud.busy || cloud.organizing || !albumName || cloud.album === '1000'" @click="openUpload">从此设备上传</button>
-            <XiaomiBatchUpload :key="cloud.account.connection" :connection="cloud.account.connection" :album="cloud.album" :albums="cloud.albums" :disabled="!!cloud.busy || cloud.organizing || !albumName"
+            <XiaomiBatchUpload :key="`${cloud.account.connection}:${cloud.album}`" :connection="cloud.account.connection" :album="cloud.album" :albums="cloud.albums" :disabled="!!cloud.busy || cloud.organizing || !albumName"
               @message="emit('message', $event)" @finished="batchFinished" />
           </div>
         </div>

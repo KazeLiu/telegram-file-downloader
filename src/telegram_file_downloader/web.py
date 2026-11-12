@@ -546,18 +546,37 @@ def create_app():
         return {"items": linked_recycle.pending(connection)}
 
     @app.get("/api/xiaomi/local-media")
-    async def xiaomi_local_media(connection: str = Query(pattern=CONNECTION_PATTERN)):
-        batch.account(connection)
-        return {"items": await asyncio.to_thread(local_media, download_dir)}
+    async def xiaomi_local_media(connection: str = Query(pattern=CONNECTION_PATTERN),
+                                 album: str | None = Query(default=None, pattern=ID_PATTERN)):
+        owner = batch.account(connection)
+        items = await asyncio.to_thread(local_media, download_dir)
+        return {"items": batch.files(owner, album, items) if album else items}
+
+    @app.get("/api/xiaomi/batch/history")
+    async def xiaomi_batch_history(connection: str = Query(pattern=CONNECTION_PATTERN),
+                                    album: str = Query(pattern=ID_PATTERN)):
+        return {"items": batch.journal.history(batch.account(connection), album)}
+
+    @app.post("/api/xiaomi/batch/recover")
+    async def xiaomi_batch_recover(body: XiaomiAlbumSelection):
+        owner = batch.account(body.connection)
+        items = await asyncio.to_thread(local_media, download_dir)
+        if not items:
+            raise ValueError("下载根目录没有符合条件的图片或视频")
+        items = [item for item in batch.files(owner, body.album, items) if not item["uploaded"]]
+        if not items:
+            raise ValueError("当前文件均有已确认回执，请在上传记录中选择原批次核对或回收")
+        return {"job": await batch.start(body.connection, body.album, items, recover=True)}
 
     @app.get("/api/xiaomi/batch")
-    async def xiaomi_batch(connection: str = Query(pattern=CONNECTION_PATTERN), page: int = Query(default=1, ge=1)):
-        return {"job": batch.view(connection, page)}
+    async def xiaomi_batch(connection: str = Query(pattern=CONNECTION_PATTERN), page: int = Query(default=1, ge=1),
+                           job: str | None = Query(default=None, pattern=CONNECTION_PATTERN),
+                           album: str | None = Query(default=None, pattern=ID_PATTERN)):
+        return {"job": batch.view(connection, page, job or "", album or "")}
 
     @app.post("/api/xiaomi/batch")
     async def xiaomi_batch_start(body: XiaomiBatchSelection):
-        await batch.start(body.connection, body.album, [item.model_dump() for item in body.items])
-        return {"ok": True}
+        return {"ok": True, "job": await batch.start(body.connection, body.album, [item.model_dump() for item in body.items])}
 
     @app.post("/api/xiaomi/batch/verify")
     async def xiaomi_batch_verify(body: XiaomiBatchAction):
@@ -591,6 +610,7 @@ def create_app():
             async with runtime.operation_lock:
                 moved = await batch.recycle_images(job, candidates)
                 job["revision"] += 1
+                batch.journal.save(job)
         if moved:
             library.start_scan()
         return {"moved": moved}

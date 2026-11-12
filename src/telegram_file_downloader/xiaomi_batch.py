@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
+import sqlite3
+import time
 from collections import Counter, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,7 +14,8 @@ from stat import S_ISREG
 from uuid import uuid4
 
 from .storage import RecycleBin, file_version, inside, is_link
-from .xiaomi_cloud import UPLOAD_LIMIT, XiaomiError, receipt_record, record_time, upload_media
+from .xiaomi_cloud import UPLOAD_LIMIT, XiaomiError, receipt_record, record_time, remote_id, upload_media
+from .xiaomi_upload_journal import UploadJournal
 
 
 LOGGER = logging.getLogger(__name__)
@@ -77,10 +81,22 @@ def selected_file(root, item):
     return path, info
 
 
+def local_digest(root, item):
+    path, _ = selected_file(root, item)
+    with path.open("rb") as file:
+        if file_version(os.fstat(file.fileno())) != item["version"]:
+            raise ValueError("本地文件已变化，请刷新后重试")
+        digest = hashlib.file_digest(file, "sha1").hexdigest()
+        if file_version(os.fstat(file.fileno())) != item["version"]:
+            raise ValueError("核对期间本地文件已变化，已保留原文件")
+    return digest
+
+
 class XiaomiBatch:
     def __init__(self, cloud, root):
         self.cloud = cloud
         self.root = root
+        self.journal = UploadJournal(cloud.store)
         self.job = None
         self.task = None
 
@@ -93,27 +109,122 @@ class XiaomiBatch:
         account = self.cloud.account()
         if not account or account["connection"] != connection:
             raise XiaomiError("小米账号连接已变化，请刷新页面", 409)
+        return self.cloud.local_owner(connection)
+
+    def files(self, owner, album, items):
+        known = self.journal.confirmed(owner, album, str(self.root.resolve()))
+        return [dict(item, uploaded=(item["name"], item["version"]) in known) for item in items]
+
+    def get_job(self, connection, job_id="", album=""):
+        owner = self.account(connection)
+        job = self.job
+        active = job and (job["state"] not in {"complete", "stopped"}
+                          or bool(job["verification"] and job["verification"]["active"]))
+        if not (job and job["owner"] == owner and (job_id or active)
+                and (not job_id or job["id"] == job_id)
+                and (not album or job["album"] == album)):
+            job = self.journal.load(owner, job_id, album)
+        if job:
+            job["connection"] = connection
+            if "gate" not in job:
+                job["gate"] = asyncio.Event()
+                job["gate"].set()
+        return job
 
     def idle(self):
         if self.cloud.write_lock.locked():
             raise XiaomiError("请等待当前云端操作结束", 409)
 
-    async def start(self, connection, album, selected):
-        self.account(connection)
+    async def start(self, connection, album, selected, *, recover=False):
+        owner = self.account(connection)
         self.idle()
         if album == "1000":
             raise XiaomiError("请在小米云网页版向隐私相册上传", 400)
         if len({item["name"] for item in selected}) != len(selected):
             raise ValueError("上传清单中有重复文件，请重新选择")
         await self.cloud.write_lock.acquire()
-        job = self.job = dict(id=uuid4().hex, connection=connection, album=album, state="uploading",
+        job = dict(id=uuid4().hex, connection=connection, album=album, state="verifying" if recover else "uploading",
+                              owner=owner, root=str(self.root.resolve()), created=time.time(), mode="recover" if recover else "upload",
                               error="", done=0, revision=0,
                               verification=None,
                               gate=asyncio.Event(),
                               items=[dict(item, status="waiting", error="") for item in selected])
         job["gate"].set()
+        try:
+            self.journal.save(job, initial=True)
+        except sqlite3.Error:
+            self.cloud.write_lock.release()
+            raise
+        self.job = job
         LOGGER.info("Xiaomi batch started batch=%s album=%s files=%s concurrency=%s", job["id"], album, len(selected), UPLOAD_CONCURRENCY)
-        self.task = asyncio.create_task(self.run(job), name="xiaomi-local-upload")
+        self.task = asyncio.create_task(self.recover(job) if recover else self.run(job), name="xiaomi-local-upload")
+        return job["id"]
+
+    async def recover(self, job):
+        """Rebuild lost receipts from current album contents, without uploading anything."""
+        progress = job["verification"] = dict(active=True, phase="recovery", done=0, total=len(job["items"]),
+                                               pages=0, page=0, start=None, end=None, error="")
+        remaining = {item["name"]: item for item in job["items"]}
+        digests, seen = {}, set()
+        self.journal.save(job)
+        try:
+            page = 0
+            while remaining and job["state"] != "stopping":
+                progress["page"] = page + 1
+                entries, last = await self.cloud.media_page(job["connection"], job["album"], page, 200)
+                progress["pages"] += 1
+                ids = tuple(str(entry.get("id")) for entry in entries)
+                if not last and (not ids or ids in seen):
+                    raise XiaomiError("小米云未返回完整相册列表，未确认的文件已保留")
+                seen.add(ids)
+                for entry in entries:
+                    if job["state"] == "stopping":
+                        break
+                    name = entry.get("fileName")
+                    item = remaining.get(name) if isinstance(name, str) else None
+                    if not item or entry.get("type") != item["kind"] or str(entry.get("size")) != str(item["size"]):
+                        continue
+                    if item["name"] not in digests:
+                        try:
+                            digests[item["name"]] = await asyncio.to_thread(local_digest, self.root, item)
+                        except (OSError, ValueError) as exc:
+                            item.update(status="failed", error=str(exc))
+                            remaining.pop(item["name"])
+                            job["done"] += 1
+                            self.journal.save(job, item)
+                            continue
+                    receipt = (remote_id(entry.get("id")), digests[item["name"]], str(item["size"]))
+                    if matches_receipt(entry, receipt, job["album"], scoped=True):
+                        record = receipt_record(entry)
+                        item.update(status="verified", error="", receipt=receipt, record=record, lookup_time=record_time(record))
+                        remaining.pop(item["name"])
+                        progress["done"] += 1
+                        job["done"] += 1
+                        self.journal.save(job, item)
+                self.journal.save(job)
+                if job["state"] == "stopping":
+                    break
+                if last:
+                    for item in remaining.values():
+                        item["error"] = "目标相册未找到同名、同大小且内容一致的文件；保留本地，可另选上传"
+                        self.journal.save(job, item)
+                    job["done"] = len(job["items"])
+                    break
+                page += 1
+        except asyncio.CancelledError:
+            job.update(state="stopping", error="程序关闭中断了找回；已确认记录已保存，其余文件仍保留")
+            raise
+        except XiaomiError as exc:
+            job["error"] = "找回未完成：" + str(exc)
+        except OSError:
+            job["error"] = "本地读取中断，未确认的文件已保留"
+        except sqlite3.Error:
+            job["error"] = "上传记录无法保存，请检查数据卷可用空间；未确认的本地文件已保留"
+        finally:
+            progress["active"] = False
+            job.update(state="stopped" if job["state"] == "stopping" else "complete", revision=job["revision"] + 1)
+            self.cloud.write_lock.release()
+            self.journal.save(job)
 
     def control(self, connection, job_id, action):
         self.account(connection)
@@ -132,11 +243,11 @@ class XiaomiBatch:
             job["gate"].set()
         else:
             raise XiaomiError("当前批次状态不支持此操作，请刷新后重试", 409)
+        self.journal.save(job)
 
-    def view(self, connection, page):
-        self.account(connection)
-        job = self.job
-        if not job or job["connection"] != connection:
+    def view(self, connection, page, job_id="", album=""):
+        job = self.get_job(connection, job_id, album)
+        if not job:
             return None
         items = job["items"]
         counts = Counter(item["status"] for item in items)
@@ -146,6 +257,7 @@ class XiaomiBatch:
         current = "、".join(active_files)
         check_error = job["verification"]["error"] if job["verification"] else ""
         return dict(id=job["id"], album=job["album"], state=job["state"], current=current,
+                    mode=job["mode"], created=job["created"],
                     error="；".join(error for error in (job["error"], check_error) if error), done=job["done"], total=len(items), page_size=PAGE_SIZE,
                     counts=counts, eligible=eligible, revision=job["revision"],
                     active_files=active_files,
@@ -156,13 +268,18 @@ class XiaomiBatch:
     def completed(self, connection, job_id):
         self.account(connection)
         self.idle()
-        job = self.job
-        if not job or job["id"] != job_id or job["connection"] != connection or job["state"] not in {"complete", "stopped"}:
+        job = self.get_job(connection, job_id)
+        if not job or job["state"] not in {"complete", "stopped"}:
             raise XiaomiError("上传批次已变化，请刷新后再操作", 409)
+        if job["root"] != str(self.root.resolve()):
+            raise XiaomiError("本批次的本地目录与当前目录不同，已停止操作", 409)
+        self.job = job
         return job
 
     async def retry(self, connection, job_id):
         job = self.completed(connection, job_id)
+        if job["mode"] == "recover":
+            raise XiaomiError("请重新找回上传记录，或选择下一批上传未确认文件", 409)
         candidates = [item for item in job["items"] if item["status"] in {"failed", "waiting"}]
         if not candidates:
             raise XiaomiError("没有失败或未上传的文件，请刷新批次结果", 409)
@@ -172,6 +289,12 @@ class XiaomiBatch:
         job.update(state="uploading", error="", verification=None, done=len(job["items"]) - len(candidates),
                    revision=job["revision"] + 1)
         job["gate"].set()
+        try:
+            self.journal.save(job, initial=True)
+        except sqlite3.Error:
+            job["state"] = "stopped"
+            self.cloud.write_lock.release()
+            raise
         LOGGER.info("Xiaomi batch retry batch=%s files=%s concurrency=%s", job["id"], len(candidates), UPLOAD_CONCURRENCY)
         self.task = asyncio.create_task(self.run(job), name="xiaomi-local-upload")
 
@@ -198,6 +321,9 @@ class XiaomiBatch:
             if unconfirmed:
                 job["state"] = "stopping" if job["state"] == "stopping" else "verifying"
                 await self.verify(job, unconfirmed)
+        except asyncio.CancelledError:
+            job.update(state="stopping", error="程序关闭中断了上传；已保存回执，可重新核对或找回上传记录")
+            raise
         except XiaomiError as exc:
             if job["verification"] is None:
                 job["error"] = str(exc)
@@ -208,9 +334,11 @@ class XiaomiBatch:
             job["state"] = "stopped" if job["state"] == "stopping" else "complete"
             LOGGER.info("Xiaomi batch finished batch=%s state=%s processed=%s counts=%s", job["id"], job["state"], job["done"], dict(Counter(item["status"] for item in job["items"])))
             self.cloud.write_lock.release()
+            self.journal.save(job)
 
     async def upload_item(self, job, item):
         item["status"] = "uploading"
+        self.journal.save(job, item)
         try:
             path, info = selected_file(self.root, item)
             kind, mime = upload_media(item["name"])
@@ -240,6 +368,7 @@ class XiaomiBatch:
             if item["status"] == "uploading":
                 item.update(status="failed", error="上传中断，请核对云端后再试")
             job["done"] += 1
+            self.journal.save(job, item)
 
     async def verify(self, job, candidates=None, *, fresh=False):
         if candidates is None:
@@ -253,6 +382,7 @@ class XiaomiBatch:
                 progress["done"] += 1
             else:
                 pending.append(item)
+            self.journal.save(job, item)
         try:
             for start, end, selected in verification_ranges(pending):
                 remaining = {item["receipt"] for item in selected}
@@ -279,6 +409,7 @@ class XiaomiBatch:
                             item.update(status="verified", record=found[item["receipt"]])
                             item["lookup_time"] = record_time(item["record"]) or item["lookup_time"]
                             progress["done"] += 1
+                            self.journal.save(job, item)
                     remaining.difference_update(found)
                     if last:
                         break
@@ -286,12 +417,14 @@ class XiaomiBatch:
                 for item in selected:
                     if item["receipt"] in remaining:
                         item["error"] = "未在目标相册的日期范围找到一致记录，本地文件已保留" if start else "未在目标相册找到一致记录，本地文件已保留"
+                        self.journal.save(job, item)
         except XiaomiError as exc:
             progress["error"] = "云端核对未完成：" + str(exc)
             raise
         finally:
             progress["active"] = False
             job["revision"] += 1
+            self.journal.save(job)
 
     async def recycle_images(self, job, candidates):
         candidates = [item for item in candidates if item["status"] == "verified"]
@@ -301,19 +434,27 @@ class XiaomiBatch:
             with RecycleBin(self.root) as recycle:
                 for item in candidates:
                     try:
-                        path, _ = selected_file(self.root, item)
-                        recycle.move(path, item.setdefault("recycle_id", uuid4().hex), "xiaomi_upload")
+                        record = recycle.db.execute("SELECT state FROM items WHERE id=?", (item.get("recycle_id", ""),)).fetchone()
+                        if record and record["state"] in {"trashed", "purged", "restored"}:
+                            item.update(status="kept" if record["state"] == "restored" else "recycled",
+                                        error="图片已被还原，不再继续旧回收操作" if record["state"] == "restored" else "")
+                        else:
+                            path, _ = selected_file(self.root, item)
+                            item.setdefault("recycle_id", uuid4().hex)
+                            self.journal.save(job, item)
+                            recycle.move(path, item["recycle_id"], "xiaomi_upload")
+                            item.update(status="recycled", error="")
+                            moved += 1
                     except (FileNotFoundError, ValueError) as exc:
                         item.update(status="kept", error=str(exc))
                     except OSError as exc:
                         item["error"] = str(exc)
-                    else:
-                        item.update(status="recycled", error="")
-                        moved += 1
                     progress["done"] += 1
+                    self.journal.save(job, item)
                     await asyncio.sleep(0)
         finally:
             progress["active"] = False
+            self.journal.save(job)
             LOGGER.log(logging.WARNING if progress["done"] != moved else logging.INFO,
                        "Xiaomi batch recycle finished batch=%s processed=%s total=%s moved=%s retained=%s",
                        job["id"], progress["done"], len(candidates), moved, progress["done"] - moved)
