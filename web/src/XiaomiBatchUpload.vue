@@ -281,7 +281,7 @@ onUnmounted(() => { disposed = true; jobRead++; clearTimeout(timer) })
       </template>
       <template v-else>
         <p class="batch-progress" role="status">{{ model.job.state === 'stopped' ? '批次已停止。' : '批次已结束。' }}云端已确认 {{ confirmedCount }} / {{ model.job.total }} 个文件。{{ model.job.eligible }} 张图片可回收，视频保留在本地。</p>
-        <div v-if="retryCount && model.job.mode !== 'recover'" class="batch-tools"><p>仍有 {{ retryCount }} 个文件未完成。重试只处理失败和未上传的文件，不重复上传已确认文件。</p><button class="primary" :disabled="model.busy" @click="retry">重试未完成的 {{ retryCount }} 个文件</button></div>
+        <div v-if="retryCount && model.job.mode !== 'recover'" class="batch-tools flex flex-wrap items-center gap-3"><p>仍有 {{ retryCount }} 个文件未完成。重试只处理失败和未上传的文件，不重复上传已确认文件。</p><button class="primary" :disabled="model.busy" @click="retry">重试未完成的 {{ retryCount }} 个文件</button></div>
         <p v-if="model.note" class="notice" role="status">{{ model.note }}</p>
         <section v-if="model.confirming" class="batch-recycle-prompt" aria-labelledby="batch-recycle-question">
           <h3 id="batch-recycle-question">是否回收已上传的本地照片？</h3>

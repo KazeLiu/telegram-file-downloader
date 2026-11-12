@@ -79,7 +79,7 @@ onUnmounted(() => { disposed = true; revision++; clearTimeout(timer) })
 
 <template>
   <div class="local-binding">
-    <div class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+    <div class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-3">
       <button class="text-button min-w-0" @click="open"><Icon name="folder" :size="16" /><span class="truncate" :title="model.binding?.path">{{ model.binding?.path || '绑定本地文件夹' }}</span></button>
       <span v-if="model.binding" class="muted" role="status">{{ statusText }}</span>
       <button v-if="model.binding" class="text-button ml-auto" :disabled="model.busy || indexing" @click="refresh"><Icon name="refresh" :size="15" />更新索引</button>
@@ -91,7 +91,7 @@ onUnmounted(() => { disposed = true; revision++; clearTimeout(timer) })
   </div>
   <dialog ref="dialog" class="task-dialog" aria-labelledby="local-folder-title" @cancel="model.busy && $event.preventDefault()">
     <div class="section-heading"><h2 id="local-folder-title">绑定本地文件夹</h2><button class="icon-button" aria-label="关闭" :disabled="model.busy" @click="dialog?.close()"><Icon name="close" /></button></div>
-    <form class="mt-4 grid gap-4" @submit.prevent="bind(model.path)">
+    <form class="dialog-form" @submit.prevent="bind(model.path)">
       <label>目录绝对路径<input v-model="model.path" required maxlength="4096" placeholder="例如 /backups/手机淘宝 或 D:\照片备份" aria-describedby="local-folder-help" :disabled="model.busy" /></label>
       <p id="local-folder-help" class="muted">读取程序所在机器的目录及子目录，例如已挂载的 /backups。在本项目删除云端文件时，会先核对并回收唯一的同名同大小本地文件；联动回收需要可写挂载。</p>
       <p class="muted">只缓存文件路径、大小和修改信息，不读取原图。后台每六小时择空闲更新，目录改动后也可手动更新索引。</p>

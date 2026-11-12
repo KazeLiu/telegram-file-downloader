@@ -407,7 +407,7 @@ onBeforeUnmount(() => { disposed = true; readController.abort(); clearTimeout(po
 
     <dialog ref="uploadDialog" class="task-dialog cloud-upload" @cancel="(event) => { if (cloud.busy) event.preventDefault() }">
       <h2>上传到「{{ albumName }}」</h2>
-      <form @submit.prevent="uploadFile">
+      <form class="dialog-form" @submit.prevent="uploadFile">
         <label>选择图片或视频<input ref="fileInput" type="file" accept="image/*,video/*,.heic,.heif,.avci" :disabled="!!cloud.busy" required @change="chooseFile" /></label>
         <label v-if="upload.file">上传文件名<input v-model="upload.name" :disabled="!!cloud.busy" maxlength="255" required /></label>
         <p v-if="upload.error" class="form-error" role="alert">{{ upload.error }}</p>
@@ -463,7 +463,6 @@ onBeforeUnmount(() => { disposed = true; readController.abort(); clearTimeout(po
 .cloud-file-meta { @apply mt-2 flex items-center gap-1.5 text-xs text-muted; }
 .cloud-file-delete { @apply absolute top-0.5 right-0.5 grid min-h-8 w-7 place-items-center rounded-md p-0 text-danger; }
 .cloud-upload { width: min(560px, calc(100% - 32px)); }
-.cloud-upload form { @apply mt-4 grid gap-4; }
 .recycle-dialog p { overflow-wrap: anywhere; }
 @media (max-width: 560px) {
   .cloud-connect, .cloud-library { @apply p-4; }

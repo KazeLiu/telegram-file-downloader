@@ -74,7 +74,7 @@ function recycle() {
   <button class="secondary" :disabled="disabled" @click="dialog?.showModal()">按文件名回收</button>
   <dialog ref="dialog" class="task-dialog name-recycle" aria-labelledby="name-recycle-title" @close="close">
     <div class="section-heading"><h2 id="name-recycle-title" class="min-w-0 break-all">按文件名回收：{{ albumName }}</h2><button class="icon-button shrink-0" aria-label="关闭" @click="dialog?.close()"><Icon name="close" /></button></div>
-    <form class="mt-4 grid gap-3" @submit.prevent="search">
+    <form class="dialog-form" @submit.prevent="search">
       <label>图片文件名<textarea v-model="model.input" rows="3" placeholder="例如 IMG_001.jpg, IMG_002.png" :disabled="model.searching" @input="resetPreview" /></label>
       <div class="dialog-actions">
         <button v-if="lastLocalRecycle.length" type="button" class="text-button" :disabled="model.searching" @click="useLocalNames">带入最近本地回收清单</button>

@@ -496,7 +496,7 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
     </dialog>
     <dialog ref="namesDialog" class="task-dialog" aria-labelledby="local-recycle-names">
       <div class="section-heading"><h2 id="local-recycle-names">最近回收 · {{ lastLocalRecycle.length }} 张</h2><button class="icon-button" aria-label="关闭清单" @click="namesDialog?.close()"><Icon name="close" /></button></div>
-      <textarea ref="namesField" class="my-4" readonly rows="6" aria-label="实际回收的文件名" :value="formatNames(lastLocalRecycle)" />
+      <textarea ref="namesField" class="mt-4 block" readonly rows="6" aria-label="实际回收的文件名" :value="formatNames(lastLocalRecycle)" />
       <div class="dialog-actions"><button class="secondary" @click="copyRecycledNames">{{ canCopy ? '复制文件名' : '选中文件名' }}</button></div>
     </dialog>
     <dialog ref="confirmDialog" class="task-dialog recycle-dialog" @cancel="imageModel.busy && $event.preventDefault()">

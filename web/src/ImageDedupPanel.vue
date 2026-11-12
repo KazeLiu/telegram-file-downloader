@@ -326,7 +326,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); reads.abort(); scoreRe
           <div v-for="plan in model.preview.items" :key="plan.token" class="confirmation-row"><div class="min-w-0"><strong class="block truncate" :title="plan.path">{{ plan.name }}</strong><span class="block truncate text-sm text-muted" :title="`${plan.root.path}/${plan.path}`">{{ plan.root.path }}/{{ plan.path }}</span><span class="text-sm">{{ bytes(plan.size) }} · {{ plan.local_done ? '本地已回收' : '本地待回收' }}</span><p v-if="!plan.cloud.length" class="text-sm text-muted">云端未找到同名同大小图片，仅回收本地</p><p v-for="item in plan.cloud" :key="item.id" class="text-sm text-muted">{{ item.album_name }} · 编号 {{ item.id }} · {{ item.done ? '已回收' : '待回收' }}<span v-if="item.error" class="text-danger"> · {{ item.error }}</span></p><p v-if="plan.error" class="text-sm text-danger">{{ plan.error }}</p></div><Icon v-if="plan.done" name="check" class="text-success" /></div>
           <div class="confirmation-actions"><span class="muted" role="status">{{ model.executing ? `正在处理 ${model.completed} / ${model.preview.items.length}` : `${model.preview.items.length} 张本地 · ${previewCloudCount} 张云端` }}</span><button class="danger" :disabled="model.busy || model.preview.items.every(plan => plan.done)" @click="execute(model.preview!.items.filter(plan => !plan.done))">{{ model.executing ? '正在回收…' : '确认回收所选图片' }}</button></div>
         </template>
-        <div v-else class="dialog-actions mt-4"><button class="secondary" @click="closePreview">{{ model.preview.state === 'matching' ? '取消匹配' : '关闭' }}</button></div>
+        <div v-else class="dialog-actions"><button class="secondary" @click="closePreview">{{ model.preview.state === 'matching' ? '取消匹配' : '关闭' }}</button></div>
       </template>
     </dialog>
 
@@ -399,7 +399,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); reads.abort(); scoreRe
   .detail-heading > .muted { @apply text-right; }
   .selection-bar { @apply gap-2 p-3 text-sm; }
   .selection-bar .danger { @apply gap-1 px-2.5 text-sm; }
-  .pending-row { @apply flex-col gap-1; }
+  .pending-row { @apply flex-col gap-3; }
   .confirmation-actions { @apply flex-col items-stretch; }
   .review-pair img { @apply h-[45vh]; }
 }
