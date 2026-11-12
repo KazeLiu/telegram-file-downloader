@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import mimetypes
+import heapq
+import json
+import os
 from pathlib import Path
 
 from .image_library import IMAGE_EXTENSIONS
-from .storage import file_version, inside, internal_directory
+from .storage import file_version, inside, internal_directory, is_link
 from .xiaomi_local import folder_entries
 
 
@@ -52,6 +55,50 @@ def queue(galleries, roots, kind):
             seen.add(path)
             items.append(dict(root=root_id, path=relative, name=name, kind=item_kind, version=version))
     return sorted(items, key=lambda item: (item["path"].casefold(), item["root"], item["path"]))
+
+
+def queue_batches(galleries, roots, kind):
+    """Yield sorted metadata in batches without waiting for a full recursive scan."""
+    registered = {root_id: gallery_root(galleries, root_id) for root_id in dict.fromkeys(roots)}
+    root_ids = list(registered)
+    earlier = {root_id: [registered[previous] for previous in root_ids[:index]] for index, root_id in enumerate(root_ids)}
+    pending = [("", root_id, "", True) for root_id in registered]
+    heapq.heapify(pending)
+    seen, batch = set(), []
+    try:
+        while pending:
+            _, root_id, relative, directory = heapq.heappop(pending)
+            root = registered[root_id]
+            path = inside(root, relative)
+            if any(path.is_relative_to(previous) for previous in earlier[root_id]):
+                continue
+            try:
+                if directory:
+                    with os.scandir(path) as entries:
+                        for entry in entries:
+                            if internal_directory(entry.name) or is_link(entry):
+                                continue
+                            child = f"{relative}/{entry.name}" if relative else entry.name
+                            is_directory = entry.is_dir(follow_symlinks=False)
+                            if is_directory or entry.is_file(follow_symlinks=False) and media_kind(entry.name):
+                                heapq.heappush(pending, (child.casefold(), root_id, child, is_directory))
+                    continue
+                item_kind = media_kind(relative)
+                if path in seen or kind != "mixed" and item_kind != kind:
+                    continue
+                info = path.stat()
+                if not info.st_size:
+                    continue
+            except FileNotFoundError:
+                continue
+            seen.add(path)
+            batch.append(dict(root=root_id, path=relative, name=path.name, kind=item_kind, version=file_version(info), identity=os.path.normcase(str(path))))
+            if len(batch) == 20:
+                yield json.dumps({"items": batch}) + "\n"
+                batch = []
+        yield json.dumps({"items": batch, "done": True}) + "\n"
+    except (OSError, ValueError) as exc:
+        yield json.dumps({"error": str(exc)}) + "\n"
 
 
 def selected_media(galleries, root_id, relative, version):

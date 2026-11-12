@@ -16,7 +16,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi import Path as FastAPIPath
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from telethon import errors
@@ -32,7 +32,7 @@ from .saved_image_check import SavedImageCheck
 from .linked_recycle import LinkedRecycle
 from .recycle_cleanup import RecycleCleaner
 from .storage import RecycleBin, inside, restore_batch
-from .playback import queue as playback_queue, selected_media
+from .playback import queue as playback_queue, queue_batches, selected_media
 from .xiaomi_batch import XiaomiBatch, local_media
 from .xiaomi_local import XiaomiLocalIndex
 from .xiaomi_cloud import CONNECTION_PATTERN, DAY_PATTERN, ID_PATTERN, UPLOAD_LIMIT, XiaomiCloud, XiaomiError, upload_media
@@ -277,7 +277,7 @@ def create_app():
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self'; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
         if request.url.path.startswith("/api/"):
             response.headers.setdefault("Cache-Control", "no-store")
         return response
@@ -733,6 +733,13 @@ def create_app():
         items = await asyncio.to_thread(playback_queue, galleries, body.roots, body.kind)
         return {"items": items}
 
+    @app.post("/api/playback/queue/stream")
+    async def stream_playback_queue(body: PlaybackSelection):
+        galleries = local_index.recycle_roots(download_dir)
+        return StreamingResponse(queue_batches(galleries, body.roots, body.kind), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+    @app.head("/api/playback/media")
     @app.get("/api/playback/media")
     async def playback_media(root: str = Query(pattern=r"^(?:downloads|[a-f0-9]{32})$"),
                              path: str = Query(min_length=1, max_length=4096),

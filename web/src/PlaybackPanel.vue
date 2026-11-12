@@ -2,17 +2,40 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { api } from './api'
 import Icon from './Icon.vue'
-import { clockTime, mediaKey, mediaUrl, newPlaylist, nextBeatTime, orderedMedia, playbackStorageKey, readPreferences, validPlaylist,
+import PlaybackSettings from './PlaybackSettings.vue'
+import { loadPlaybackQueue, PlaybackImageBuffer } from './playbackLoader'
+import { clockTime, exportConfiguration, imageKey, importConfiguration, mediaKey, mediaUrl, newPlaylist, nextBeatTime, orderedMedia, playbackCycle, playbackStorageKey, readPreferences, validPlaylist,
   type Gallery, type ImageTiming, type PlaybackMedia, type PlaybackPreferences, type Playlist } from './playback'
 
-const preferences = reactive<PlaybackPreferences>({ playlists: [], selected: '', favorites: [] })
+const preferences = reactive<PlaybackPreferences>({ playlists: [], selected: '', favorites: [], shownImages: [] })
 const setupModel = reactive({ galleries: [] as Gallery[], loading: false, starting: false, error: '', storageError: '', storageBlocked: false, ready: false })
 const playlist = computed(() => preferences.playlists.find(item => item.id === preferences.selected))
 const queue = shallowRef<PlaybackMedia[]>([])
 const player = reactive({ mode: 'setup' as 'setup' | 'playing' | 'finished', index: 0, paused: false, ready: false,
   error: '', note: '', elapsed: 0, imageElapsed: 0, phaseElapsed: 0, phaseDuration: 24000, phase: 0, autoImages: true,
-  imageSeconds: 8, zoom: 1, fullscreen: false, finishedReason: '', beat: false })
-const options = shallowRef<Playlist>()
+  imageSeconds: 8, zoom: 1, fullscreen: false, finishedReason: '', beat: false, cycle: 1 })
+const options = ref<Playlist>()
+const runtimeSettings = ref(false)
+const importInput = ref<HTMLInputElement>()
+const settingsButton = ref<HTMLButtonElement>()
+const runtimePanel = ref<HTMLElement>()
+const settingsError = ref('')
+const queueLoading = ref(false)
+const queueError = ref('')
+const imageSource = ref('')
+const imageBuffer = new PlaybackImageBuffer()
+let queueRequest = new AbortController()
+let pendingAdvance = false
+let imageLoad = 0
+let availableMedia: PlaybackMedia[] = []
+const summary = computed(() => {
+  const item = playlist.value
+  if (!item) return ''
+  return [({ mixed: '混合', image: '仅图片', video: '仅视频' })[item.kind], item.order === 'shuffle' ? '随机顺序' : '文件名顺序',
+    item.kind === 'video' ? '' : item.kind === 'image' && item.imageTiming === 'beat' ? `每拍一张 · 快速 ${item.bpm} BPM` : `每张 ${item.imageSeconds} 秒`,
+    item.kind === 'video' ? '' : item.imageCount ? `每轮 ${item.imageCount} 张` : '全部未展示图片', item.minutes ? `${item.minutes} 分钟` : '不限时',
+    item.metronome || (item.kind === 'image' && item.imageTiming === 'beat') ? '节拍器开' : '节拍器关', item.speech ? '语音开' : '语音关'].filter(Boolean).join(' · ')
+})
 const imageBeatMode = computed(() => options.value?.kind === 'image' && options.value.imageTiming === 'beat')
 const metronomeEnabled = computed(() => options.value?.metronome || imageBeatMode.value)
 const phases = [{ label: '慢速', ratio: .6 }, { label: '快速', ratio: 1 }, { label: '休息', ratio: 0 }]
@@ -33,17 +56,32 @@ let timer: ReturnType<typeof setInterval>
 let previousTick = 0
 let nextBeat = 0
 let audio: AudioContext | undefined
-let upcomingImage: HTMLImageElement | undefined
 let disposed = false
 let pointer: { id: number; x: number; y: number; left: number; top: number; moved: boolean } | undefined
 let suppressClick = false
 
-watch([current, imageBeatMode], ([item, byBeat]) => {
-  upcomingImage?.removeAttribute('src'); upcomingImage = undefined
-  if (!item || !byBeat || (player.index === queue.value.length - 1 && !options.value?.loop)) return
-  upcomingImage = new Image()
-  upcomingImage.src = mediaUrl(queue.value[(player.index + 1) % queue.value.length]!)
-})
+watch([current, () => player.cycle], () => { void loadCurrentImage() })
+watch(() => queue.value.length, () => { if (player.ready) warmImages() })
+
+function warmImages() {
+  if (player.mode !== 'playing') return
+  const items = queue.value.slice(Math.max(0, player.index - 1)).filter(item => item.kind === 'image').slice(0, 20)
+  void imageBuffer.fill(items)
+}
+async function loadCurrentImage() {
+  const item = current.value, version = ++imageLoad
+  imageSource.value = ''
+  if (item?.kind !== 'image' || player.mode !== 'playing') return
+  player.ready = false
+  try {
+    const url = await imageBuffer.show(item)
+    if (version !== imageLoad || disposed || player.mode !== 'playing') return
+    imageSource.value = url; warmImages()
+  } catch (error) {
+    if (version !== imageLoad || disposed || (error as Error).name === 'AbortError') return
+    pause(); player.error = (error as Error).message
+  }
+}
 
 function persist() {
   if (!setupModel.ready || setupModel.storageBlocked) return
@@ -54,6 +92,52 @@ function persist() {
   catch { setupModel.storageError = '无法保存到本机，请检查浏览器存储空间或隐私设置；当前编辑仍可用于播放。' }
 }
 watch(preferences, persist, { deep: true })
+watch(options, value => {
+  if (!value || !validPlaylist(value)) return
+  const saved = preferences.playlists.find(item => item.id === value.id)
+  if (saved) Object.assign(saved, value)
+}, { deep: true })
+watch(() => [options.value?.imageSeconds, options.value?.bpm, options.value?.imageTiming] as const, ([seconds, value, timing], previous) => {
+  if (!options.value || !validPlaylist(options.value)) return
+  if (seconds !== previous[0]) { player.imageSeconds = seconds!; imageIntervalInput.value = String(seconds); player.imageElapsed = 0 }
+  if (value !== previous[1]) bpmInput.value = String(value)
+  if (value !== previous[1] || timing !== previous[2]) { nextBeat = 0; player.beat = false }
+})
+watch(() => options.value?.speech, enabled => { if (!enabled && 'speechSynthesis' in window) speechSynthesis.cancel() })
+
+function restoreDefaults() {
+  if (!playlist.value || !confirm('恢复当前列表的播放参数？名称、图库、喜欢和已展示记录会保留。')) return
+  const { id, name, roots } = playlist.value
+  Object.assign(playlist.value, newPlaylist(), { id, name, roots })
+}
+function downloadConfiguration() {
+  if (!preferences.playlists.every(validPlaylist)) { setupModel.error = '请先修正播放列表中未填完的设置，再导出。'; return }
+  const url = URL.createObjectURL(new Blob([exportConfiguration(preferences.playlists, preferences.selected)], { type: 'application/json' }))
+  const link = document.createElement('a')
+  link.href = url; link.download = 'shicun-playback.json'; link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+async function uploadConfiguration(event: Event) {
+  const input = event.target as HTMLInputElement, file = input.files?.[0]
+  if (!file) return
+  setupModel.error = ''
+  try {
+    if (file.size > 2 * 1024 * 1024) throw new Error('播放配置文件不能超过 2 MB。')
+    const result = importConfiguration(await file.text())
+    if (!confirm(`导入 ${result.playlists.length} 个播放列表并替换当前列表？图库需重新选择，喜欢和已展示记录会保留。`)) return
+    preferences.playlists = result.playlists; preferences.selected = result.selected
+  } catch (error) { setupModel.error = `导入失败：${(error as Error).message}` }
+  finally { input.value = '' }
+}
+async function openSettings() {
+  pause(); runtimeSettings.value = true; settingsError.value = ''
+  await nextTick(); runtimePanel.value?.focus()
+}
+function closeSettings() {
+  if (!options.value || !validPlaylist(options.value)) { settingsError.value = '请修正数值：间隔 1–300 秒、时长 0–180 分钟、快速节拍 30–180 BPM，均为整数。'; return }
+  runtimeSettings.value = false; settingsButton.value?.focus()
+  requestAnimationFrame(recordDisplayedImage)
+}
 function createPlaylist() {
   const item = newPlaylist()
   item.name = `播放列表 ${preferences.playlists.length + 1}`
@@ -67,7 +151,7 @@ function deletePlaylist() {
 function resetPreferences() {
   if (!confirm('重置本机的播放列表、设置和喜欢收藏？图库原文件会保留。')) return
   setupModel.storageBlocked = false
-  preferences.playlists = []; preferences.selected = ''; preferences.favorites = []
+  preferences.playlists = []; preferences.selected = ''; preferences.favorites = []; preferences.shownImages = []
   createPlaylist(); persist()
 }
 async function loadGalleries() {
@@ -96,7 +180,7 @@ function speak() {
   if (!options.value?.speech || !('speechSynthesis' in window)) return
   speechSynthesis.cancel()
   const utterance = new SpeechSynthesisUtterance(phase.value.label)
-  utterance.lang = 'zh-CN'; utterance.rate = .95
+  utterance.lang = 'zh-CN'; utterance.rate = options.value.speechRate; utterance.volume = options.value.speechVolume / 100
   utterance.onerror = event => { if (!['canceled', 'interrupted'].includes(event.error) && !disposed) player.note = '语音提示不可用，请检查系统中文语音和浏览器权限。' }
   speechSynthesis.speak(utterance)
 }
@@ -114,11 +198,11 @@ function beat(now: number) {
     if (player.mode !== 'playing') return
   }
   player.beat = true
-  if (!metronomeEnabled.value || audio?.state !== 'running') return
+  if (!metronomeEnabled.value || audio?.state !== 'running' || !options.value?.beatVolume) return
   const oscillator = audio.createOscillator(), gain = audio.createGain()
   oscillator.frequency.value = 660
-  gain.gain.setValueAtTime(.055, audio.currentTime)
-  gain.gain.exponentialRampToValueAtTime(.001, audio.currentTime + .045)
+  gain.gain.setValueAtTime(.055 * options.value.beatVolume / 100, audio.currentTime)
+  gain.gain.exponentialRampToValueAtTime(.00001, audio.currentTime + .045)
   oscillator.connect(gain); gain.connect(audio.destination)
   oscillator.start(); oscillator.stop(audio.currentTime + .05)
   oscillator.onended = () => { oscillator.disconnect(); gain.disconnect() }
@@ -132,34 +216,62 @@ async function start() {
     setupModel.error = '列表包含已移除的图库，请取消勾选后重新开始。'; return
   }
   if (!validPlaylist(item)) {
-    setupModel.error = '请填写列表名称，并检查图片间隔（1–300 秒）、总时长（0–180 分钟）和快速节拍（30–180 BPM），数值请使用整数。'; return
+    setupModel.error = '请填写列表名称，并检查图片间隔（1–300 秒）、总时长（0–180 分钟）、每轮图片数（0–100000）和快速节拍（30–180 BPM），数值请使用整数。'; return
   }
   setupModel.starting = true
+  queueRequest.abort(); queueRequest = new AbortController()
+  const signal = queueRequest.signal
+  queueLoading.value = true; queueError.value = ''; pendingAdvance = false
+  availableMedia = []; imageBuffer.clear()
   player.note = ''
   options.value = { ...item, roots: item.roots.slice() }
   imageIntervalInput.value = String(item.imageSeconds); bpmInput.value = String(item.bpm)
   // Unlock audio while the start button's user activation is still available.
   void prepareAudio()
   try {
-    const result = await api<{ items: PlaybackMedia[] }>('/playback/queue', { roots: item.roots, kind: item.kind }, 'POST', request.signal)
-    if (disposed) return
-    const items = item.favoritesOnly ? result.items.filter(media => preferences.favorites.includes(mediaKey(media))) : result.items
-    if (!items.length) { setupModel.error = item.favoritesOnly ? '所选图库中没有符合类型的喜欢收藏，可关闭“仅播放喜欢”。' : '所选图库中没有符合类型的媒体，请调整图库或媒体类型。'; return }
-    queue.value = orderedMedia(items, item.order)
-    Object.assign(player, { mode: 'playing', index: 0, paused: document.hidden, ready: false, error: '', elapsed: 0, imageElapsed: 0,
-      phaseElapsed: 0, phaseDuration: 24000, phase: 0, autoImages: true, imageSeconds: item.imageSeconds, zoom: 1, finishedReason: '', beat: false })
-    previousTick = performance.now(); nextBeat = 0
-    if (item.speech && !('speechSynthesis' in window)) player.note = '当前浏览器不支持语音提示。'
-    await nextTick(); controls.value?.focus(); if (!player.paused) speak()
-  } catch (error) { if (!disposed) setupModel.error = (error as Error).message }
-  finally { if (!disposed) setupModel.starting = false }
+    await loadPlaybackQueue(options.value, signal, async (batch, done) => {
+      if (disposed || signal.aborted) return
+      const items = item.favoritesOnly ? batch.filter(media => preferences.favorites.includes(mediaKey(media))) : batch
+      availableMedia.push(...items)
+      queueLoading.value = !done
+      if (player.mode === 'setup') {
+        if (!availableMedia.length) {
+          if (done) setupModel.error = item.favoritesOnly ? '所选图库中没有符合类型的喜欢收藏，可关闭“仅播放喜欢”。' : '所选图库中没有符合类型的媒体，请调整图库或媒体类型。'
+          return
+        }
+        const cycle = playbackCycle(availableMedia, item, preferences.shownImages)
+        if (!done && (cycle.reset || cycle.queue.length < Math.min(20, item.imageCount || 20))) return
+        queue.value = cycle.queue; preferences.shownImages = cycle.shownImages
+        runtimeSettings.value = false
+        if (cycle.reset) player.note = '未展示图片不足一轮，已开始新的图片周期。'
+        Object.assign(player, { mode: 'playing', index: 0, paused: document.hidden, ready: false, error: '', elapsed: 0, imageElapsed: 0,
+          phaseElapsed: 0, phaseDuration: 24000, phase: 0, autoImages: true, imageSeconds: item.imageSeconds, zoom: 1, finishedReason: '', beat: false, cycle: 1 })
+        previousTick = performance.now(); nextBeat = 0
+        if (item.speech && !('speechSynthesis' in window)) player.note = '当前浏览器不支持语音提示。'
+        await nextTick(); controls.value?.focus(); if (!player.paused) speak()
+      } else if (player.mode === 'playing') {
+        let count = queue.value.filter(media => media.kind === 'image').length
+        const added = orderedMedia(items.filter(media => media.kind !== 'image' || !preferences.shownImages.includes(imageKey(media))), item.order)
+          .filter(media => media.kind !== 'image' || !item.imageCount || count++ < item.imageCount)
+        if (added.length) queue.value = [...queue.value, ...added]
+      }
+      if (pendingAdvance && (done || player.index < queue.value.length - 1)) {
+        pendingAdvance = false; step(1)
+      }
+    })
+  } catch (error) {
+    if (!disposed && !signal.aborted) {
+      if (player.mode === 'setup') setupModel.error = (error as Error).message
+      else { queueError.value = '媒体清单读取中断，请返回列表重新开始。'; pause(); player.error = queueError.value }
+    }
+  } finally { if (!disposed && signal === queueRequest.signal) { setupModel.starting = false; queueLoading.value = false } }
 }
 function pause() {
   if (player.mode !== 'playing') return
   player.paused = true; video.value?.pause(); silence()
 }
 async function resume() {
-  if (player.mode !== 'playing' || player.error) return
+  if (player.mode !== 'playing' || player.error || runtimeSettings.value) return
   player.paused = false; player.note = ''; previousTick = performance.now()
   await prepareAudio()
   if (current.value?.kind === 'video') await playVideo()
@@ -175,26 +287,27 @@ async function playVideo() {
   }
 }
 function finish(reason: string) {
+  queueRequest.abort(); queueLoading.value = false; pendingAdvance = false
+  imageLoad++; imageBuffer.clear()
   pause(); player.mode = 'finished'; player.finishedReason = reason; player.error = ''
 }
 function step(delta: number) {
-  if (player.mode !== 'playing') return
+  if (player.mode !== 'playing' || runtimeSettings.value) return
   let target = player.index + delta
   if (target >= queue.value.length) {
+    if (queueError.value) { pause(); player.note = queueError.value; return }
+    if (queueLoading.value) { pendingAdvance = true; player.ready = false; player.note = '正在补充媒体列表，请稍候…'; return }
     if (!options.value?.loop) { finish('已播放完列表'); return }
+    const cycle = playbackCycle(availableMedia, options.value, preferences.shownImages)
+    queue.value = cycle.queue; preferences.shownImages = cycle.shownImages
+    player.cycle++
+    if (cycle.reset) player.note = '未展示图片不足一轮，已开始新的图片周期。'
     target = 0
   } else if (target < 0) target = options.value?.loop ? queue.value.length - 1 : 0
-  if (target === player.index && queue.value.length > 1) return
-  if (queue.value.length === 1 && player.error) { retryMedia(); return }
-  const ready = player.ready
+  if (target === player.index && delta < 0) return
   player.index = target; player.imageElapsed = 0; player.zoom = 1; player.error = ''; player.ready = false
   void nextTick(() => {
     imageViewport.value?.scrollTo(0, 0)
-    // A single-item loop retains its DOM element.
-    if (queue.value.length === 1) {
-      if (video.value) { video.value.currentTime = 0; player.ready = video.value.readyState >= 2; void playVideo() }
-      else player.ready = ready
-    }
   })
 }
 function changePhase() {
@@ -226,11 +339,19 @@ function mediaFailed(event: Event) {
   player.error = '无法播放此文件，请检查文件是否仍在图库，以及浏览器是否支持此格式；文件有变化时请返回列表重新开始。'
 }
 function imageLoaded(event: Event) {
-  if (event.currentTarget === imageViewport.value?.querySelector('img')) player.ready = true
+  const image = event.currentTarget
+  if (image !== imageViewport.value?.querySelector('img')) return
+  player.ready = true
+  requestAnimationFrame(() => requestAnimationFrame(() => { if (image === imageViewport.value?.querySelector('img')) recordDisplayedImage() }))
+}
+function recordDisplayedImage() {
+  if (document.hidden || runtimeSettings.value || player.mode !== 'playing' || !player.ready || player.error || current.value?.kind !== 'image') return
+  const key = imageKey(current.value)
+  if (!preferences.shownImages.includes(key)) preferences.shownImages.push(key)
 }
 function videoStarted(event: Event) {
   if (event.currentTarget !== video.value) return
-  if (player.mode !== 'playing' || document.hidden) { video.value?.pause(); return }
+  if (player.mode !== 'playing' || document.hidden || runtimeSettings.value) { video.value?.pause(); return }
   if (player.paused) {
     player.paused = false; player.note = ''; previousTick = performance.now()
     void prepareAudio(); speak()
@@ -245,14 +366,17 @@ function videoPaused(event: Event) {
   if (event.currentTarget === video.value && !video.value?.ended) pause()
 }
 function videoReady(event: Event) {
-  if (event.currentTarget === video.value) player.ready = event.type === 'canplay'
+  if (event.currentTarget === video.value) { player.ready = event.type === 'canplay'; if (player.ready) warmImages() }
+}
+function videoVolumeChanged(event: Event) {
+  if (event.currentTarget === video.value && options.value) options.value.mediaVolume = Math.round(video.value.volume * 100)
 }
 function retryMedia() {
   player.error = ''; player.ready = false
   if (video.value) video.value.load()
   else {
-    const image = imageViewport.value?.querySelector('img')
-    if (image && current.value) image.src = mediaUrl(current.value)
+    if (current.value) imageBuffer.remove(current.value)
+    void loadCurrentImage()
   }
 }
 function updateInterval(event: Event) {
@@ -262,6 +386,7 @@ function updateInterval(event: Event) {
     player.note = '图片间隔请输入 1–300 之间的整数秒。'; imageIntervalInput.value = String(player.imageSeconds); return
   }
   player.imageSeconds = seconds; player.imageElapsed = 0; player.note = ''
+  options.value!.imageSeconds = seconds
   imageIntervalInput.value = String(seconds)
   const saved = preferences.playlists.find(item => item.id === options.value?.id)
   if (saved) saved.imageSeconds = seconds
@@ -325,11 +450,12 @@ async function fullscreen() {
 }
 function fullscreenChanged() { player.fullscreen = document.fullscreenElement === playerElement.value }
 function backToLists() {
-  pause(); player.mode = 'setup'; queue.value = []; player.error = ''; player.note = ''
+  queueRequest.abort(); queueLoading.value = false; pendingAdvance = false; imageLoad++; imageBuffer.clear()
+  pause(); player.mode = 'setup'; runtimeSettings.value = false; queue.value = []; availableMedia = []; player.error = ''; player.note = ''
   if (document.fullscreenElement === playerElement.value) void document.exitFullscreen()
 }
 function keydown(event: KeyboardEvent) {
-  if (player.mode !== 'playing' || event.altKey || event.ctrlKey || event.metaKey
+  if (player.mode !== 'playing' || runtimeSettings.value || event.altKey || event.ctrlKey || event.metaKey
     || (event.target as HTMLElement).closest('input,select,textarea,video,[contenteditable]')) return
   if (event.key === 'ArrowLeft') step(-1)
   else if (event.key === 'ArrowRight') step(1)
@@ -342,6 +468,7 @@ function visibilityChanged() {
   if (document.hidden && player.mode === 'playing' && !player.paused) {
     pause(); player.note = '页面已转入后台，播放已暂停。'
   }
+  if (!document.hidden) requestAnimationFrame(recordDisplayedImage)
 }
 onMounted(() => {
   try {
@@ -362,9 +489,8 @@ onMounted(() => {
   document.addEventListener('fullscreenchange', fullscreenChanged)
 })
 onBeforeUnmount(() => {
-  disposed = true; request.abort(); clearInterval(timer); pause()
+  disposed = true; request.abort(); queueRequest.abort(); imageLoad++; imageBuffer.clear(); clearInterval(timer); pause()
   if (audio) void audio.close()
-  upcomingImage?.removeAttribute('src')
   document.removeEventListener('keydown', keydown)
   document.removeEventListener('visibilitychange', visibilityChanged)
   document.removeEventListener('fullscreenchange', fullscreenChanged)
@@ -377,6 +503,7 @@ onBeforeUnmount(() => {
     <form v-if="player.mode === 'setup'" class="playlist-editor" novalidate @submit.prevent="start">
       <div class="playlist-picker"><label>播放列表<select v-model="preferences.selected" :disabled="setupModel.starting"><option v-for="item in preferences.playlists" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><button type="button" class="secondary" :disabled="setupModel.starting" @click="createPlaylist">新建</button><button type="button" class="text-button danger-text" :disabled="setupModel.starting || !playlist" @click="deletePlaylist">删除</button></div>
       <template v-if="playlist">
+        <div class="setup-summary"><div><strong>准备播放</strong><p>{{ summary }}</p></div><button class="primary" :disabled="setupModel.loading || setupModel.starting || !playlist.roots.length"><Icon :name="setupModel.starting ? 'loader' : 'play'" :size="18" />{{ setupModel.starting ? '正在读取媒体…' : '开始播放' }}</button><button v-if="setupModel.starting" type="button" class="secondary" @click="queueRequest.abort()">取消读取</button></div>
         <fieldset :disabled="setupModel.starting" class="playlist-fields">
           <label class="playlist-name">名称<input v-model.trim="playlist.name" maxlength="80" required /></label>
           <fieldset class="media-types"><legend>播放内容</legend><label v-for="choice in ([['mixed', '混合'], ['image', '仅图片'], ['video', '仅视频']] as const)" :key="choice[0]" :class="{ chosen: playlist.kind === choice[0] }"><input v-model="playlist.kind" type="radio" name="media-kind" :value="choice[0]" />{{ choice[1] }}</label></fieldset>
@@ -384,13 +511,8 @@ onBeforeUnmount(() => {
           <p v-if="setupModel.loading && !setupModel.galleries.length" class="muted" role="status">正在读取图库…</p>
           <div class="gallery-choices"><label v-for="gallery in setupModel.galleries" :key="gallery.id" :class="{ chosen: playlist.roots.includes(gallery.id) }"><input type="checkbox" :checked="playlist.roots.includes(gallery.id)" @change="checkGallery(gallery.id, ($event.target as HTMLInputElement).checked)" /><Icon name="folder" :size="22" /><span><strong>{{ galleryName(gallery) }}</strong><small>{{ gallery.path }}</small></span></label><label v-for="id in playlist.roots.filter(id => !setupModel.galleries.some(gallery => gallery.id === id))" :key="id" class="missing-gallery"><input type="checkbox" checked @change="checkGallery(id, false)" /><span>图库已移除，取消勾选后可继续</span></label></div>
           <p class="gallery-help muted">包含子目录。其他图库可在小米云相册中绑定本地目录后选择。</p>
-          <details class="playback-settings"><summary>播放设置</summary><div class="settings-grid">
-            <label>播放顺序<select v-model="playlist.order"><option value="shuffle">随机</option><option value="sequential">文件名顺序</option></select></label>
-            <label v-if="playlist.kind === 'image'">图片切换<select v-model="playlist.imageTiming"><option value="time">按时间</option><option value="beat">按 BPM · 每拍一张</option></select></label>
-            <label v-if="playlist.kind !== 'image' || playlist.imageTiming === 'time'">图片间隔（秒）<input v-model.number="playlist.imageSeconds" type="number" min="1" max="300" required /></label>
-            <label>总时长（分钟，0 为不限）<input v-model.number="playlist.minutes" type="number" min="0" max="180" required /></label>
-            <label>快速节拍（BPM）<input v-model.number="playlist.bpm" type="number" min="30" max="180" required /></label>
-          </div><p v-if="playlist.kind === 'image' && playlist.imageTiming === 'beat'" class="muted">每拍发声并切换一张图片，跟随当前显示的 BPM；休息阶段不发声、不自动切图。</p><div class="playback-toggles"><label><input v-model="playlist.loop" type="checkbox" />循环列表</label><label><input v-model="playlist.favoritesOnly" type="checkbox" />仅播放喜欢</label><label v-if="playlist.kind !== 'image' || playlist.imageTiming !== 'beat'"><input v-model="playlist.metronome" type="checkbox" />节拍器</label><label><input v-model="playlist.speech" type="checkbox" />语音提示</label></div></details>
+          <div class="playback-settings"><h2>播放设置</h2><PlaybackSettings :model-value="playlist" /></div>
+          <details class="configuration-management"><summary>配置管理</summary><p class="muted">导出只包含播放参数，不包含原文件、图库路径、喜欢或已展示记录；导入后需重新选择图库。</p><div class="configuration-actions"><button class="secondary" type="button" @click="downloadConfiguration">导出 JSON</button><button class="secondary" type="button" @click="importInput?.click()">导入 JSON</button><button class="text-button" type="button" @click="restoreDefaults">恢复当前列表默认参数</button></div><input ref="importInput" type="file" accept=".json,application/json" hidden @change="uploadConfiguration" /></details>
         </fieldset>
         <p v-if="setupModel.error" class="notice error" role="alert">{{ setupModel.error }}</p>
         <div class="playback-start"><span class="muted">已选 {{ playlist.roots.length }} 个图库</span><button class="primary" :disabled="setupModel.loading || setupModel.starting || !playlist.roots.length"><Icon :name="setupModel.starting ? 'loader' : 'play'" :size="18" />{{ setupModel.starting ? '正在读取媒体…' : '开始播放' }}</button></div>
@@ -398,23 +520,29 @@ onBeforeUnmount(() => {
     </form>
 
     <section v-else ref="playerElement" class="rhythm-player" aria-label="媒体播放器">
-      <div class="player-top"><button class="player-button" @click="backToLists"><Icon name="chevron" class="previous-icon" :size="18" />播放列表</button><span class="player-name">{{ options?.name }}</span><button class="player-button" @click="fullscreen"><Icon name="fullscreen" :size="19" /><span>{{ player.fullscreen ? '退出全屏' : '全屏' }}</span></button></div>
-      <div class="media-stage">
+      <div class="player-top"><button class="player-button" @click="backToLists"><Icon name="chevron" class="previous-icon" :size="18" />播放列表</button><span class="player-name">{{ options?.name }}</span><button v-if="player.mode === 'playing'" ref="settingsButton" class="player-button" :aria-expanded="runtimeSettings" @click="runtimeSettings ? closeSettings() : openSettings()"><Icon name="settings" :size="19" />设置</button><button class="player-button" @click="fullscreen"><Icon name="fullscreen" :size="19" /><span>{{ player.fullscreen ? '退出全屏' : '全屏' }}</span></button></div>
+      <section v-if="runtimeSettings && options" ref="runtimePanel" class="runtime-settings" tabindex="-1" aria-label="播放中设置">
+        <div class="runtime-heading"><div><h2>播放设置</h2><p>播放已暂停，关闭设置后点击继续。图库、顺序与每轮数量请返回列表修改。</p></div><button class="secondary" @click="closeSettings">完成设置</button></div>
+        <PlaybackSettings v-model="options" runtime />
+        <p v-if="settingsError" class="notice error" role="alert">{{ settingsError }}</p>
+      </section>
+      <div v-show="!runtimeSettings" class="media-stage">
         <div v-if="current?.kind === 'image'" ref="imageViewport" class="image-viewport" :class="{ zoomed: player.zoom > 1 }" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointer = undefined; suppressClick = true" @click="imageClick">
-          <div class="image-canvas" :style="{ width: `${player.zoom * 100}%`, height: `${player.zoom * 100}%` }"><img :key="mediaKey(current)" :src="mediaUrl(current)" :alt="current.name" draggable="false" @load="imageLoaded" @error="mediaFailed" /></div>
+          <div class="image-canvas" :style="{ width: `${player.zoom * 100}%`, height: `${player.zoom * 100}%` }"><img v-if="imageSource" :key="`${player.cycle}:${mediaKey(current)}`" :src="imageSource" :alt="current.name" :style="{ filter: `brightness(${options!.brightness}%)` }" draggable="false" @load="imageLoaded" @error="mediaFailed" /></div>
         </div>
-        <video v-else-if="current" :key="mediaKey(current)" ref="video" :src="mediaUrl(current)" controls playsinline preload="metadata" @loadedmetadata="$event.currentTarget === video && playVideo()" @canplay="videoReady" @play="videoStarted" @playing="videoPlaying" @waiting="videoReady" @pause="videoPaused" @ended="$event.currentTarget === video && step(1)" @error="mediaFailed" />
+        <video v-else-if="current" :key="`${player.cycle}:${mediaKey(current)}`" ref="video" :src="mediaUrl(current)" :volume="options!.mediaVolume / 100" :style="{ filter: `brightness(${options!.brightness}%)` }" controls playsinline preload="metadata" @volumechange="videoVolumeChanged" @loadedmetadata="$event.currentTarget === video && playVideo()" @canplay="videoReady" @play="videoStarted" @playing="videoPlaying" @waiting="videoReady" @pause="videoPaused" @ended="$event.currentTarget === video && step(1)" @error="mediaFailed" />
         <p v-if="!player.ready && !player.error && player.mode === 'playing'" class="media-loading" role="status">正在加载{{ current?.kind === 'video' ? '视频' : '图片' }}…</p>
-        <div v-if="player.error" class="media-message" role="alert"><Icon name="file" :size="30" /><p>{{ player.error }}</p><div><button class="player-button" @click="retryMedia">重新加载</button><button class="player-button" @click="step(1)">下一项</button></div></div>
+        <div v-if="player.error" class="media-message" role="alert"><Icon name="file" :size="30" /><p>{{ player.error }}</p><button v-if="queueError" class="player-button" @click="backToLists">返回播放列表</button><div v-else><button class="player-button" @click="retryMedia">重新加载</button><button class="player-button" @click="step(1)">下一项</button></div></div>
         <div v-else-if="player.mode === 'finished'" class="media-message finished-message"><Icon name="check" :size="32" /><h2>{{ player.finishedReason }}</h2><p>本次播放 {{ clockTime(player.elapsed) }}</p><button class="primary" @click="backToLists">返回播放列表</button></div>
       </div>
-      <div class="player-bottom">
-        <div class="rhythm-status"><span class="beat-dot" :class="{ pulse: active && player.beat }" aria-hidden="true"></span><strong aria-live="polite">{{ player.mode === 'finished' ? '已结束' : player.paused ? '已暂停' : phase.label }}</strong><span>{{ bpm ? `${bpm} BPM` : '放松片刻' }}</span><time :aria-label="options?.minutes ? '剩余时间' : '已播放时间'">{{ options?.minutes ? clockTime(remaining) : clockTime(player.elapsed) }}</time></div>
-        <progress v-if="options?.minutes" :value="player.elapsed" :max="options.minutes * 60000" aria-label="本次播放进度" />
-        <div class="player-file"><span :title="current?.path">{{ current?.name }}</span><small>{{ player.index + 1 }} / {{ queue.length }}</small></div>
+      <div v-show="!runtimeSettings" class="player-bottom">
+        <div class="rhythm-status"><span class="beat-dot" :class="{ pulse: active && player.beat }" aria-hidden="true"></span><strong aria-live="polite">{{ player.mode === 'finished' ? '已结束' : player.paused ? '已暂停' : phase.label }}</strong><span>{{ bpm ? `${bpm} BPM` : '放松片刻' }}</span><time v-if="!options?.hideTime" :aria-label="options?.minutes ? '剩余时间' : '已播放时间'">{{ options?.minutes ? clockTime(remaining) : clockTime(player.elapsed) }}</time></div>
+        <progress v-if="options?.minutes && !options.hideTime" :value="player.elapsed" :max="options.minutes * 60000" aria-label="本次播放进度" />
+        <div class="player-file"><span :title="current?.path">{{ current?.name }}</span><small>第 {{ player.cycle }} 轮 · {{ player.index + 1 }} / {{ queue.length }}{{ queueLoading ? '+' : '' }}</small></div>
         <div class="player-controls"><button class="player-button" :disabled="player.mode !== 'playing' || (!options?.loop && player.index === 0)" aria-label="上一项" title="上一项（←）" @click="step(-1)"><Icon name="chevron" class="previous-icon" /></button><button ref="controls" class="player-button main-play" :disabled="player.mode !== 'playing' || !!player.error" :aria-label="player.paused ? '继续播放' : '暂停播放'" @click="player.paused ? resume() : pause()"><Icon :name="player.paused ? 'play' : 'pause'" :size="24" /></button><button class="player-button" :disabled="player.mode !== 'playing'" aria-label="下一项" title="下一项（→）" @click="step(1)"><Icon name="chevron" /></button><span class="control-divider"></span><button class="player-button" :class="{ liked: favorite }" :aria-pressed="favorite" :aria-label="favorite ? '取消喜欢' : '喜欢'" @click="toggleFavorite"><Icon name="heart" /><span class="favorite-label">{{ favorite ? '已喜欢' : '喜欢' }}</span></button><button class="player-button stop-button" :disabled="player.mode !== 'playing'" @click="finish('已结束播放')">结束</button></div>
         <div v-if="current?.kind === 'image' && player.mode === 'playing'" class="image-controls"><label><input v-model="player.autoImages" type="checkbox" @change="player.imageElapsed = 0; nextBeat = 0; player.zoom = 1" />自动切图</label><select v-if="options?.kind === 'image'" :value="options.imageTiming" aria-label="图片切换方式" @change="updateImageTiming"><option value="time">按时间</option><option value="beat">按 BPM</option></select><label v-if="imageBeatMode" class="interval-control"><input v-model="bpmInput" type="number" min="30" max="180" aria-label="快速节拍（BPM）" @change="updateBpm" />快速 BPM</label><label v-else class="interval-control"><input v-model="imageIntervalInput" type="number" min="1" max="300" aria-label="自动切图间隔（秒）" @change="updateInterval" />秒</label><span class="zoom-controls"><button class="player-button" :disabled="player.zoom <= 1" aria-label="缩小图片" @click="zoom(-.5)">−</button><button class="player-button" title="还原图片" @click="zoom(0)">{{ Math.round(player.zoom * 100) }}%</button><button class="player-button" :disabled="player.zoom >= 4" aria-label="放大图片" @click="zoom(.5)">＋</button></span></div>
         <p v-if="player.note" class="player-note" role="status">{{ player.note }}</p>
+        <details v-if="player.paused && player.mode === 'playing'" class="player-help"><summary>操作说明</summary><ul><li>左右方向键、点击图片或左右滑动切换媒体。</li><li>空格暂停或继续，F 切换全屏；表单和视频控件保留自身按键。</li><li>按时间保留暂停前的剩余间隔；按 BPM 在继续后重新计一拍，休息时保持图片。</li><li>放大后可拖动查看，自动切图会关闭。</li><li>只有已展示的图片才记入本机去重记录。返回列表或结束不会删除文件。</li></ul></details>
       </div>
     </section>
   </div>
@@ -424,6 +552,11 @@ onBeforeUnmount(() => {
 .playlist-editor { max-width: 920px; margin: 0 auto; }
 .playlist-picker { display: flex; align-items: end; gap: 16px; margin-bottom: 24px; }
 .playlist-picker > label { flex: 1; min-width: 0; }
+.setup-summary { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 24px; padding: 20px; border-radius: 18px; background: var(--color-soft); }
+.setup-summary > div { min-width: 0; }
+.setup-summary strong { font-size: 17px; }
+.setup-summary p { margin: 6px 0 0; font-size: 14px; color: var(--color-muted); line-height: 1.6; }
+.setup-summary button { flex-shrink: 0; }
 .playlist-fields { min-width: 0; border: 0; padding: 0; margin: 0; }
 .playlist-name { max-width: 440px; }
 .media-types { display: flex; gap: 4px; width: fit-content; border: 0; padding: 4px; margin: 20px 0; background: var(--color-soft); border-radius: 12px; }
@@ -443,13 +576,18 @@ onBeforeUnmount(() => {
 .gallery-help { margin-top: 12px; }
 .missing-gallery { color: var(--color-danger); }
 .playback-settings { margin: 24px 0; border-block: 1px solid var(--color-hairline); }
-.playback-settings summary { padding: 16px 0; cursor: pointer; font-size: 14px; }
-.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.playback-settings > p { margin-top: 12px; }
-.playback-toggles { display: flex; flex-wrap: wrap; gap: 16px 24px; margin: 20px 0; }
-.playback-toggles label { flex-direction: row; align-items: center; min-height: 44px; }
+.playback-settings { padding-block: 20px; }
+.playback-settings h2, .runtime-heading h2 { margin: 0 0 16px; font-size: 20px; }
+.configuration-management { margin: 24px 0; }
+.configuration-management summary { min-height: 44px; cursor: pointer; }
+.configuration-management p { font-size: 14px; line-height: 1.6; }
+.configuration-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
 .playback-start { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .rhythm-player { background: #000; color: #fff; border-radius: 18px; overflow: hidden; max-width: 1200px; margin: 0 auto; }
+.runtime-settings { background: var(--color-canvas); color: var(--color-ink); padding: 24px; overflow-y: auto; min-height: 0; }
+.runtime-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; margin-bottom: 24px; }
+.runtime-heading p { font-size: 14px; color: var(--color-muted); max-width: 560px; }
+.runtime-heading button { flex-shrink: 0; }
 .rhythm-player:fullscreen { display: flex; flex-direction: column; width: 100%; height: 100%; max-width: none; border-radius: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 .player-top { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 4px 12px; }
 .player-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #dccbd3; }
@@ -492,14 +630,21 @@ onBeforeUnmount(() => {
 .zoom-controls { display: flex; align-items: center; gap: 0; }
 .zoom-controls button { font-variant-numeric: tabular-nums; padding-inline: 8px; }
 .player-note { margin-top: 8px; text-align: center; color: #dccbd3; font-size: 14px; }
+.player-help { margin-top: 12px; color: #dccbd3; font-size: 14px; }
+.player-help summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
+.player-help ul { padding-left: 20px; line-height: 1.7; }
 @media (max-width: 600px) {
+  .setup-summary { align-items: stretch; flex-direction: column; gap: 16px; padding: 16px; }
+  .runtime-settings { padding: 16px; }
+  .runtime-heading { flex-wrap: wrap; gap: 8px; }
   .playlist-picker { gap: 10px; }
   .media-types { width: 100%; }
   .media-types label { flex: 1; justify-content: center; padding-inline: 12px; }
   .gallery-choices label { gap: 10px; padding-inline: 6px; }
   .gallery-choices label > svg { display: none; }
-  .settings-grid { grid-template-columns: 1fr; }
   .rhythm-player { margin-inline: -12px; border-radius: 12px; }
+  .media-stage { height: max(180px, calc(100svh - 450px)); }
+  :fullscreen .media-stage { height: auto; }
   .player-top { gap: 4px; padding-inline: 4px; }
   .player-top > button { gap: 4px; padding-inline: 8px; }
   .player-bottom { padding-inline: 12px; }
@@ -508,9 +653,16 @@ onBeforeUnmount(() => {
   .stop-button { padding-inline: 8px; }
   .image-controls { gap: 6px; flex-wrap: wrap; }
   .image-controls label { gap: 6px; }
-  .image-controls .interval-control input { width: 52px; }
+  .image-controls .interval-control input { width: 68px; }
   .zoom-controls button { min-width: 44px; padding-inline: 5px; }
 }
 @media (max-width: 380px) { .favorite-label { display: none; } }
+@media (max-height: 500px) and (min-width: 601px) {
+  .rhythm-player, .rhythm-player:fullscreen { position: fixed; inset: 0; z-index: 30; display: grid; grid-template-columns: minmax(0, 1fr) 330px; grid-template-rows: 56px minmax(0, 1fr); height: 100dvh; max-width: none; margin: 0; border-radius: 0; }
+  .player-top, .runtime-settings { grid-column: 1 / -1; }
+  .media-stage { height: 100%; }
+  .player-bottom { overflow-y: auto; padding: 8px 12px; }
+  .image-controls { flex-wrap: wrap; }
+}
 @media (prefers-reduced-motion: reduce) { .beat-dot { transition: none; } .beat-dot.pulse { background: #735d69; } }
 </style>
