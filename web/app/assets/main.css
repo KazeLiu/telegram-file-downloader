@@ -332,3 +332,9 @@
   .logs-toolbar > select { width: 100%; } .live-logs { flex: 1; }
 }
 }
+
+/* 播放器运行层的沉浸态：播放期间隐藏全局导航与页头，只留播放层。 */
+html.playback-immersive { overflow: hidden; }
+html.playback-immersive .global-header { display: none; }
+html.playback-immersive .page-content { --page-max-width: 100%; --page-gutter: 0px; padding-bottom: 0; }
+html.playback-immersive .page-heading { display: none; }
