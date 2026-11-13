@@ -11,7 +11,9 @@ import PlaybackStage from './playback/PlaybackStage.vue'
 import PlaybackTopBar from './playback/PlaybackTopBar.vue'
 import PlaybackVolumePopover from './playback/PlaybackVolumePopover.vue'
 import { guideSteps, markGuideSeen, readGuideSeen } from './playback/guideSteps'
-import { finishLabels, phaseHints, phaseLabels, phaseLegend, phaseOrder, phaseRatios } from './playback/types'
+import { finishLabels, phaseHints, phaseLabels, phaseLegend, phaseOrder, phaseRatios, type FinishReason } from './playback/types'
+import { nextPermitRate, overtimeLimit, overtimeStep, phaseDurationMs, pickPhaseKind, resolveEnding, waitDurationMs } from './playback/edge'
+import { pickVoiceLine, type VoiceMoment } from './playback/voiceLines'
 import { loadPlaybackQueue, PlaybackImageBuffer } from './playbackLoader'
 import { clockTime, exportConfiguration, imageKey, importConfiguration, mediaKey, mediaUrl, newPlaylist, nextBeatTime, orderedMedia, playbackCycle, playbackStorageKey, readPreferences, validPlaylist,
   type Gallery, type ImageTiming, type PlaybackMedia, type PlaybackPreferences, type Playlist } from './playback'
@@ -22,13 +24,18 @@ const playlist = computed(() => preferences.playlists.find(item => item.id === p
 const queue = shallowRef<PlaybackMedia[]>([])
 const player = reactive({ mode: 'setup' as 'setup' | 'playing' | 'finished', index: 0, paused: false, ready: false,
   error: '', note: '', elapsed: 0, imageElapsed: 0, phaseElapsed: 0, phaseDuration: 24000, phase: 0, autoImages: true,
-  imageSeconds: 8, zoom: 1, fullscreen: false, finishedReason: '', beat: false, cycle: 1, noCrop: false, likes: 0 })
+  imageSeconds: 8, zoom: 1, fullscreen: false, finishedReason: '', beat: false, cycle: 1, noCrop: false,
+  // 寸止玩法：忍住次数、当前许可率、是否在许可窗口、窗口剩余秒、加时次数、本次会话总时长。
+  held: 0, permit: 0, allowed: false, windowLeft: 0, overtimeCount: 0, totalMs: 0 })
 const options = ref<Playlist>()
 const runtimeSettings = ref(false)
 const volumeOpen = ref(false)
 const landscapeAvailable = ref(false)
 const guideOpen = ref(false)
 const pendingStart = ref(false)
+// 中央大字：只在进行中的事件（开始、切相位、忍住、加时、许可）时改写，不在 25ms tick 里重算。
+const centerLine = ref('')
+let lastVoiceText = ''
 let immersive = false
 const importInput = ref<HTMLInputElement>()
 const settingsButton = ref<HTMLButtonElement>()
@@ -57,7 +64,9 @@ const phaseKind = computed(() => phaseOrder[player.phase] ?? 'slow')
 const phase = computed(() => ({ label: phaseLabels[phaseKind.value], ratio: phaseRatios[phaseKind.value] }))
 const bpm = computed(() => Math.round((options.value?.bpm || 100) * phase.value.ratio))
 const beatIntervalMs = computed(() => (bpm.value ? 60000 / bpm.value : 0))
-const progressPercent = computed(() => (options.value?.minutes ? Math.min(100, player.elapsed / (options.value.minutes * 60000) * 100) : 0))
+// 本次会话总时长（毫秒）：加时赛会把它变长，未加时就是设置的分钟数。
+const sessionMs = computed(() => player.totalMs || (options.value?.minutes || 0) * 60000)
+const progressPercent = computed(() => (sessionMs.value ? Math.min(100, player.elapsed / sessionMs.value * 100) : 0))
 // 中央细进度条表示「当前这一张还要多久换」，与底部的整场进度不是同一个东西。
 const itemProgress = computed(() => {
   if (player.paused || current.value?.kind !== 'image' || !player.autoImages || imageBeatMode.value || !player.imageSeconds) return 0
@@ -66,7 +75,7 @@ const itemProgress = computed(() => {
 const pipAvailable = computed(() => current.value?.kind === 'video' && 'pictureInPictureEnabled' in document)
 const favorite = computed(() => !!current.value && preferences.favorites.includes(mediaKey(current.value)))
 const active = computed(() => player.mode === 'playing' && !player.paused && player.ready && !player.error)
-const remaining = computed(() => Math.max(0, (options.value?.minutes || 0) * 60000 - player.elapsed))
+const remaining = computed(() => Math.max(0, sessionMs.value - player.elapsed))
 const playerElement = ref<HTMLElement>()
 const imageViewport = ref<HTMLElement>()
 const video = ref<HTMLVideoElement>()
@@ -204,10 +213,17 @@ async function prepareAudio() {
     if (audio.state === 'suspended') await audio.resume()
   } catch { player.note = '节拍器无法启用，可检查浏览器声音权限，或关闭节拍器继续。' }
 }
-function speak() {
-  if (!options.value?.speech || !('speechSynthesis' in window)) return
+/** 换中央大字：同一时机内随机，并尽量避开上一句。 */
+function setLine(moment: VoiceMoment, fallback = '') {
+  const text = pickVoiceLine(moment, Math.random, lastVoiceText)
+  if (text) lastVoiceText = text
+  centerLine.value = text ?? fallback
+}
+/** 既有的语音播报通道：语音开关打开时，把当前中央大字念出来。 */
+function speakLine() {
+  if (!options.value?.speech || !('speechSynthesis' in window) || !centerLine.value) return
   speechSynthesis.cancel()
-  const utterance = new SpeechSynthesisUtterance(phase.value.label)
+  const utterance = new SpeechSynthesisUtterance(centerLine.value)
   utterance.lang = 'zh-CN'; utterance.rate = options.value.speechRate; utterance.volume = options.value.speechVolume / 100
   utterance.onerror = event => { if (!['canceled', 'interrupted'].includes(event.error) && !disposed) player.note = '语音提示不可用，请检查系统中文语音和浏览器权限。' }
   speechSynthesis.speak(utterance)
@@ -274,10 +290,16 @@ async function start() {
         runtimeSettings.value = false
         if (cycle.reset) player.note = '未展示图片不足一轮，已开始新的图片周期。'
         Object.assign(player, { mode: 'playing', index: 0, paused: document.hidden, ready: false, error: '', elapsed: 0, imageElapsed: 0,
-          phaseElapsed: 0, phaseDuration: 24000, phase: 0, autoImages: true, imageSeconds: item.imageSeconds, zoom: 1, finishedReason: '', beat: false, cycle: 1, noCrop: false, likes: 0 })
+          phaseElapsed: 0, phaseDuration: 24000, phase: 0, autoImages: true, imageSeconds: item.imageSeconds, zoom: 1, finishedReason: '', beat: false, cycle: 1, noCrop: false,
+          held: 0, permit: nextPermitRate(item.permitBase, 0), allowed: false, windowLeft: 0, overtimeCount: 0, totalMs: (item.minutes || 0) * 60000 })
+        // 第一段相位同样按三比例抽签，并用指令时长倍率算时长。
+        const firstPhase = pickPhaseKind(item.ratioFast, item.ratioSlow, item.ratioRest, null, Math.random)
+        player.phase = Math.max(0, phaseOrder.indexOf(firstPhase))
+        player.phaseDuration = phaseDurationMs(firstPhase, item.instructionPace, Math.random)
         previousTick = performance.now(); nextBeat = 0
+        setLine('start', phaseHints[firstPhase])
         if (item.speech && !('speechSynthesis' in window)) player.note = '当前浏览器不支持语音提示。'
-        await nextTick(); playerElement.value?.focus(); if (!player.paused) speak()
+        await nextTick(); playerElement.value?.focus(); if (!player.paused) speakLine()
       } else if (player.mode === 'playing') {
         let count = queue.value.filter(media => media.kind === 'image').length
         const added = orderedMedia(items.filter(media => media.kind !== 'image' || !preferences.shownImages.includes(imageKey(media))), item.order)
@@ -304,7 +326,7 @@ async function resume() {
   player.paused = false; player.note = ''; previousTick = performance.now()
   await prepareAudio()
   if (current.value?.kind === 'video') await playVideo()
-  if (!player.paused) speak()
+  if (!player.paused) speakLine()
 }
 async function playVideo() {
   const element = video.value
@@ -315,10 +337,10 @@ async function playVideo() {
     pause(); player.note = '视频尚未开始，请点击继续播放；若仍无法播放，请检查浏览器支持的格式。'
   }
 }
-function finish(reason: string) {
+function finish(reason: FinishReason) {
   queueRequest.abort(); queueLoading.value = false; pendingAdvance = false
   imageLoad++; imageBuffer.clear()
-  pause(); player.mode = 'finished'; player.finishedReason = reason; player.error = ''
+  pause(); player.mode = 'finished'; player.finishedReason = finishLabels[reason]; player.error = ''
 }
 function step(delta: number) {
   if (player.mode !== 'playing' || runtimeSettings.value) return
@@ -326,7 +348,7 @@ function step(delta: number) {
   if (target >= queue.value.length) {
     if (queueError.value) { pause(); player.note = queueError.value; return }
     if (queueLoading.value) { pendingAdvance = true; player.ready = false; player.note = '正在补充媒体列表，请稍候…'; return }
-    if (!options.value?.loop) { finish('已播放完列表'); return }
+    if (!options.value?.loop) { finish('queue'); return }
     const cycle = playbackCycle(availableMedia, options.value, preferences.shownImages)
     queue.value = cycle.queue; preferences.shownImages = cycle.shownImages
     player.cycle++
@@ -339,12 +361,55 @@ function step(delta: number) {
     imageViewport.value?.scrollTo(0, 0)
   })
 }
+/** 按三比例抽下一段相位（不与上一段相同），时长走 phaseDurationMs。 */
 function changePhase() {
-  const candidates = [0, 1, 2].filter(value => value !== player.phase)
-  player.phase = candidates[Math.floor(Math.random() * candidates.length)]!
-  player.phaseElapsed = 0; nextBeat = 0
-  player.phaseDuration = (player.phase === 2 ? 10 + Math.random() * 6 : 18 + Math.random() * 13) * 1000
-  speak()
+  const item = options.value
+  if (!item) return
+  const kind = pickPhaseKind(item.ratioFast, item.ratioSlow, item.ratioRest, phaseKind.value, Math.random)
+  player.phase = Math.max(0, phaseOrder.indexOf(kind))
+  player.phaseElapsed = 0
+  player.phaseDuration = phaseDurationMs(kind, item.instructionPace, Math.random)
+  nextBeat = 0; player.beat = false
+  setLine(`phase-${kind}` as VoiceMoment, phaseHints[kind])
+  speakLine()
+}
+/** 忍住了：次数 +1、按许可率公式重算，并立刻切到休息相位等它平息。 */
+function hold() {
+  const item = options.value
+  if (!item || player.mode !== 'playing' || player.paused || player.error || player.allowed || runtimeSettings.value) return
+  player.held++
+  player.permit = nextPermitRate(item.permitBase, player.held)
+  player.phase = Math.max(0, phaseOrder.indexOf('rest'))
+  player.phaseElapsed = 0
+  player.phaseDuration = waitDurationMs(item.waitMode, item.waitPreset, item.waitMin, item.waitMax, Math.random)
+  nextBeat = 0; player.beat = false
+  setLine('held')
+  speakLine()
+}
+/** 时间到结算：许可窗口 / 加时 / 直接结束。 */
+function settleEnding() {
+  const item = options.value
+  if (!item || player.mode !== 'playing') return
+  const outcome = resolveEnding(item.ending, player.permit, Math.random, player.overtimeCount)
+  if (outcome === 'allow') {
+    player.allowed = true
+    player.windowLeft = Math.max(1, Math.round(item.edgeWindow))
+    setLine('ending-allow', '现在可以了')
+    speakLine()
+    return
+  }
+  if (outcome === 'ruin') { finish('ruin'); return }
+  // 加时赛：没过上限就加时并继续计时，许可率每次 +15%。
+  if (item.ending === 'overtime' && player.overtimeCount < overtimeLimit) {
+    player.overtimeCount++
+    player.permit = Math.min(100, player.permit + overtimeStep)
+    player.totalMs += Math.max(1000, Math.round((item.minutes || 0) * 60000 * overtimeStep / 100))
+    centerLine.value = `加时 ${player.overtimeCount}`
+    lastVoiceText = centerLine.value
+    speakLine()
+    return
+  }
+  finish('deny')
 }
 function tick() {
   const now = performance.now(), elapsed = now - previousTick
@@ -353,9 +418,18 @@ function tick() {
     if (imageBeatMode.value && !player.ready) { nextBeat = 0; player.beat = false }
     return
   }
-  player.elapsed += elapsed; player.phaseElapsed += elapsed
-  if (options.value?.minutes && remaining.value <= 0) { finish('本次计时已完成'); return }
-  if (player.phaseElapsed >= player.phaseDuration) changePhase()
+  if (player.allowed) {
+    // 许可窗口：只走白色倒计时，不切相位、不再累加整场计时。
+    player.windowLeft = Math.max(0, player.windowLeft - elapsed / 1000)
+    if (player.windowLeft <= 0) { finish('allow'); return }
+  } else {
+    player.elapsed += elapsed; player.phaseElapsed += elapsed
+    if (options.value?.minutes && remaining.value <= 0) {
+      settleEnding()
+      if (player.mode !== 'playing') return
+    }
+    if (!player.allowed && player.phaseElapsed >= player.phaseDuration) changePhase()
+  }
   beat(now)
   if (current.value?.kind === 'image' && player.autoImages && !imageBeatMode.value) {
     player.imageElapsed += elapsed
@@ -383,7 +457,7 @@ function videoStarted(event: Event) {
   if (player.mode !== 'playing' || document.hidden || runtimeSettings.value) { video.value?.pause(); return }
   if (player.paused) {
     player.paused = false; player.note = ''; previousTick = performance.now()
-    void prepareAudio(); speak()
+    void prepareAudio(); speakLine()
   }
 }
 function videoPlaying(event: Event) {
@@ -444,7 +518,7 @@ function toggleFavorite() {
   if (!current.value) return
   const key = mediaKey(current.value)
   if (favorite.value) preferences.favorites = preferences.favorites.filter(value => value !== key)
-  else { preferences.favorites = [...preferences.favorites, key]; player.likes++ }
+  else preferences.favorites = [...preferences.favorites, key]
 }
 function zoom(delta: number) {
   player.zoom = delta === 0 ? 1 : Math.max(1, Math.min(4, player.zoom + delta))
@@ -504,6 +578,9 @@ function updateVolume(payload: { key: 'mediaVolume' | 'beatVolume' | 'speechVolu
 function backToLists() {
   queueRequest.abort(); queueLoading.value = false; pendingAdvance = false; imageLoad++; imageBuffer.clear()
   pause(); player.mode = 'setup'; runtimeSettings.value = false; queue.value = []; availableMedia = []; player.error = ''; player.note = ''
+  // 回到列表时把玩法状态一起清空，下一次开始从头计数。
+  player.allowed = false; player.windowLeft = 0; player.held = 0; player.permit = 0; player.overtimeCount = 0; player.totalMs = 0
+  centerLine.value = ''; lastVoiceText = ''
   if (document.fullscreenElement === playerElement.value) void document.exitFullscreen()
 }
 function exitRun() {
@@ -601,7 +678,7 @@ onBeforeUnmount(() => {
             :hide-time="!!options?.hideTime"
             :paused="player.paused"
             :playing="player.mode === 'playing'"
-            :likes="player.likes"
+            :held="player.held"
             :no-crop="player.noCrop"
             :pip-available="pipAvailable"
             :landscape-available="landscapeAvailable"
@@ -624,13 +701,11 @@ onBeforeUnmount(() => {
             :finished="false"
             :loading="!player.ready && !player.error"
             :error="player.error"
-            :hint="phaseHints[phaseKind]"
+            :hint="centerLine || phaseHints[phaseKind]"
             :progress="itemProgress"
-            :like-label="favorite ? '已喜欢' : '喜欢'"
-            :like-count="0"
-            :like-active="favorite"
-            :can-like="player.mode === 'playing' && !player.error"
-            @like="toggleFavorite"
+            :can-hold="player.mode === 'playing' && !player.error && !player.allowed && !runtimeSettings"
+            @hold="hold"
+            @edge="finish('edge')"
             @skip="step(1)"
           >
             <div v-show="!runtimeSettings" class="playback-media">
@@ -646,6 +721,8 @@ onBeforeUnmount(() => {
             <template #help>
               <ul>
                 <li>左右方向键、点击图片或左右滑动切换媒体。</li>
+                <li>点「忍住了」：在临界点按下，随后松手等它平息，许可率会跟着提高。</li>
+                <li>点「射了」表示没忍住，会直接结算本次播放。</li>
                 <li>空格暂停或继续，F 切换全屏，Esc 退出播放。</li>
                 <li>按时间保留暂停前的剩余间隔；按 BPM 在继续后重新计一拍，休息时保持图片。</li>
                 <li>放大后可拖动查看，自动切图会关闭。</li>
@@ -658,16 +735,19 @@ onBeforeUnmount(() => {
           <PlaybackBottom
             :title="current?.name || ''"
             :elapsed="clockTime(player.elapsed)"
-            :total="options?.minutes ? clockTime(options.minutes * 60000) : ''"
+            :total="options?.minutes ? clockTime(sessionMs) : ''"
             :progress="progressPercent"
             :hide-time="!!options?.hideTime"
             :legend="phaseLegend"
             next-label="换一项"
             :can-next="player.mode === 'playing'"
+            :allowed="player.allowed"
+            :window-left="player.windowLeft"
+            :window-total="options?.edgeWindow ?? 0"
             @next="step(1)"
           >
             <template #controls>
-              <div class="player-controls"><button class="player-button" :disabled="player.mode !== 'playing' || (!options?.loop && player.index === 0)" aria-label="上一项" title="上一项（←）" @click="step(-1)"><Icon name="chevron" class="previous-icon" /></button><button class="player-button" :disabled="player.mode !== 'playing'" aria-label="下一项" title="下一项（→）" @click="step(1)"><Icon name="chevron" /></button><button class="player-button" :class="{ liked: favorite }" :aria-pressed="favorite" :aria-label="favorite ? '取消喜欢' : '喜欢'" @click="toggleFavorite"><Icon name="heart" /><span class="favorite-label">{{ favorite ? '已喜欢' : '喜欢' }}</span></button><button class="player-button stop-button" :disabled="player.mode !== 'playing'" @click="finish(finishLabels.manual)">结束</button></div>
+              <div class="player-controls"><button class="player-button" :disabled="player.mode !== 'playing' || (!options?.loop && player.index === 0)" aria-label="上一项" title="上一项（←）" @click="step(-1)"><Icon name="chevron" class="previous-icon" /></button><button class="player-button" :disabled="player.mode !== 'playing'" aria-label="下一项" title="下一项（→）" @click="step(1)"><Icon name="chevron" /></button><button class="player-button" :class="{ liked: favorite }" :aria-pressed="favorite" :aria-label="favorite ? '取消喜欢' : '喜欢'" @click="toggleFavorite"><Icon name="heart" /><span class="favorite-label">{{ favorite ? '已喜欢' : '喜欢' }}</span></button><button class="player-button stop-button" :disabled="player.mode !== 'playing'" @click="finish('manual')">结束</button></div>
               <div v-if="current?.kind === 'image' && player.mode === 'playing'" class="image-controls"><label><input v-model="player.autoImages" type="checkbox" @change="player.imageElapsed = 0; nextBeat = 0; player.zoom = 1" />自动切图</label><select v-if="options?.kind === 'image'" :value="options.imageTiming" aria-label="图片切换方式" @change="updateImageTiming"><option value="time">按时间</option><option value="beat">按 BPM</option></select><label v-if="imageBeatMode" class="interval-control"><input v-model="bpmInput" type="number" min="30" max="180" aria-label="快速节拍（BPM）" @change="updateBpm" />快速 BPM</label><label v-else class="interval-control"><input v-model="imageIntervalInput" type="number" min="1" max="300" aria-label="自动切图间隔（秒）" @change="updateInterval" />秒</label><span class="zoom-controls"><button class="player-button" :disabled="player.zoom <= 1" aria-label="缩小图片" @click="zoom(-.5)">−</button><button class="player-button" title="还原图片" @click="zoom(0)">{{ Math.round(player.zoom * 100) }}%</button><button class="player-button" :disabled="player.zoom >= 4" aria-label="放大图片" @click="zoom(.5)">＋</button></span></div>
               <p v-if="player.note" class="player-note" role="status">{{ player.note }}</p>
             </template>

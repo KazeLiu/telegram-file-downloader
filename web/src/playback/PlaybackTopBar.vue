@@ -8,7 +8,8 @@ defineProps<{
   hideTime: boolean
   paused: boolean
   playing: boolean
-  likes: number
+  /** 忍住次数（寸止玩法的主计数），替代原来的喜欢计数。 */
+  held: number
   noCrop: boolean
   pipAvailable: boolean
   landscapeAvailable: boolean
@@ -32,7 +33,7 @@ defineEmits<{
     <div class="top-left">
       <span class="item-count">第 {{ position.index + 1 }} / {{ position.total }} 项</span>
       <time v-if="!hideTime && remaining" class="remaining" aria-label="剩余时间">{{ remaining }}</time>
-      <span class="like-count">喜欢 {{ likes }}</span>
+      <span class="held-count" aria-label="忍住次数">忍住 {{ held }}</span>
     </div>
 
     <div class="top-right">
@@ -143,7 +144,7 @@ defineEmits<{
   line-height: 1.1;
   white-space: nowrap;
 }
-.like-count {
+.held-count {
   color: rgba(255, 255, 255, .72);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -203,7 +204,7 @@ defineEmits<{
   .item-count { max-width: 30%; }
 }
 @media (max-width: 400px) {
-  .like-count { display: none; }
+  .held-count { display: none; }
   .item-count { max-width: 34%; }
 }
 @media (min-width: 900px) {

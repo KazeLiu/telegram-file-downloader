@@ -11,6 +11,12 @@ const props = defineProps<{
   legend: LegendItem[]
   nextLabel: string
   canNext: boolean
+  /** 是否处于许可窗口：此时进度条换成白色倒计时。 */
+  allowed: boolean
+  /** 许可窗口剩余秒数。 */
+  windowLeft: number
+  /** 许可窗口总秒数。 */
+  windowTotal: number
 }>()
 
 defineEmits<{
@@ -20,9 +26,17 @@ defineEmits<{
 /** 图例圆点颜色：与中央阶段药丸保持同一套色。 */
 const legendTones: Record<LegendItem['tone'], string> = { slow: '#e6b34a', fast: '#35d6a4', rest: '#f2637c' }
 
-/** 不限时（total 为空）或隐藏时间时，整条进度行都不渲染。 */
-const showProgressRow = computed(() => !props.hideTime && props.total !== '')
-const progressValue = computed(() => (Number.isFinite(props.progress) ? Math.min(100, Math.max(0, props.progress)) : 0))
+/** 许可窗口里即使不限时也要显示倒计时行。 */
+const showProgressRow = computed(() => props.allowed || (!props.hideTime && props.total !== ''))
+const progressValue = computed(() => {
+  if (props.allowed) {
+    if (!Number.isFinite(props.windowTotal) || props.windowTotal <= 0) return 0
+    return Math.min(100, Math.max(0, props.windowLeft / props.windowTotal * 100))
+  }
+  return Number.isFinite(props.progress) ? Math.min(100, Math.max(0, props.progress)) : 0
+})
+/** 许可窗口里显示剩余秒数，平时显示「已播 / 总时长」。 */
+const progressText = computed(() => (props.allowed ? `许可 ${Math.ceil(Math.max(0, props.windowLeft))} 秒` : `${props.elapsed} / ${props.total}`))
 </script>
 
 <template>
@@ -32,15 +46,16 @@ const progressValue = computed(() => (Number.isFinite(props.progress) ? Math.min
     <div v-if="showProgressRow" class="bottom-progress">
       <div
         class="progress-track"
+        :class="{ allowed }"
         role="progressbar"
-        aria-label="本次播放进度"
+        :aria-label="allowed ? '许可窗口倒计时' : '本次播放进度'"
         aria-valuemin="0"
         aria-valuemax="100"
         :aria-valuenow="Math.round(progressValue)"
       >
-        <span class="progress-fill" :style="{ width: `${progressValue}%` }"></span>
+        <span class="progress-fill" :class="{ allowed }" :style="{ width: `${progressValue}%` }"></span>
       </div>
-      <span class="progress-time">{{ elapsed }} / {{ total }}</span>
+      <span class="progress-time">{{ progressText }}</span>
     </div>
 
     <div class="bottom-row">
@@ -98,6 +113,14 @@ const progressValue = computed(() => (Number.isFinite(props.progress) ? Math.min
   border-radius: 999px;
   background: rgba(255, 255, 255, .82);
   transition: width .25s linear;
+}
+/* 许可窗口：整条换成纯白倒计时，和平时偏灰的进度条区分开 */
+.progress-track.allowed {
+  background: rgba(255, 255, 255, .34);
+}
+.progress-fill.allowed {
+  background: #fff;
+  box-shadow: 0 0 10px rgba(255, 255, 255, .55);
 }
 .progress-time {
   flex-shrink: 0;

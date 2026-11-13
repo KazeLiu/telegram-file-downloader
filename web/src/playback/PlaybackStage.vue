@@ -11,14 +11,15 @@ const props = defineProps<{
   error: string
   hint: string
   progress: number
-  likeLabel: string
-  likeCount: number
-  likeActive: boolean
-  canLike: boolean
+  /** 是否允许按「忍住了」：播放中、未暂停、无错误且不在许可窗口内。 */
+  canHold: boolean
 }>()
 
 const emit = defineEmits<{
-  like: []
+  /** 忍住一次：累积许可率并切到休息相位。 */
+  hold: []
+  /** 没忍住：直接按失败结束。 */
+  edge: []
   skip: []
 }>()
 
@@ -40,10 +41,11 @@ const showBpm = computed(() => props.bpm > 0 && !props.paused && !props.finished
 const hasError = computed(() => !!props.error)
 const showProgress = computed(() => Number.isFinite(props.progress) && props.progress > 0)
 const progressValue = computed(() => (Number.isFinite(props.progress) ? Math.min(100, Math.max(0, props.progress)) : 0))
-/** 暂停、出错、加载中或不允许喜欢时主按钮不可点。 */
-const mainDisabled = computed(() => !props.canLike || props.paused || hasError.value || props.loading)
+/** 暂停、出错、加载中或当前不允许时主按钮不可点。 */
+const mainDisabled = computed(() => !props.canHold || props.paused || hasError.value || props.loading)
 const showHelp = computed(() => props.paused && !hasError.value)
-const showLikes = computed(() => props.likeCount > 0 && !hasError.value)
+/** 主按钮下方常驻的操作说明：按下后要松手等它平息。 */
+const holdNote = '按在快忍不住的前一刻。按下后松手等它平息'
 </script>
 
 <template>
@@ -86,14 +88,17 @@ const showLikes = computed(() => props.likeCount > 0 && !hasError.value)
           v-if="!loading"
           class="stage-main"
           type="button"
+          aria-label="忍住了"
           :disabled="mainDisabled"
-          :aria-pressed="likeActive ? 'true' : 'false'"
-          @click="emit('like')"
+          @click="emit('hold')"
         >
-          {{ likeLabel }}
+          忍住了
         </button>
-        <p v-if="!loading && showLikes" class="stage-likes">已喜欢 {{ likeCount }} 次</p>
-        <button class="stage-skip" type="button" @click="emit('skip')">跳过</button>
+        <p v-if="!loading" class="stage-hold-note">{{ holdNote }}</p>
+        <div class="stage-text-actions">
+          <button class="stage-edge" type="button" @click="emit('edge')">射了</button>
+          <button class="stage-skip" type="button" @click="emit('skip')">跳过</button>
+        </div>
 
         <button
           v-if="showHelp"
@@ -255,21 +260,33 @@ const showLikes = computed(() => props.likeCount > 0 && !hasError.value)
   cursor: default;
 }
 .stage-main:focus-visible,
+.stage-edge:focus-visible,
 .stage-skip:focus-visible,
 .stage-help:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 3px;
 }
-.stage-likes {
-  margin: -4px 0 0;
-  color: rgba(255, 255, 255, .6);
+/* 主按钮下方常驻小字：写清按下去之后要松手等它平息 */
+.stage-hold-note {
+  max-width: 24ch;
+  margin: -6px 0 0;
+  color: rgba(255, 255, 255, .66);
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  text-wrap: balance;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, .55);
+}
+.stage-text-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: -4px;
+  pointer-events: auto;
 }
 /* 文字按钮：下划线细线，靠透明 padding 把命中区抬到 44px */
+.stage-edge,
 .stage-skip {
   min-height: 44px;
-  margin: -8px 0 0;
   padding: 0 12px;
   border: 0;
   color: rgba(255, 255, 255, .66);
@@ -283,6 +300,10 @@ const showLikes = computed(() => props.likeCount > 0 && !hasError.value)
   cursor: pointer;
   pointer-events: auto;
 }
+.stage-edge {
+  color: rgba(255, 255, 255, .82);
+}
+.stage-edge:hover,
 .stage-skip:hover {
   color: #fff;
 }

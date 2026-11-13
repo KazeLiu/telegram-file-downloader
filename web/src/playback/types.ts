@@ -41,10 +41,15 @@ export interface PlaybackPosition {
   cycle: number
 }
 
-export type FinishReason = 'duration' | 'queue' | 'manual'
+// 结束原因：前三种是原有的计时／列表／手动结束，后四种是寸止玩法的结算。
+export type FinishReason = 'duration' | 'queue' | 'manual' | 'edge' | 'deny' | 'allow' | 'ruin'
 
 export const finishLabels: Record<FinishReason, string> = {
   duration: '本次计时已完成',
   queue: '已播放完列表',
   manual: '已结束播放',
+  edge: '这次没忍住',
+  deny: '一直忍到结束，没给许可',
+  allow: '许可已给出',
+  ruin: '松手射精',
 }
