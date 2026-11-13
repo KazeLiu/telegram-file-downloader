@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { newPlaylist } from './playback'
 import type { Playlist } from './playback'
+import { playbackSummary } from './playback/summary'
 
 const settings = defineModel<Playlist>({ required: true })
 const props = defineProps<{ runtime?: boolean }>()
@@ -14,17 +16,63 @@ const groups = computed(() => [
 ])
 const visible = computed(() => groups.value.filter(group => search.value.trim()
   ? `${group.label} ${group.keywords}`.toLowerCase().includes(search.value.trim().toLowerCase()) : group.id === selected.value))
+const summary = computed(() => playbackSummary(settings.value))
+// 「恢复本组」只动当前分组，且要求再点一次确认，避免误触清掉还没记住的设置。
+const resetArmed = ref(false)
+const canReset = computed(() => !search.value.trim() && visible.value.length === 1)
+const resetLabel = computed(() => resetArmed.value ? '确认恢复？' : '恢复本组')
+watch([selected, search], () => { resetArmed.value = false })
+watch(settings, () => { resetArmed.value = false }, { deep: true })
+function selectGroup(id: string) {
+  selected.value = id
+  search.value = ''
+  resetArmed.value = false
+}
+function resetGroup() {
+  if (!resetArmed.value) { resetArmed.value = true; return }
+  resetArmed.value = false
+  const defaults = newPlaylist()
+  const item = settings.value
+  if (selected.value === 'playback') {
+    item.imageTiming = defaults.imageTiming
+    item.imageSeconds = defaults.imageSeconds
+    item.minutes = defaults.minutes
+    item.bpm = defaults.bpm
+    item.loop = defaults.loop
+  } else if (selected.value === 'media') {
+    item.order = defaults.order
+    item.imageCount = defaults.imageCount
+    item.favoritesOnly = defaults.favoritesOnly
+  } else if (selected.value === 'sound') {
+    item.metronome = defaults.metronome
+    item.beatVolume = defaults.beatVolume
+    item.mediaVolume = defaults.mediaVolume
+    item.speech = defaults.speech
+    item.speechVolume = defaults.speechVolume
+    item.speechRate = defaults.speechRate
+  } else {
+    item.hideTime = defaults.hideTime
+    item.brightness = defaults.brightness
+  }
+}
 </script>
 
 <template>
-  <div class="playback-settings-content">
+  <div class="settings-card" :class="{ runtime }">
+    <header class="card-head">
+      <div class="card-heading">
+        <h3 class="card-title">播放设置</h3>
+        <p class="card-summary">{{ summary }}</p>
+      </div>
+      <button v-if="canReset" type="button" class="text-button card-reset" :title="resetArmed ? '再点一次把本组恢复为默认值' : '只把本组恢复为默认值，其他分组不变'" @click="resetGroup">{{ resetLabel }}</button>
+    </header>
     <label class="settings-search">查找设置<input v-model="search" type="search" placeholder="例如：BPM、音量、图片数量" /></label>
     <div class="settings-tabs" role="group" aria-label="设置分类">
-      <button v-for="group in groups" :key="group.id" type="button" :aria-pressed="!search && selected === group.id" @click="selected = group.id; search = ''">{{ group.label }}</button>
+      <button v-for="group in groups" :key="group.id" type="button" :aria-pressed="!search && selected === group.id" @click="selectGroup(group.id)">{{ group.label }}</button>
     </div>
     <p v-if="!visible.length" class="muted" role="status">没有匹配的设置，请换个关键词。</p>
     <section v-for="group in visible" :key="group.id" class="settings-section" :aria-label="`${group.label}设置`">
-      <h3 v-if="search">{{ group.label }}</h3>
+      <h4 v-if="search" class="section-title">{{ group.label }}</h4>
       <template v-if="group.id === 'playback'">
         <div class="settings-grid">
           <label v-if="settings.kind === 'image'">图片切换<select v-model="settings.imageTiming"><option value="time">按时间</option><option value="beat">按 BPM · 每拍一张</option></select></label>
@@ -66,15 +114,30 @@ const visible = computed(() => groups.value.filter(group => search.value.trim()
 </template>
 
 <style scoped>
-.settings-search { max-width: 440px; font-size: 14px; }
+.settings-card { padding: 20px 22px; border: 1px solid var(--color-hairline); border-radius: var(--radius-panel); background: var(--color-canvas); }
+.settings-card.runtime { background: var(--color-parchment); }
+.card-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--color-hairline); }
+.card-heading { display: grid; gap: 6px; min-width: 0; }
+.card-title { margin: 0; font-size: 20px; line-height: 1.4; }
+.card-summary { margin: 0; font-size: 14px; line-height: 1.6; color: var(--color-muted); overflow-wrap: anywhere; }
+.card-reset { flex-shrink: 0; min-height: 44px; font-size: 14px; }
+.settings-search { max-width: 440px; margin-top: 18px; font-size: 14px; }
 .settings-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 20px; }
-.settings-tabs button { min-height: 44px; padding: 8px 20px; border-radius: 999px; border: 1px solid var(--color-hairline); }
+.settings-tabs button { min-height: 44px; padding: 8px 20px; border-radius: 999px; border: 1px solid var(--color-hairline); background: var(--color-pearl); }
 .settings-tabs button[aria-pressed="true"] { background: var(--color-selection); border-color: var(--color-primary); color: var(--color-primary); font-weight: 600; }
 .settings-section + .settings-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--color-hairline); }
-.settings-section h3 { margin: 0 0 16px; font-size: 17px; }
+.section-title { margin: 0 0 16px; font-size: 16px; color: var(--color-muted); }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .toggle { display: flex; flex-direction: row; align-items: center; gap: 10px; min-height: 44px; margin-block: 12px; }
 .settings-section p { margin-top: 12px; font-size: 14px; line-height: 1.6; }
 input[type="range"] { padding: 0; min-height: 44px; accent-color: var(--color-primary); }
-@media (max-width: 600px) { .settings-grid { grid-template-columns: 1fr; } .settings-tabs { gap: 6px; } .settings-tabs button { flex: 1; padding-inline: 12px; } }
+@media (max-width: 600px) { .settings-grid { grid-template-columns: 1fr; gap: 16px; } .settings-tabs { gap: 6px; } .settings-tabs button { flex: 1 1 auto; padding-inline: 12px; } }
+@media (max-width: 560px) {
+  .settings-card { padding: 16px; border-radius: 12px; }
+  .card-head { flex-wrap: wrap; gap: 8px; }
+  .card-heading { flex: 1 1 100%; }
+  .card-title { font-size: 18px; }
+  .card-reset { align-self: flex-start; }
+  .settings-search { max-width: none; }
+}
 </style>
