@@ -40,7 +40,7 @@ defineEmits<{
       <button
         class="icon-button"
         type="button"
-        aria-label="显示完整画面（不裁切）"
+        :aria-label="noCrop ? '铺满屏幕（会裁切）' : '显示完整画面（不裁切）'"
         :aria-pressed="noCrop"
         :class="{ active: noCrop }"
         @click="$emit('toggleCrop')"

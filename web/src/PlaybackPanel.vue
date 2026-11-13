@@ -24,7 +24,7 @@ const playlist = computed(() => preferences.playlists.find(item => item.id === p
 const queue = shallowRef<PlaybackMedia[]>([])
 const player = reactive({ mode: 'setup' as 'setup' | 'playing' | 'finished', index: 0, paused: false, ready: false,
   error: '', note: '', elapsed: 0, imageElapsed: 0, phaseElapsed: 0, phaseDuration: 24000, phase: 0, autoImages: true,
-  imageSeconds: 8, zoom: 1, fullscreen: false, finishedReason: '', beat: false, cycle: 1, noCrop: false,
+  imageSeconds: 8, zoom: 1, fullscreen: false, finishedReason: '', beat: false, cycle: 1, noCrop: true,
   // 寸止玩法：忍住次数、当前许可率、是否在许可窗口、窗口剩余秒、加时次数、本次会话总时长。
   held: 0, permit: 0, allowed: false, windowLeft: 0, overtimeCount: 0, totalMs: 0 })
 const options = ref<Playlist>()
@@ -290,7 +290,7 @@ async function start() {
         runtimeSettings.value = false
         if (cycle.reset) player.note = '未展示图片不足一轮，已开始新的图片周期。'
         Object.assign(player, { mode: 'playing', index: 0, paused: document.hidden, ready: false, error: '', elapsed: 0, imageElapsed: 0,
-          phaseElapsed: 0, phaseDuration: 24000, phase: 0, autoImages: true, imageSeconds: item.imageSeconds, zoom: 1, finishedReason: '', beat: false, cycle: 1, noCrop: false,
+          phaseElapsed: 0, phaseDuration: 24000, phase: 0, autoImages: true, imageSeconds: item.imageSeconds, zoom: 1, finishedReason: '', beat: false, cycle: 1, noCrop: true,
           held: 0, permit: nextPermitRate(item.permitBase, 0), allowed: false, windowLeft: 0, overtimeCount: 0, totalMs: (item.minutes || 0) * 60000 })
         // 第一段相位同样按三比例抽签，并用指令时长倍率算时长。
         const firstPhase = pickPhaseKind(item.ratioFast, item.ratioSlow, item.ratioRest, null, Math.random)
@@ -897,7 +897,7 @@ onBeforeUnmount(() => {
 .playback-runtime:fullscreen { inset: 0; width: 100%; height: 100%; background: #000; }
 .playback-media { position: absolute; inset: 0; overflow: hidden; }
 .playback-media .image-viewport { width: 100%; height: 100%; }
-.playback-media video { display: block; width: 100%; height: 100%; object-fit: cover; }
+.playback-media video { display: block; width: 100%; height: 100%; object-fit: contain; }
 .runtime-sheet { position: fixed; inset: 0; z-index: 70; overflow-y: auto; background: var(--color-canvas); color: var(--color-ink); padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 48px max(16px, env(safe-area-inset-left)); }
 .runtime-inner { max-width: 920px; margin: 0 auto; }
 @media (prefers-reduced-motion: reduce) { .beat-dot { transition: none; } .beat-dot.pulse { background: #735d69; } }
