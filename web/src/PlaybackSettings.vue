@@ -141,14 +141,16 @@ function resetGroup() {
     item.customCommands.splice(0, item.customCommands.length)
     item.disabledCommands.splice(0, item.disabledCommands.length)
   } else if (selected.value === 'content') {
-    item.kind = defaults.kind
-    item.order = defaults.order
-    item.imageCount = defaults.imageCount
+    if (!props.runtime) {
+      item.kind = defaults.kind
+      item.order = defaults.order
+      item.imageCount = defaults.imageCount
+      item.favoritesOnly = defaults.favoritesOnly
+    }
     item.imageSeconds = defaults.imageSeconds
     item.imageTiming = defaults.imageTiming
     item.bpm = defaults.bpm
     item.loop = defaults.loop
-    item.favoritesOnly = defaults.favoritesOnly
   } else if (selected.value === 'sound') {
     item.metronome = defaults.metronome
     item.beatVolume = defaults.beatVolume

@@ -15,7 +15,7 @@ import { finishLabels, phaseHints, phaseLabels, phaseLegend, phaseOrder, phaseRa
 import { nextPermitRate, overtimeLimit, overtimeStep, phaseDurationMs, pickPhaseKind, resolveEnding, waitDurationMs } from './playback/edge'
 import { pickVoiceLine, type VoiceMoment } from './playback/voiceLines'
 import { loadPlaybackQueue, PlaybackImageBuffer } from './playbackLoader'
-import { clockTime, exportConfiguration, imageKey, importConfiguration, mediaKey, mediaUrl, newPlaylist, nextBeatTime, orderedMedia, playbackCycle, playbackStorageKey, readPreferences, validPlaylist,
+import { clockTime, exportConfiguration, imageKey, importConfiguration, mediaKey, mediaUrl, newPlaylist, nextBeatTime, orderedMedia, playbackCycle, playbackStorageKey, readPreferences, trimShownImages, validPlaylist,
   type Gallery, type ImageTiming, type PlaybackMedia, type PlaybackPreferences, type Playlist } from './playback'
 
 const preferences = reactive<PlaybackPreferences>({ playlists: [], selected: '', favorites: [], shownImages: [] })
@@ -133,6 +133,9 @@ watch(() => [options.value?.imageSeconds, options.value?.bpm, options.value?.ima
   if (value !== previous[1]) bpmInput.value = String(value)
   if (value !== previous[1] || timing !== previous[2]) { nextBeat = 0; player.beat = false }
 })
+watch(() => options.value?.minutes, minutes => {
+  if (typeof minutes === 'number' && Number.isInteger(minutes) && minutes >= 0 && minutes <= 180) player.totalMs = minutes * 60000
+})
 watch(() => options.value?.speech, enabled => { if (!enabled && 'speechSynthesis' in window) speechSynthesis.cancel() })
 // 播放期间给 <html> 挂沉浸态：隐藏全局导航与页头，只留播放层。
 watch(() => player.mode, mode => {
@@ -173,6 +176,7 @@ async function openSettings() {
 function closeSettings() {
   if (!options.value || !validPlaylist(options.value)) { settingsError.value = '请修正数值：间隔 1–300 秒、时长 0–180 分钟、快速节拍 30–180 BPM，均为整数。'; return }
   runtimeSettings.value = false; settingsButton.value?.focus()
+  advancePending()
   requestAnimationFrame(recordDisplayedImage)
 }
 function createPlaylist() {
@@ -306,9 +310,7 @@ async function start() {
           .filter(media => media.kind !== 'image' || !item.imageCount || count++ < item.imageCount)
         if (added.length) queue.value = [...queue.value, ...added]
       }
-      if (pendingAdvance && (done || player.index < queue.value.length - 1)) {
-        pendingAdvance = false; step(1)
-      }
+      advancePending()
     })
   } catch (error) {
     if (!disposed && !signal.aborted) {
@@ -324,6 +326,8 @@ function pause() {
 async function resume() {
   if (player.mode !== 'playing' || player.error || runtimeSettings.value) return
   player.paused = false; player.note = ''; previousTick = performance.now()
+  advancePending()
+  if (player.mode !== 'playing' || pendingAdvance) return
   await prepareAudio()
   if (current.value?.kind === 'video') await playVideo()
   if (!player.paused) speakLine()
@@ -342,8 +346,14 @@ function finish(reason: FinishReason) {
   imageLoad++; imageBuffer.clear()
   pause(); player.mode = 'finished'; player.finishedReason = finishLabels[reason]; player.error = ''
 }
+function advancePending() {
+  if (!pendingAdvance || player.mode !== 'playing' || runtimeSettings.value
+    || (queueLoading.value && player.index >= queue.value.length - 1)) return
+  step(1)
+}
 function step(delta: number) {
   if (player.mode !== 'playing' || runtimeSettings.value) return
+  if (pendingAdvance) player.note = ''
   let target = player.index + delta
   if (target >= queue.value.length) {
     if (queueError.value) { pause(); player.note = queueError.value; return }
@@ -356,6 +366,7 @@ function step(delta: number) {
     target = 0
   } else if (target < 0) target = options.value?.loop ? queue.value.length - 1 : 0
   if (target === player.index && delta < 0) return
+  pendingAdvance = false
   player.index = target; player.imageElapsed = 0; player.zoom = 1; player.error = ''; player.ready = false
   void nextTick(() => {
     imageViewport.value?.scrollTo(0, 0)
@@ -450,7 +461,7 @@ function imageLoaded(event: Event) {
 function recordDisplayedImage() {
   if (document.hidden || runtimeSettings.value || player.mode !== 'playing' || !player.ready || player.error || current.value?.kind !== 'image') return
   const key = imageKey(current.value)
-  if (!preferences.shownImages.includes(key)) preferences.shownImages.push(key)
+  if (!preferences.shownImages.includes(key)) preferences.shownImages = trimShownImages([...preferences.shownImages, key])
 }
 function videoStarted(event: Event) {
   if (event.currentTarget !== video.value) return
