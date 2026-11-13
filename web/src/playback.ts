@@ -1,41 +1,105 @@
 export type MediaKind = 'image' | 'video' | 'mixed'
 export type ImageTiming = 'time' | 'beat'
+// 寸止控制器用到的取值按契约就地内联：不从 ./playback/edge 导入，避免循环依赖。
+export type Difficulty = 'easy' | 'normal' | 'hard' | 'hell'
+export type Ending = 'draw' | 'always' | 'never' | 'ruin' | 'continuous' | 'overtime'
+export type Tone = 'firm' | 'tease' | 'degrade' | 'gentle'
+export type CommandType = 'fast' | 'slow' | 'rest' | 'tease' | 'nipple' | 'glans'
+export type Hand = 'right' | 'left'
+export type WaitMode = 'random' | 'fixed'
+export type WaitPreset = '8-16' | '10-40' | '20-60'
+export type InstructionPace = 'standard' | 'long' | 'veryLong'
+export type VibrateMode = 'off' | 'switch' | 'edge' | 'ending'
+export type VoicePitch = 'auto' | 'low' | 'normal' | 'high'
+export interface CustomCommand { text: string; type: CommandType }
 export interface Gallery { id: string; path: string }
 export interface PlaybackMedia { root: string; path: string; name: string; kind: 'image' | 'video'; version: string; identity?: string }
 export interface Playlist {
   id: string; name: string; roots: string[]; kind: MediaKind; order: 'sequential' | 'shuffle'
   imageSeconds: number; imageTiming: ImageTiming; minutes: number; loop: boolean; bpm: number; metronome: boolean; speech: boolean; favoritesOnly: boolean
   imageCount: number; mediaVolume: number; beatVolume: number; speechVolume: number; speechRate: number; hideTime: boolean; brightness: number
+  // schemaVersion 3 新增：玩法、指令与声音字段。全部可选读入，缺省补默认。
+  difficulty: Difficulty; ratioFast: number; ratioSlow: number; ratioRest: number; permitBase: number
+  ending: Ending; edgeWindow: number
+  waitMode: WaitMode; waitPreset: WaitPreset; waitMin: number; waitMax: number; instructionPace: InstructionPace
+  tones: Tone[]; hand: Hand; commandTypes: CommandType[]; props: string[]; customCommands: CustomCommand[]; disabledCommands: string[]
+  heartbeat: boolean; heartbeatVolume: number; vibrate: VibrateMode; voicePitch: VoicePitch
 }
 export interface PlaybackPreferences { schemaVersion?: number; playlists: Playlist[]; selected: string; favorites: string[]; shownImages: string[] }
 // 存储键沿用 v1：改键会让既有本机数据变成孤儿数据；版本号写在数据的 schemaVersion 字段里。
 export const playbackStorageKey = 'shicun.playback.v1'
-export const playbackSchemaVersion = 2
-export const playbackConfigFormat = 'shicun.playback.config.v2'
-export const legacyPlaybackConfigFormats: readonly string[] = ['shicun.playback.config.v1']
+export const playbackSchemaVersion = 3
+export const playbackConfigFormat = 'shicun.playback.config.v3'
+export const legacyPlaybackConfigFormats: readonly string[] = ['shicun.playback.config.v1', 'shicun.playback.config.v2']
 // 已展示记录上限：按最早的记录淘汰，避免长时间使用顶满 localStorage 配额。
 export const shownImagesLimit = 20000
+// 自定义口令的条数与单条字数上限，设置页与校验共用。
+export const customCommandLimit = 30
+export const customCommandTextLimit = 60
 
 const kinds: MediaKind[] = ['image', 'video', 'mixed']
 const orders: Playlist['order'][] = ['sequential', 'shuffle']
 const timings: ImageTiming[] = ['time', 'beat']
 const speechRates = [0.8, 1, 1.2]
+const difficulties: Difficulty[] = ['easy', 'normal', 'hard', 'hell']
+const endings: Ending[] = ['draw', 'always', 'never', 'ruin', 'continuous', 'overtime']
+const tones: Tone[] = ['firm', 'tease', 'degrade', 'gentle']
+const hands: Hand[] = ['right', 'left']
+const waitModes: WaitMode[] = ['random', 'fixed']
+const waitPresetOptions: WaitPreset[] = ['8-16', '10-40', '20-60']
+const instructionPaces: InstructionPace[] = ['standard', 'long', 'veryLong']
+const vibrateModes: VibrateMode[] = ['off', 'switch', 'edge', 'ending']
+const voicePitches: VoicePitch[] = ['auto', 'low', 'normal', 'high']
+const commandTypeOptions: CommandType[] = ['fast', 'slow', 'rest', 'tease', 'nipple', 'glans']
+const propOptions = ['cup', 'aneros']
+const toneSet = new Set<string>(tones)
+const commandTypeSet = new Set<string>(commandTypeOptions)
+const propSet = new Set<string>(propOptions)
+// 内置口令 id 形如 fast-1 / rest-2（契约规定六类各 4 条）；只按形状校验，避免与 edge.ts 的清单互相耦合。
+const builtinCommandId = /^(fast|slow|rest|tease|nipple|glans)-[1-9]\d?$/
+// 难度对应的三相位默认比例：数值与 web/src/playback/edge.ts 的 difficultyProfiles 保持一致（改一处必须同步另一处）。
+const difficultyRatios: Record<Difficulty, { fast: number; slow: number; rest: number }> = {
+  easy: { fast: 50, slow: 30, rest: 20 },
+  normal: { fast: 60, slow: 20, rest: 20 },
+  hard: { fast: 55, slow: 20, rest: 25 },
+  hell: { fast: 45, slow: 20, rest: 35 }
+}
 const ranges = {
   imageSeconds: [1, 300], minutes: [0, 180], bpm: [30, 180], imageCount: [0, 100000],
-  mediaVolume: [0, 100], beatVolume: [0, 100], speechVolume: [0, 100], brightness: [20, 100]
+  mediaVolume: [0, 100], beatVolume: [0, 100], speechVolume: [0, 100], brightness: [20, 100],
+  ratio: [0, 100], permitBase: [30, 95], edgeWindow: [5, 60], wait: [3, 120], heartbeatVolume: [0, 100]
 } as const
 const defaults = {
   imageSeconds: 8, minutes: 10, bpm: 100, imageCount: 0,
-  mediaVolume: 100, beatVolume: 100, speechVolume: 100, brightness: 100
+  mediaVolume: 100, beatVolume: 100, speechVolume: 100, brightness: 100,
+  permitBase: 70, edgeWindow: 10, waitMin: 8, waitMax: 16, heartbeatVolume: 100
 }
 const addedDefaults = {
   imageTiming: 'time' as ImageTiming, imageCount: defaults.imageCount, mediaVolume: defaults.mediaVolume,
-  beatVolume: defaults.beatVolume, speechVolume: defaults.speechVolume, speechRate: 1, hideTime: false, brightness: defaults.brightness
+  beatVolume: defaults.beatVolume, speechVolume: defaults.speechVolume, speechRate: 1, hideTime: false, brightness: defaults.brightness,
+  difficulty: 'normal' as Difficulty,
+  ratioFast: difficultyRatios.normal.fast, ratioSlow: difficultyRatios.normal.slow, ratioRest: difficultyRatios.normal.rest,
+  permitBase: defaults.permitBase, ending: 'draw' as Ending, edgeWindow: defaults.edgeWindow,
+  waitMode: 'random' as WaitMode, waitPreset: '8-16' as WaitPreset, waitMin: defaults.waitMin, waitMax: defaults.waitMax,
+  instructionPace: 'standard' as InstructionPace,
+  tones: ['firm'] as Tone[], hand: 'right' as Hand,
+  commandTypes: [...commandTypeOptions], props: [] as string[], customCommands: [] as CustomCommand[], disabledCommands: [] as string[],
+  heartbeat: true, heartbeatVolume: defaults.heartbeatVolume,
+  vibrate: 'off' as VibrateMode, voicePitch: 'auto' as VoicePitch
+}
+
+// 列表必须逐份拷贝：直接展开 addedDefaults 会让所有播放列表共用同一组数组。
+function cloneAddedDefaults() {
+  return {
+    ...addedDefaults, tones: [...addedDefaults.tones], commandTypes: [...addedDefaults.commandTypes],
+    props: [...addedDefaults.props], customCommands: addedDefaults.customCommands.map(item => ({ ...item })),
+    disabledCommands: [...addedDefaults.disabledCommands]
+  }
 }
 
 export function newPlaylist(): Playlist {
   return { id: newId(), name: '新播放列表', roots: [], kind: 'mixed', order: 'shuffle', imageSeconds: defaults.imageSeconds,
-    minutes: defaults.minutes, loop: true, bpm: defaults.bpm, metronome: false, speech: false, favoritesOnly: false, ...addedDefaults }
+    minutes: defaults.minutes, loop: true, bpm: defaults.bpm, metronome: false, speech: false, favoritesOnly: false, ...cloneAddedDefaults() }
 }
 
 const rescueHint = `原始内容仍保存在浏览器存储的 ${playbackStorageKey} 里，可先复制备份，或用 recoverPreferences 抢救仍可用的条目；图库原文件不受影响。`
@@ -64,6 +128,47 @@ function readList(raw: unknown, name: string, salvage: boolean, issues: string[]
   if (list.length !== raw.length) issues.push(`${name} 中有 ${raw.length - list.length} 项不是字符串，已跳过`)
   return list
 }
+// 读字符串列表：去掉非字符串、空白、未知项与重复项；accept 决定哪些值算已知项。
+function repairList(raw: unknown, name: string, issues: string[], accept: (text: string) => boolean) {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) {
+    issues.push(`${name} 不是列表，已按空列表处理`)
+    return []
+  }
+  const items: string[] = []
+  let dropped = 0
+  for (const item of raw) {
+    const text = typeof item === 'string' ? item.trim() : ''
+    if (!text || !accept(text) || items.includes(text)) { dropped += 1; continue }
+    items.push(text)
+  }
+  if (dropped) issues.push(`${name} 中有 ${dropped} 项无法识别，已跳过`)
+  return items
+}
+// 自定义口令：跳过空串与未知类型，超长截断，超出上限保留最早的 30 条。
+function repairCommands(raw: unknown, name: string, issues: string[]): CustomCommand[] {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) {
+    issues.push(`${name} 不是列表，已按空列表处理`)
+    return []
+  }
+  const commands: CustomCommand[] = []
+  let dropped = 0
+  let truncated = 0
+  for (const item of raw) {
+    const text = isRecord(item) && typeof item.text === 'string' ? item.text.trim() : ''
+    if (!text || !isRecord(item) || typeof item.type !== 'string' || !commandTypeSet.has(item.type)) { dropped += 1; continue }
+    if (text.length > customCommandTextLimit) truncated += 1
+    commands.push({ text: text.slice(0, customCommandTextLimit), type: item.type as CommandType })
+  }
+  if (dropped) issues.push(`${name} 中有 ${dropped} 条口令格式不正确，已跳过`)
+  if (truncated) issues.push(`${name} 中有 ${truncated} 条口令超过 ${customCommandTextLimit} 字，已截断`)
+  if (commands.length > customCommandLimit) {
+    issues.push(`${name} 超过 ${customCommandLimit} 条上限，已保留前 ${customCommandLimit} 条`)
+    return commands.slice(0, customCommandLimit)
+  }
+  return commands
+}
 
 export function trimShownImages(list: string[], limit = shownImagesLimit) {
   return list.length > limit ? list.slice(list.length - limit) : list
@@ -77,6 +182,33 @@ function normalizePlaylist(raw: Record<string, unknown>, index: number, issues: 
   }
   const roots = Array.isArray(raw.roots) ? raw.roots.filter((item): item is string => typeof item === 'string') : []
   if (!Array.isArray(raw.roots) || roots.length !== (raw.roots as unknown[]).length) issues.push(`${path}.roots 不是字符串列表，已整理`)
+  // 先定难度，再按难度档案修三个比例；合计不为 100 时整组回落到该难度的默认比例。
+  const difficulty = fix('difficulty', raw.difficulty, pick(raw.difficulty, difficulties, 'normal'))
+  const profile = difficultyRatios[difficulty]
+  let ratioFast = fix('ratioFast', raw.ratioFast, repairNumber(raw.ratioFast, ...ranges.ratio, profile.fast))
+  let ratioSlow = fix('ratioSlow', raw.ratioSlow, repairNumber(raw.ratioSlow, ...ranges.ratio, profile.slow))
+  let ratioRest = fix('ratioRest', raw.ratioRest, repairNumber(raw.ratioRest, ...ranges.ratio, profile.rest))
+  if (ratioFast + ratioSlow + ratioRest !== 100) {
+    issues.push(`${path} 三相位比例合计 ${ratioFast + ratioSlow + ratioRest} 不是 100，已按「${difficulty}」难度重置为 ${profile.fast}/${profile.slow}/${profile.rest}`)
+    ratioFast = profile.fast
+    ratioSlow = profile.slow
+    ratioRest = profile.rest
+  }
+  let waitMin = fix('waitMin', raw.waitMin, repairNumber(raw.waitMin, ...ranges.wait, defaults.waitMin))
+  let waitMax = fix('waitMax', raw.waitMax, repairNumber(raw.waitMax, ...ranges.wait, defaults.waitMax))
+  if (waitMin > waitMax) {
+    issues.push(`${path}.waitMin 大于 waitMax，已交换为 ${waitMax}/${waitMin}`)
+    const swap = waitMin
+    waitMin = waitMax
+    waitMax = swap
+  }
+  // 已知项列表：缺字段用默认值；给了但全是未知项时也回落到默认值。
+  const knownList = (key: string, accept: (text: string) => boolean, fallback: readonly string[]) => {
+    const value = repairList(raw[key], `${path}.${key}`, issues, accept)
+    if (value.length) return value
+    if (Array.isArray(raw[key]) && raw[key].length) issues.push(`${path}.${key} 没有可用项，已恢复默认`)
+    return [...fallback]
+  }
   return {
     id: fix('id', raw.id, playlistId(raw.id)),
     name: fix('name', raw.name, playlistName(raw.name)),
@@ -97,7 +229,29 @@ function normalizePlaylist(raw: Record<string, unknown>, index: number, issues: 
     speechVolume: fix('speechVolume', raw.speechVolume, repairNumber(raw.speechVolume, ...ranges.speechVolume, defaults.speechVolume)),
     speechRate: fix('speechRate', raw.speechRate, pick(raw.speechRate, speechRates, 1)),
     hideTime: fix('hideTime', raw.hideTime, booleanOr(raw.hideTime, false)),
-    brightness: fix('brightness', raw.brightness, repairNumber(raw.brightness, ...ranges.brightness, defaults.brightness))
+    brightness: fix('brightness', raw.brightness, repairNumber(raw.brightness, ...ranges.brightness, defaults.brightness)),
+    difficulty,
+    ratioFast,
+    ratioSlow,
+    ratioRest,
+    permitBase: fix('permitBase', raw.permitBase, repairNumber(raw.permitBase, ...ranges.permitBase, defaults.permitBase)),
+    ending: fix('ending', raw.ending, pick(raw.ending, endings, 'draw')),
+    edgeWindow: fix('edgeWindow', raw.edgeWindow, repairNumber(raw.edgeWindow, ...ranges.edgeWindow, defaults.edgeWindow)),
+    waitMode: fix('waitMode', raw.waitMode, pick(raw.waitMode, waitModes, 'random')),
+    waitPreset: fix('waitPreset', raw.waitPreset, pick(raw.waitPreset, waitPresetOptions, '8-16')),
+    waitMin,
+    waitMax,
+    instructionPace: fix('instructionPace', raw.instructionPace, pick(raw.instructionPace, instructionPaces, 'standard')),
+    tones: knownList('tones', text => toneSet.has(text), ['firm']) as Tone[],
+    hand: fix('hand', raw.hand, pick(raw.hand, hands, 'right')),
+    commandTypes: knownList('commandTypes', text => commandTypeSet.has(text), commandTypeOptions) as CommandType[],
+    props: knownList('props', text => propSet.has(text), []) as string[],
+    customCommands: repairCommands(raw.customCommands, `${path}.customCommands`, issues),
+    disabledCommands: knownList('disabledCommands', text => builtinCommandId.test(text), []) as string[],
+    heartbeat: fix('heartbeat', raw.heartbeat, booleanOr(raw.heartbeat, true)),
+    heartbeatVolume: fix('heartbeatVolume', raw.heartbeatVolume, repairNumber(raw.heartbeatVolume, ...ranges.heartbeatVolume, defaults.heartbeatVolume)),
+    vibrate: fix('vibrate', raw.vibrate, pick(raw.vibrate, vibrateModes, 'off')),
+    voicePitch: fix('voicePitch', raw.voicePitch, pick(raw.voicePitch, voicePitches, 'auto'))
   }
 }
 
@@ -156,7 +310,7 @@ function parseStored(value: string): Record<string, unknown> {
   return data
 }
 
-/** 读取本机存储：旧版本按字段补默认值并升级为当前版本，返回的对象带 schemaVersion = 2。 */
+/** 读取本机存储：旧版本按字段补默认值并升级为当前版本，返回的对象带 schemaVersion = 3。 */
 export function readPreferences(value: string): PlaybackPreferences {
   return normalizePreferences(parseStored(value), false).preferences
 }
@@ -171,6 +325,16 @@ export function recoverPreferences(value: string) {
 }
 
 function numberIn(value: unknown, min: number, max: number) { return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= min && value <= max }
+function knownStrings(value: unknown, known: Set<string>, min = 0) {
+  return Array.isArray(value) && value.length >= min && value.every(item => typeof item === 'string' && known.has(item))
+}
+function validCommands(value: unknown) {
+  return Array.isArray(value) && value.length <= customCommandLimit && value.every(item => {
+    if (!isRecord(item)) return false
+    const text = typeof item.text === 'string' ? item.text.trim() : ''
+    return text.length >= 1 && text.length <= customCommandTextLimit && typeof item.type === 'string' && commandTypeSet.has(item.type)
+  })
+}
 export function validPlaylist(item: Playlist) {
   return item && typeof item.id === 'string' && typeof item.name === 'string' && !!item.name.trim() && item.name.length <= 80
     && strings(item.roots) && kinds.includes(item.kind) && orders.includes(item.order)
@@ -179,6 +343,20 @@ export function validPlaylist(item: Playlist) {
     && numberIn(item.mediaVolume, ...ranges.mediaVolume) && numberIn(item.beatVolume, ...ranges.beatVolume) && numberIn(item.speechVolume, ...ranges.speechVolume)
     && speechRates.includes(item.speechRate) && typeof item.hideTime === 'boolean' && numberIn(item.brightness, ...ranges.brightness)
     && typeof item.loop === 'boolean' && typeof item.metronome === 'boolean' && typeof item.speech === 'boolean' && typeof item.favoritesOnly === 'boolean'
+    // 三相位比例：各自 0–100 的整数，且合计必须正好是 100。
+    && difficulties.includes(item.difficulty)
+    && numberIn(item.ratioFast, ...ranges.ratio) && numberIn(item.ratioSlow, ...ranges.ratio) && numberIn(item.ratioRest, ...ranges.ratio)
+    && item.ratioFast + item.ratioSlow + item.ratioRest === 100
+    && numberIn(item.permitBase, ...ranges.permitBase) && endings.includes(item.ending) && numberIn(item.edgeWindow, ...ranges.edgeWindow)
+    && waitModes.includes(item.waitMode) && waitPresetOptions.includes(item.waitPreset)
+    && numberIn(item.waitMin, ...ranges.wait) && numberIn(item.waitMax, ...ranges.wait) && item.waitMin <= item.waitMax
+    && instructionPaces.includes(item.instructionPace)
+    && knownStrings(item.tones, toneSet, 1) && hands.includes(item.hand)
+    && knownStrings(item.commandTypes, commandTypeSet, 1) && knownStrings(item.props, propSet)
+    && validCommands(item.customCommands)
+    && Array.isArray(item.disabledCommands) && item.disabledCommands.every(id => typeof id === 'string' && builtinCommandId.test(id))
+    && typeof item.heartbeat === 'boolean' && numberIn(item.heartbeatVolume, ...ranges.heartbeatVolume)
+    && vibrateModes.includes(item.vibrate) && voicePitches.includes(item.voicePitch)
 }
 function strings(value: unknown): value is string[] { return Array.isArray(value) && value.every(item => typeof item === 'string') }
 

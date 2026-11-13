@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import {
-  exportConfiguration, importConfiguration, legacyPlaybackConfigFormats, mediaKey, newPlaylist, nextBeatTime, playbackConfigFormat,
+  customCommandLimit, exportConfiguration, importConfiguration, legacyPlaybackConfigFormats, mediaKey, newPlaylist, nextBeatTime, playbackConfigFormat,
   playbackCycle, playbackSchemaVersion, playbackStorageKey, readPreferences, recoverPreferences, shownImagesLimit, trimShownImages,
-  validPlaylist, type Playlist, type PlaybackMedia
+  validPlaylist, type CommandType, type Playlist, type PlaybackMedia
 } from '../src/playback.ts'
 
 function messageOf(run: () => unknown) {
@@ -11,16 +11,53 @@ function messageOf(run: () => unknown) {
 }
 
 // —— 版本与存储键 ——
-assert.equal(playbackSchemaVersion, 2)
+assert.equal(playbackSchemaVersion, 3)
 assert.equal(playbackStorageKey, 'shicun.playback.v1')
-assert.equal(playbackConfigFormat, 'shicun.playback.config.v2')
+assert.equal(playbackConfigFormat, 'shicun.playback.config.v3')
 assert.equal(legacyPlaybackConfigFormats[0], 'shicun.playback.config.v1')
+assert.equal(legacyPlaybackConfigFormats[1], 'shicun.playback.config.v2')
+assert.equal(legacyPlaybackConfigFormats.length, 2)
 assert.equal(shownImagesLimit, 20000)
+assert.equal(customCommandLimit, 30)
 
 // —— newPlaylist 默认值与 validPlaylist 边界 ——
 const playlist = newPlaylist()
 assert.equal(playlist.imageTiming, 'time')
 assert.equal(validPlaylist(playlist), true)
+// v3 新增字段的默认值：addedDefaults / newPlaylist 必须给出可直接使用的完整列表。
+assert.equal(playlist.difficulty, 'normal')
+assert.equal(playlist.ratioFast, 60)
+assert.equal(playlist.ratioSlow, 20)
+assert.equal(playlist.ratioRest, 20)
+assert.equal(playlist.ratioFast + playlist.ratioSlow + playlist.ratioRest, 100)
+assert.equal(playlist.permitBase, 70)
+assert.equal(playlist.ending, 'draw')
+assert.equal(playlist.edgeWindow, 10)
+assert.equal(playlist.waitMode, 'random')
+assert.equal(playlist.waitPreset, '8-16')
+assert.equal(playlist.waitMin, 8)
+assert.equal(playlist.waitMax, 16)
+assert.equal(playlist.instructionPace, 'standard')
+assert.deepEqual(playlist.tones, ['firm'])
+assert.equal(playlist.hand, 'right')
+assert.deepEqual(playlist.commandTypes, ['fast', 'slow', 'rest', 'tease', 'nipple', 'glans'])
+assert.deepEqual(playlist.props, [])
+assert.deepEqual(playlist.customCommands, [])
+assert.deepEqual(playlist.disabledCommands, [])
+assert.equal(playlist.heartbeat, true)
+assert.equal(playlist.heartbeatVolume, 100)
+assert.equal(playlist.vibrate, 'off')
+assert.equal(playlist.voicePitch, 'auto')
+// 列表字段必须逐份拷贝：改一个播放列表不能连带改到别的播放列表。
+const isolated = newPlaylist()
+isolated.tones.push('gentle')
+isolated.customCommands.push({ text: '听话', type: 'tease' })
+isolated.disabledCommands.push('fast-1')
+assert.deepEqual(playlist.tones, ['firm'])
+assert.deepEqual(playlist.customCommands, [])
+assert.deepEqual(playlist.disabledCommands, [])
+assert.notEqual(isolated.tones, playlist.tones)
+assert.equal(isolated.tones.length, 2, '同一个播放列表内仍可自由增删')
 assert.ok(validPlaylist({ ...playlist, kind: 'image', imageTiming: 'beat' }))
 for (const key of ['mediaVolume', 'beatVolume', 'speechVolume'] as const) {
   assert.equal(validPlaylist({ ...playlist, [key]: 0 }), true, `${key} 允许 0`)
@@ -59,6 +96,74 @@ assert.equal(validPlaylist({ ...playlist, imageTiming: 'unknown' as Playlist['im
 assert.equal(validPlaylist({ ...playlist, roots: [1] as unknown as string[] }), false)
 assert.equal(validPlaylist({ ...playlist, hideTime: 'yes' as unknown as boolean }), false)
 
+// —— v3 新字段的 validPlaylist 区间 ——
+assert.equal(validPlaylist({ ...playlist, difficulty: 'hell' }), true)
+assert.equal(validPlaylist({ ...playlist, difficulty: 'impossible' as Playlist['difficulty'] }), false)
+assert.equal(validPlaylist({ ...playlist, permitBase: 30 }), true)
+assert.equal(validPlaylist({ ...playlist, permitBase: 95 }), true)
+assert.equal(validPlaylist({ ...playlist, permitBase: 29 }), false)
+assert.equal(validPlaylist({ ...playlist, permitBase: 96 }), false)
+assert.equal(validPlaylist({ ...playlist, permitBase: 70.5 }), false)
+assert.equal(validPlaylist({ ...playlist, ending: 'overtime' }), true)
+assert.equal(validPlaylist({ ...playlist, ending: 'random' as Playlist['ending'] }), false)
+assert.equal(validPlaylist({ ...playlist, edgeWindow: 5 }), true)
+assert.equal(validPlaylist({ ...playlist, edgeWindow: 60 }), true)
+assert.equal(validPlaylist({ ...playlist, edgeWindow: 4 }), false)
+assert.equal(validPlaylist({ ...playlist, edgeWindow: 61 }), false)
+assert.equal(validPlaylist({ ...playlist, waitMode: 'fixed' }), true)
+assert.equal(validPlaylist({ ...playlist, waitMode: 'sometimes' as Playlist['waitMode'] }), false)
+assert.equal(validPlaylist({ ...playlist, waitPreset: '20-60' }), true)
+assert.equal(validPlaylist({ ...playlist, waitPreset: '1-2' as Playlist['waitPreset'] }), false)
+assert.equal(validPlaylist({ ...playlist, waitMin: 3, waitMax: 120 }), true)
+assert.equal(validPlaylist({ ...playlist, waitMin: 16, waitMax: 16 }), true)
+assert.equal(validPlaylist({ ...playlist, waitMin: 2 }), false)
+assert.equal(validPlaylist({ ...playlist, waitMax: 121 }), false)
+assert.equal(validPlaylist({ ...playlist, waitMin: 20, waitMax: 10 }), false)
+assert.equal(validPlaylist({ ...playlist, instructionPace: 'veryLong' }), true)
+assert.equal(validPlaylist({ ...playlist, instructionPace: 'forever' as Playlist['instructionPace'] }), false)
+assert.equal(validPlaylist({ ...playlist, hand: 'left' }), true)
+assert.equal(validPlaylist({ ...playlist, hand: 'both' as Playlist['hand'] }), false)
+assert.equal(validPlaylist({ ...playlist, heartbeat: false }), true)
+assert.equal(validPlaylist({ ...playlist, heartbeat: 'yes' as unknown as boolean }), false)
+assert.equal(validPlaylist({ ...playlist, heartbeatVolume: 0 }), true)
+assert.equal(validPlaylist({ ...playlist, heartbeatVolume: 100 }), true)
+assert.equal(validPlaylist({ ...playlist, heartbeatVolume: 101 }), false)
+assert.equal(validPlaylist({ ...playlist, heartbeatVolume: -1 }), false)
+assert.equal(validPlaylist({ ...playlist, vibrate: 'edge' }), true)
+assert.equal(validPlaylist({ ...playlist, vibrate: 'always' as Playlist['vibrate'] }), false)
+assert.equal(validPlaylist({ ...playlist, voicePitch: 'high' }), true)
+assert.equal(validPlaylist({ ...playlist, voicePitch: 'chipmunk' as Playlist['voicePitch'] }), false)
+// 三比例：各自 0–100 的整数，且合计必须正好 100。
+assert.equal(validPlaylist({ ...playlist, ratioFast: 40, ratioSlow: 30, ratioRest: 30 }), true)
+assert.equal(validPlaylist({ ...playlist, ratioFast: 100, ratioSlow: 0, ratioRest: 0 }), true)
+assert.equal(validPlaylist({ ...playlist, ratioFast: 41, ratioSlow: 30, ratioRest: 30 }), false)
+assert.equal(validPlaylist({ ...playlist, ratioFast: 101, ratioSlow: 0, ratioRest: 0 }), false)
+assert.equal(validPlaylist({ ...playlist, ratioFast: -1, ratioSlow: 51, ratioRest: 50 }), false)
+assert.equal(validPlaylist({ ...playlist, ratioFast: 60.5, ratioSlow: 19.5, ratioRest: 20 }), false)
+// 已知项列表：空列表与未知项都不合法。
+assert.equal(validPlaylist({ ...playlist, tones: ['firm', 'gentle'] }), true)
+assert.equal(validPlaylist({ ...playlist, tones: [] }), false)
+assert.equal(validPlaylist({ ...playlist, tones: ['unknown'] as unknown as Playlist['tones'] }), false)
+assert.equal(validPlaylist({ ...playlist, commandTypes: ['fast'] }), true)
+assert.equal(validPlaylist({ ...playlist, commandTypes: [] }), false)
+assert.equal(validPlaylist({ ...playlist, commandTypes: ['unknown'] as unknown as Playlist['commandTypes'] }), false)
+assert.equal(validPlaylist({ ...playlist, props: ['cup', 'aneros'] }), true)
+assert.equal(validPlaylist({ ...playlist, props: ['banana'] }), false)
+assert.equal(validPlaylist({ ...playlist, disabledCommands: ['fast-1', 'rest-4'] }), true)
+assert.equal(validPlaylist({ ...playlist, disabledCommands: ['unknown'] }), false)
+assert.equal(validPlaylist({ ...playlist, disabledCommands: ['fast-0'] }), false)
+assert.equal(validPlaylist({ ...playlist, disabledCommands: [1] as unknown as string[] }), false)
+// 自定义口令：≤30 条、每条 text 1–60 字、type 合法。
+const command = (text: string, type: CommandType = 'fast') => ({ text, type })
+assert.equal(validPlaylist({ ...playlist, customCommands: [command('再快一点')] }), true)
+assert.equal(validPlaylist({ ...playlist, customCommands: Array.from({ length: 30 }, (_, index) => command(`第 ${index} 条`)) }), true)
+assert.equal(validPlaylist({ ...playlist, customCommands: Array.from({ length: 31 }, (_, index) => command(`第 ${index} 条`)) }), false)
+assert.equal(validPlaylist({ ...playlist, customCommands: [command('   ')] }), false)
+assert.equal(validPlaylist({ ...playlist, customCommands: [command('字'.repeat(60))] }), true)
+assert.equal(validPlaylist({ ...playlist, customCommands: [command('字'.repeat(61))] }), false)
+assert.equal(validPlaylist({ ...playlist, customCommands: [{ text: '好', type: 'unknown' as CommandType }] }), false)
+assert.equal(validPlaylist({ ...playlist, customCommands: ['junk'] as unknown as Playlist['customCommands'] }), false)
+
 // —— 节拍与选图保持原行为 ——
 assert.equal(nextBeatTime(0, 1000, 120), 1500)
 assert.equal(nextBeatTime(1500, 1525, 120), 2000)
@@ -89,8 +194,14 @@ assert.equal(playbackCycle(images, { ...options, order: 'shuffle' }, images.slic
 assert.equal(playbackCycle([{ ...images[0]!, root: 'overlap', identity: '/same/photo.jpg' }, ...images.slice(1)], options, ['/same/photo.jpg']).queue.some(item => item.identity === '/same/photo.jpg'), false)
 
 // —— 迁移：v1（无 schemaVersion，缺新增字段）补齐后升级，条数不变 ——
+// v3 新增字段：迁移测试里要当作"旧数据本来没有"删掉。
+const v3Fields = [
+  'difficulty', 'ratioFast', 'ratioSlow', 'ratioRest', 'permitBase', 'ending', 'edgeWindow', 'waitMode', 'waitPreset',
+  'waitMin', 'waitMax', 'instructionPace', 'tones', 'hand', 'commandTypes', 'props', 'customCommands', 'disabledCommands',
+  'heartbeat', 'heartbeatVolume', 'vibrate', 'voicePitch'
+] as const
 const legacyPlaylist = { ...playlist } as Record<string, unknown>
-for (const key of ['imageTiming', 'imageCount', 'mediaVolume', 'beatVolume', 'speechVolume', 'speechRate', 'hideTime', 'brightness'] as const) delete legacyPlaylist[key]
+for (const key of ['imageTiming', 'imageCount', 'mediaVolume', 'beatVolume', 'speechVolume', 'speechRate', 'hideTime', 'brightness', ...v3Fields] as const) delete legacyPlaylist[key]
 const second = { ...newPlaylist(), id: 'second-list', name: '第二个列表' }
 const third = { ...newPlaylist(), id: 'third-list', name: '第三个列表' }
 const v1Stored = JSON.stringify({
@@ -109,21 +220,67 @@ assert.equal(upgraded.playlists[0]!.speechVolume, 100)
 assert.equal(upgraded.playlists[0]!.speechRate, 1)
 assert.equal(upgraded.playlists[0]!.hideTime, false)
 assert.equal(upgraded.playlists[0]!.brightness, 100)
+// v1 数据缺 v3 新字段：按契约补默认值，列表本身仍然可读、可用。
+assert.equal(upgraded.playlists[0]!.difficulty, 'normal')
+assert.equal(upgraded.playlists[0]!.ratioFast, 60)
+assert.equal(upgraded.playlists[0]!.ratioSlow, 20)
+assert.equal(upgraded.playlists[0]!.ratioRest, 20)
+assert.equal(upgraded.playlists[0]!.permitBase, 70)
+assert.equal(upgraded.playlists[0]!.ending, 'draw')
+assert.equal(upgraded.playlists[0]!.edgeWindow, 10)
+assert.equal(upgraded.playlists[0]!.waitMode, 'random')
+assert.equal(upgraded.playlists[0]!.waitPreset, '8-16')
+assert.equal(upgraded.playlists[0]!.waitMin, 8)
+assert.equal(upgraded.playlists[0]!.waitMax, 16)
+assert.equal(upgraded.playlists[0]!.instructionPace, 'standard')
+assert.deepEqual(upgraded.playlists[0]!.tones, ['firm'])
+assert.equal(upgraded.playlists[0]!.hand, 'right')
+assert.deepEqual(upgraded.playlists[0]!.commandTypes, ['fast', 'slow', 'rest', 'tease', 'nipple', 'glans'])
+assert.deepEqual(upgraded.playlists[0]!.props, [])
+assert.deepEqual(upgraded.playlists[0]!.customCommands, [])
+assert.deepEqual(upgraded.playlists[0]!.disabledCommands, [])
+assert.equal(upgraded.playlists[0]!.heartbeat, true)
+assert.equal(upgraded.playlists[0]!.heartbeatVolume, 100)
+assert.equal(upgraded.playlists[0]!.vibrate, 'off')
+assert.equal(upgraded.playlists[0]!.voicePitch, 'auto')
 assert.equal(validPlaylist(upgraded.playlists[0]!), true)
 assert.equal(upgraded.playlists[0]!.id, playlist.id)
 assert.equal(upgraded.playlists[0]!.name, playlist.name)
 assert.deepEqual(upgraded.favorites, ['downloads/a.jpg', 'downloads/b.jpg'])
 assert.deepEqual(upgraded.shownImages, ['downloads/a.jpg', 'downloads/c.jpg', 'downloads/d.jpg'])
 assert.equal(upgraded.selected, second.id)
-// 升级后的对象就是写回本机的形态：带 schemaVersion 2，且再次读取不再产生迁移。
+// 升级后的对象就是写回本机的形态：带 schemaVersion 3，且再次读取不再产生迁移。
 const writtenBack = JSON.parse(JSON.stringify(upgraded)) as Record<string, unknown>
-assert.equal(writtenBack.schemaVersion, 2)
+assert.equal(writtenBack.schemaVersion, 3)
 assert.deepEqual(readPreferences(JSON.stringify(upgraded)), upgraded)
 const partialV1 = readPreferences(JSON.stringify({ playlists: [legacyPlaylist], selected: playlist.id, favorites: ['kept'] }))
 assert.deepEqual(partialV1.shownImages, [])
 assert.deepEqual(partialV1.favorites, ['kept'])
 assert.equal(partialV1.schemaVersion, playbackSchemaVersion)
 assert.deepEqual(readPreferences(JSON.stringify({ playlists: [legacyPlaylist], selected: 'missing', favorites: [] })).selected, playlist.id)
+
+// —— 迁移：v2（有 v1 字段、没有 v3 新字段）无损升级到 v3 ——
+const v2Playlist = { ...playlist, id: 'v2-list', name: 'v2 列表', minutes: 25, bpm: 140, mediaVolume: 40 } as Record<string, unknown>
+for (const key of v3Fields) delete v2Playlist[key]
+const v2Read = readPreferences(JSON.stringify({ schemaVersion: 2, playlists: [v2Playlist], selected: 'v2-list', favorites: ['kept.jpg'], shownImages: [] }))
+assert.equal(v2Read.schemaVersion, playbackSchemaVersion)
+assert.equal(v2Read.playlists.length, 1)
+assert.equal(v2Read.playlists[0]!.id, 'v2-list')
+assert.equal(v2Read.playlists[0]!.name, 'v2 列表')
+// 旧字段原样保留
+assert.equal(v2Read.playlists[0]!.minutes, 25)
+assert.equal(v2Read.playlists[0]!.bpm, 140)
+assert.equal(v2Read.playlists[0]!.mediaVolume, 40)
+assert.equal(v2Read.playlists[0]!.imageTiming, 'time')
+// 新字段补默认
+assert.equal(v2Read.playlists[0]!.difficulty, 'normal')
+assert.equal(v2Read.playlists[0]!.ratioSlow, 20)
+assert.equal(v2Read.playlists[0]!.permitBase, 70)
+assert.equal(v2Read.playlists[0]!.ending, 'draw')
+assert.equal(v2Read.playlists[0]!.waitMax, 16)
+assert.equal(v2Read.playlists[0]!.heartbeat, true)
+assert.deepEqual(v2Read.favorites, ['kept.jpg'])
+assert.equal(validPlaylist(v2Read.playlists[0]!), true)
 
 // —— 坏数据：字段类型错误补齐默认值，不再要求重置 ——
 const repaired = readPreferences(JSON.stringify({
@@ -155,6 +312,85 @@ const reidentified = readPreferences(JSON.stringify({ playlists: [{ ...playlist,
 assert.equal(typeof reidentified.playlists[0]!.id, 'string')
 assert.equal(new Set(reidentified.playlists.map(item => item.id)).size, 2)
 assert.equal(reidentified.playlists[1]!.id, playlist.id)
+
+// —— v3 新字段：非法值按契约区间修复，整份数据仍然可读 ——
+const v3Repaired = readPreferences(JSON.stringify({
+  playlists: [{
+    ...playlist,
+    difficulty: 'impossible', ratioFast: 40, ratioSlow: 40, ratioRest: 40,
+    permitBase: 200, ending: 'sudden', edgeWindow: 0, waitMode: 'later', waitPreset: '2-3',
+    waitMin: 500, waitMax: 1, instructionPace: 'slowest', tones: ['firm', 'unknown', 3],
+    hand: 'both', commandTypes: ['fast', 'nope', 'slow', 'fast'], props: ['banana'],
+    customCommands: [{ text: '好', type: 'fast' }, { text: '   ', type: 'fast' }, { text: '坏', type: 'nope' }, { text: 5, type: 'fast' }],
+    disabledCommands: ['fast-1', 'junk', 'fast-0', 'fast-1'],
+    heartbeat: 'yes', heartbeatVolume: 101, vibrate: 'always', voicePitch: 'robot'
+  }]
+}))
+const v3Fixed = v3Repaired.playlists[0]!
+assert.equal(v3Repaired.playlists.length, 1)
+// 未知难度回落到 normal；三比例合计 120 不是 100，整组按 normal 档案重置。
+assert.equal(v3Fixed.difficulty, 'normal')
+assert.equal(v3Fixed.ratioFast, 60)
+assert.equal(v3Fixed.ratioSlow, 20)
+assert.equal(v3Fixed.ratioRest, 20)
+// 超上界按区间上界夹住，不从默认值重来。
+assert.equal(v3Fixed.permitBase, 95)
+assert.equal(v3Fixed.edgeWindow, 5)
+assert.equal(v3Fixed.heartbeatVolume, 100)
+// 500 夹到 120、1 夹到 3，随后最小/最大颠倒，交换成 3/120。
+assert.equal(v3Fixed.waitMin, 3)
+assert.equal(v3Fixed.waitMax, 120)
+// 枚举非法即回落默认值。
+assert.equal(v3Fixed.ending, 'draw')
+assert.equal(v3Fixed.waitMode, 'random')
+assert.equal(v3Fixed.waitPreset, '8-16')
+assert.equal(v3Fixed.instructionPace, 'standard')
+assert.equal(v3Fixed.hand, 'right')
+assert.equal(v3Fixed.vibrate, 'off')
+assert.equal(v3Fixed.voicePitch, 'auto')
+assert.equal(v3Fixed.heartbeat, true)
+// 已知项列表只留合法项、去重；自定义口令只留格式正确且 text 非空的。
+assert.deepEqual(v3Fixed.tones, ['firm'])
+assert.deepEqual(v3Fixed.commandTypes, ['fast', 'slow'])
+assert.deepEqual(v3Fixed.props, [])
+assert.deepEqual(v3Fixed.customCommands, [{ text: '好', type: 'fast' }])
+assert.deepEqual(v3Fixed.disabledCommands, ['fast-1'])
+assert.equal(validPlaylist(v3Fixed), true)
+// 修好之后再读一次不再产生迁移：幂等。
+assert.deepEqual(readPreferences(JSON.stringify(v3Repaired)), v3Repaired)
+
+// —— 三比例：合计不为 100 时按各自难度的默认档案归一 ——
+const ratioOf = (raw: Record<string, unknown>) => {
+  const fixed = readPreferences(JSON.stringify({ playlists: [{ ...playlist, ...raw }] })).playlists[0]!
+  return [fixed.ratioFast, fixed.ratioSlow, fixed.ratioRest]
+}
+assert.deepEqual(ratioOf({ difficulty: 'hard', ratioFast: 50, ratioSlow: 50, ratioRest: 50 }), [55, 20, 25])
+assert.deepEqual(ratioOf({ difficulty: 'hell', ratioFast: 10, ratioSlow: 10, ratioRest: 10 }), [45, 20, 35])
+assert.deepEqual(ratioOf({ difficulty: 'easy', ratioFast: 100, ratioSlow: 100, ratioRest: 100 }), [50, 30, 20])
+// 合计正好 100 时保持用户自选的分配，不被覆盖。
+assert.deepEqual(ratioOf({ difficulty: 'hard', ratioFast: 50, ratioSlow: 30, ratioRest: 20 }), [50, 30, 20])
+// 单个比例越界先夹到 0–100，合计仍不对时再整组归一。
+assert.deepEqual(ratioOf({ difficulty: 'normal', ratioFast: 120, ratioSlow: 20, ratioRest: -20 }), [60, 20, 20])
+// 比例不是整数：四舍五入成整数（59.6+20.4+20 = 100，因此不触发归一）。
+assert.deepEqual(ratioOf({ difficulty: 'normal', ratioFast: 59.6, ratioSlow: 20.4, ratioRest: 20 }), [60, 20, 20])
+// 只把最小/最大颠倒，不整组重置。
+const swappedWait = readPreferences(JSON.stringify({ playlists: [{ ...playlist, waitMin: 30, waitMax: 10 }] })).playlists[0]!
+assert.equal(swappedWait.waitMin, 10)
+assert.equal(swappedWait.waitMax, 30)
+assert.equal(validPlaylist(swappedWait), true)
+// 自定义口令超上限：保留最早的 30 条，其余截掉但仍可读。
+const tooManyCommands = readPreferences(JSON.stringify({
+  playlists: [{ ...playlist, customCommands: Array.from({ length: 35 }, (_, index) => ({ text: `第${index}条`, type: 'fast' })) }]
+})).playlists[0]!
+assert.equal(tooManyCommands.customCommands.length, customCommandLimit)
+assert.equal(tooManyCommands.customCommands[0]!.text, '第0条')
+assert.equal(validPlaylist(tooManyCommands), true)
+// 单条口令超 60 字：截断而不是丢弃。
+const longCommand = readPreferences(JSON.stringify({
+  playlists: [{ ...playlist, customCommands: [{ text: '字'.repeat(80), type: 'tease' }] }]
+})).playlists[0]!
+assert.equal(longCommand.customCommands[0]!.text.length, 60)
+assert.equal(longCommand.customCommands[0]!.type, 'tease')
 
 // —— 结构性损坏才抛错，文案指出坏在哪里并留有救数据的出口 ——
 for (const broken of [
@@ -210,8 +446,8 @@ assert.equal(cycle.queue.length, 2)
 // —— 导出 / 导入：新格式往返一致，旧格式仍可导入 ——
 const exported = exportConfiguration([{ ...playlist, roots: ['private-path'] }, second], playlist.id)
 const exportedData = JSON.parse(exported) as Record<string, unknown>
-assert.equal(exportedData.format, 'shicun.playback.config.v2')
-assert.equal(exportedData.schemaVersion, 2)
+assert.equal(exportedData.format, 'shicun.playback.config.v3')
+assert.equal(exportedData.schemaVersion, 3)
 assert.equal(exported.includes('private-path'), false)
 const imported = importConfiguration(exported)
 assert.equal(imported.schemaVersion, playbackSchemaVersion)
@@ -234,6 +470,28 @@ assert.equal(legacyImported.playlists[0]!.id, playlist.id)
 assert.equal(legacyImported.playlists[1]!.imageCount, 5)
 assert.equal(legacyImported.selected, playlist.id)
 assert.equal(validPlaylist(legacyImported.playlists[0]!), true)
+// 导入旧 v1 文件：新字段全部补默认值，返回的永远是当前 schemaVersion。
+assert.equal(legacyImported.schemaVersion, 3)
+assert.equal(legacyImported.playlists[0]!.difficulty, 'normal')
+assert.equal(legacyImported.playlists[0]!.ratioFast, 60)
+assert.equal(legacyImported.playlists[0]!.permitBase, 70)
+assert.deepEqual(legacyImported.playlists[0]!.tones, ['firm'])
+assert.equal(legacyImported.playlists[0]!.heartbeatVolume, 100)
+assert.equal(legacyImported.playlists[0]!.vibrate, 'off')
+assert.equal(legacyImported.playlists[0]!.voicePitch, 'auto')
+// 导入旧 v2 文件：同样就地升级到 v3，旧字段一个不丢。
+const v2Imported = importConfiguration(JSON.stringify({ format: legacyPlaybackConfigFormats[1]!, selected: 'v2-list', playlists: [v2Playlist] }))
+assert.equal(v2Imported.schemaVersion, 3)
+assert.equal(v2Imported.playlists.length, 1)
+assert.equal(v2Imported.playlists[0]!.id, 'v2-list')
+assert.equal(v2Imported.playlists[0]!.minutes, 25)
+assert.equal(v2Imported.playlists[0]!.bpm, 140)
+assert.equal(v2Imported.playlists[0]!.mediaVolume, 40)
+assert.equal(v2Imported.playlists[0]!.difficulty, 'normal')
+assert.equal(v2Imported.playlists[0]!.ending, 'draw')
+assert.equal(v2Imported.playlists[0]!.waitMax, 16)
+assert.equal(v2Imported.selected, 'v2-list')
+assert.equal(validPlaylist(v2Imported.playlists[0]!), true)
 assert.equal(importConfiguration(JSON.stringify({ format: playbackConfigFormat, selected: 'x', playlists: [{ ...playlist, imageCount: -1 }] })).playlists[0]!.imageCount, 0)
 for (const bad of [
   '{broken', JSON.stringify(null), JSON.stringify({ format: 'other.v9', selected: '', playlists: [playlist] }),
