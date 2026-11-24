@@ -51,6 +51,8 @@ export interface EdgeSettings {
   keepVideoOnStop: boolean
   /** 每换一条指令就换一个视频 */
   switchVideoPerCommand: boolean
+  /** 按“忍住了”之后的等待时间也继续播放视频 */
+  keepVideoWhileCooling: boolean
   /** 视频声音：关 / 只在最后（获得许可时）/ 一直开 */
   videoSound: 'off' | 'end' | 'always'
   /** 视频从中间开始播放：跳过试看片前半段的打招呼和采访 */
@@ -96,6 +98,7 @@ export const defaultEdgeSettings: EdgeSettings = {
   heartbeatSync: true,
   keepVideoOnStop: false,
   switchVideoPerCommand: false,
+  keepVideoWhileCooling: true,
   videoSound: 'end',
   skipIntro: false,
   tones: { strong: false, tease: false, abuse: false, sweet: false, feet: false },
@@ -248,6 +251,7 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     heartbeatSync: boolOr(raw.heartbeatSync, defaultEdgeSettings.heartbeatSync),
     keepVideoOnStop: boolOr(raw.keepVideoOnStop, defaultEdgeSettings.keepVideoOnStop),
     switchVideoPerCommand: boolOr(raw.switchVideoPerCommand, defaultEdgeSettings.switchVideoPerCommand),
+    keepVideoWhileCooling: boolOr(raw.keepVideoWhileCooling, defaultEdgeSettings.keepVideoWhileCooling),
     videoSound: pickValue(raw.videoSound, videoSounds, defaultEdgeSettings.videoSound),
     skipIntro: boolOr(raw.skipIntro, defaultEdgeSettings.skipIntro),
     tones: readTones(raw.tones),

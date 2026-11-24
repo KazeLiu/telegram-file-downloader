@@ -131,7 +131,12 @@ const textOpacity = ref(100)
 const textScale = ref(100)
 const dimLevel = computed(() => settings.value.brightness)
 /** 红色（不许碰）且没开「红色也播放视频」时，画面额外压暗一档（参考站行为）。 */
-const videoDimmed = computed(() => mode.value === 'stop' && !settings.value.keepVideoOnStop && !allowed.value)
+const videoDimmed = computed(() => {
+  if (allowed.value) return false
+  // 按“忍住了”之后的等待时间：参考站默认也继续播放（playInCooldown）。
+  if (cooling.value) return !settings.value.keepVideoWhileCooling
+  return mode.value === 'stop' && !settings.value.keepVideoOnStop
+})
 const brightnessPercent = computed(() => (videoDimmed.value ? Math.max(brightnessMin, Math.round(settings.value.brightness * 0.55)) : settings.value.brightness))
 
 /** 相位切到红色/离开红色时同步视频：关掉「红色也播放」就暂停并压暗，绿黄恢复播放。 */
@@ -163,7 +168,7 @@ function maybeSwitchVideo(previous: number, next: number) {
   if (current.value?.kind !== 'video') return
   step(1)
 }
-watch([mode, allowed], syncVideoPhase)
+watch([mode, allowed, cooling], syncVideoPhase)
 
 /** 视频声音：关 / 只在最后（获得许可时）/ 一直开。 */
 const videoMuted = computed(() => {

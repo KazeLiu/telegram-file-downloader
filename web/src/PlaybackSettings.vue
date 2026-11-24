@@ -89,6 +89,7 @@ function resetGroup() {
     }
     item.keepVideoOnStop = base.keepVideoOnStop
     item.switchVideoPerCommand = base.switchVideoPerCommand
+    item.keepVideoWhileCooling = base.keepVideoWhileCooling
     item.videoSound = base.videoSound
     item.skipIntro = base.skipIntro
   } else if (selected.value === 'sound') {
@@ -407,6 +408,8 @@ void secondsLabel
           <label class="toggle"><input v-model="media.favoritesOnly" type="checkbox" />仅播放喜欢</label>
           <label class="toggle"><input :checked="settings.keepVideoOnStop" type="checkbox" @change="settings.keepVideoOnStop = ($event.target as HTMLInputElement).checked" />红色（不许碰）时也继续播放视频</label>
           <p class="muted">开＝红色指令时视频不暂停、不变暗。关＝红色时暂停并变暗（和以前一样）。</p>
+          <label class="toggle"><input :checked="settings.keepVideoWhileCooling" type="checkbox" @change="settings.keepVideoWhileCooling = ($event.target as HTMLInputElement).checked" />记住后视频的等待时间也播放</label>
+          <p class="muted">开＝按「忍住了」后松手等待时视频不停。关＝这段等待时间暂停并变暗。其他红色指令按「红色期间也播放」的设置执行。</p>
           <label class="toggle"><input :checked="settings.switchVideoPerCommand" type="checkbox" @change="settings.switchVideoPerCommand = ($event.target as HTMLInputElement).checked" />每换一条指令就换一个视频</label>
           <p class="muted">开＝每换一条指令就切到下一个视频。关＝一个视频播完再换（和以前一样）。</p>
           <div class="field">
