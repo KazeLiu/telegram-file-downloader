@@ -89,6 +89,8 @@ function resetGroup() {
     }
     item.keepVideoOnStop = base.keepVideoOnStop
     item.switchVideoPerCommand = base.switchVideoPerCommand
+    item.videoSound = base.videoSound
+    item.skipIntro = base.skipIntro
   } else if (selected.value === 'sound') {
     item.metronome = base.metronome
     item.beatVolume = base.beatVolume
@@ -196,6 +198,12 @@ function enableAllCommands() { settings.value.disabled.splice(0) }
 
 // 视频·图片组只在不播放时出现：播放中改图库/顺序需要重新取队列，必须回列表。
 const media = computed(() => props.media)
+
+const videoSoundChoices: { value: EdgeSettings['videoSound']; label: string }[] = [
+  { value: 'off', label: '关' },
+  { value: 'end', label: '只在最后（获得许可时）' },
+  { value: 'always', label: '一直开' },
+]
 const beatsImages = computed(() => !!media.value && media.value.kind === 'image' && media.value.imageTiming === 'beat')
 const secondsLabel = computed(() => readEdgeSettings(null) ? '' : '')
 void secondsLabel
@@ -401,6 +409,15 @@ void secondsLabel
           <p class="muted">开＝红色指令时视频不暂停、不变暗。关＝红色时暂停并变暗（和以前一样）。</p>
           <label class="toggle"><input :checked="settings.switchVideoPerCommand" type="checkbox" @change="settings.switchVideoPerCommand = ($event.target as HTMLInputElement).checked" />每换一条指令就换一个视频</label>
           <p class="muted">开＝每换一条指令就切到下一个视频。关＝一个视频播完再换（和以前一样）。</p>
+          <div class="field">
+            <span class="field-label">视频声音</span>
+            <div class="chips">
+              <button v-for="choice in videoSoundChoices" :key="choice.value" class="chip" :class="{ on: settings.videoSound === choice.value }" type="button" @click="settings.videoSound = choice.value">{{ choice.label }}</button>
+            </div>
+            <p class="muted">只在最后＝红色与黄色时静音，拿到许可后才有声音。一直开会和节拍声混在一起。</p>
+          </div>
+          <label class="toggle"><input :checked="settings.skipIntro" type="checkbox" @change="settings.skipIntro = ($event.target as HTMLInputElement).checked" />视频从中间开始播放</label>
+          <p class="muted">跳过试看片前半段的打招呼和采访，从中间附近开始播放。</p>
           <p class="muted">指令自带的手速（BPM）优先，这里只是上限与切图节拍。已展示图片不再入选。</p>
         </template>
         <p v-else class="muted">先选一个播放列表。</p>

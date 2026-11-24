@@ -398,6 +398,13 @@ export function commandPool(disabled: number[], custom: CustomCommand[], hand: H
   return [...pool, ...extra]
 }
 
+/** 指令自带秒数超过 30×分钟数时整条剔除（对齐参考实现），免得极长指令吃掉整局；全被剔除时原样返回。 */
+export function dropOverlongCommands(pool: EdgeCommand[], minutes: number) {
+  const limit = 30 * Math.max(1, minutes)
+  const kept = pool.filter(item => !item.seconds || item.seconds <= limit)
+  return kept.length ? kept : pool
+}
+
 /** 按分类过滤口令（只有 basic 与 custom 恒定允许）。 */
 export function filterByCategories(pool: EdgeCommand[], categories: Categories) {
   return pool.filter(item => item.category === 'basic' || item.category === 'custom' || categories[item.category as CategoryKind])

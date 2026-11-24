@@ -164,6 +164,35 @@ function maybeSwitchVideo(previous: number, next: number) {
   step(1)
 }
 watch([mode, allowed], syncVideoPhase)
+
+/** 视频声音：关 / 只在最后（获得许可时）/ 一直开。 */
+const videoMuted = computed(() => {
+  const choice = settings.value.videoSound
+  if (choice === 'off') return true
+  if (choice === 'end') return !allowed.value
+  return false
+})
+const videoLevel = computed(() => Math.min(1, Math.max(0, settings.value.mediaVolume / 100)))
+
+function syncVideoSound() {
+  const element = video.value
+  if (!element) return
+  element.muted = videoMuted.value
+  element.volume = videoLevel.value
+}
+
+function videoLoaded(event: Event) {
+  if (event.currentTarget !== video.value) return
+  const element = video.value
+  if (!element) return
+  if (settings.value.skipIntro && Number.isFinite(element.duration) && element.duration > 4 && element.currentTime < 1) {
+    try { element.currentTime = element.duration * 0.4 } catch { /* 部分格式不允许跳转，忽略 */ }
+  }
+  syncVideoSound()
+  void playVideo()
+}
+
+watch([videoMuted, videoLevel], syncVideoSound)
 watch(taskKey, maybeSwitchVideo)
 
 const scheduleEdge = ref<EdgeSettings>()
@@ -499,7 +528,8 @@ function videoReady(event: Event) {
   if (event.currentTarget === video.value) { ready.value = event.type === 'canplay'; if (ready.value) warmImages() }
 }
 function videoVolumeChanged(event: Event) {
-  if (event.currentTarget === video.value && options.value) options.value.mediaVolume = Math.round(video.value.volume * 100)
+  if (event.currentTarget !== video.value) return
+  settings.value.mediaVolume = Math.round(video.value.volume * 100)
 }
 function retryMedia() {
   error.value = ''; ready.value = false
@@ -751,8 +781,8 @@ onBeforeUnmount(() => {
             <video
               v-else-if="current" :key="mediaKey(current)" ref="video" :src="mediaUrl(current)"
               :style="{ filter: `brightness(${brightnessPercent}%)`, objectFit: noCrop ? 'contain' : 'cover' }"
-              playsinline preload="metadata"
-              @volumechange="videoVolumeChanged" @loadedmetadata="$event.currentTarget === video && playVideo()"
+              playsinline preload="metadata" :muted="videoMuted"
+              @volumechange="videoVolumeChanged" @loadedmetadata="videoLoaded"
               @canplay="videoReady" @play="videoStarted" @playing="videoPlaying" @waiting="videoReady"
               @pause="videoPaused" @ended="$event.currentTarget === video && step(1)" @error="mediaFailed"
             />

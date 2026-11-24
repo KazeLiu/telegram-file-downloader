@@ -1,7 +1,7 @@
 import {
-  bindCommands, buildTimeline, commandPool, decideFinale, filterByCategories, mulberry32, permitRate,
+  bindCommands, buildTimeline, commandPool, decideFinale, dropOverlongCommands, filterByCategories, mulberry32, permitRate,
   pickToneLine, randomSeed, restSeconds, taskAt, toneAfterForCommand, toneForTask,
-  type EdgeCommand, type EdgeMode, type Task, type ToneKind, varyBpm} from './engine.ts'
+  type EdgeCommand, type EdgeMode, type Task, type ToneKind, varyBpm } from './engine.ts'
 import type { EdgeSettings } from './settings.ts'
 import { toneLines } from './tones.ts'
 
@@ -83,6 +83,8 @@ function makeTimeline(
 
 export class EdgeSession {
   readonly settings: EdgeSettings
+  /** 本局实际分钟数（随机时长时与设置里的 minutes 不同） */
+  readonly minutes: number
   private readonly pool: EdgeCommand[]
   private readonly nipplePool: EdgeCommand[]
   private readonly glansPool: EdgeCommand[]
@@ -105,7 +107,6 @@ export class EdgeSession {
 
   constructor(settings: EdgeSettings, options: { nipple?: EdgeCommand[]; glans?: EdgeCommand[] } = {}) {
     this.settings = settings
-    this.pool = filterByCategories(commandPool(settings.disabled, settings.custom, settings.hand), settings.categories)
     this.nipplePool = options.nipple ?? []
     this.glansPool = options.glans ?? []
     this.seed = settings.seed || randomSeed()
@@ -114,6 +115,12 @@ export class EdgeSession {
     const minutes = settings.durationRandom
       ? durationRandomMin + Math.floor(this.random() * (durationRandomMax - durationRandomMin + 1))
       : settings.minutes
+    this.minutes = minutes
+    // 指令池要按本局时长剔除过长的指令，所以放在算出分钟数之后。
+    this.pool = dropOverlongCommands(
+      filterByCategories(commandPool(settings.disabled, settings.custom, settings.hand), settings.categories),
+      minutes
+    )
     this.totalMs = Math.max(60_000, Math.round(minutes * 60_000))
     this.tasks = makeTimeline(settings, this.pool, this.seed, this.totalMs, this.nipplePool, this.glansPool)
   }

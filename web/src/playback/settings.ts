@@ -51,6 +51,10 @@ export interface EdgeSettings {
   keepVideoOnStop: boolean
   /** 每换一条指令就换一个视频 */
   switchVideoPerCommand: boolean
+  /** 视频声音：关 / 只在最后（获得许可时）/ 一直开 */
+  videoSound: 'off' | 'end' | 'always'
+  /** 视频从中间开始播放：跳过试看片前半段的打招呼和采访 */
+  skipIntro: boolean
   /** 口吻：每种开启后在指令前后加一句同口吻的短句 */
   tones: Record<ToneKind, boolean>
   toneLine: { show: boolean; before: boolean; after: ToneAfter }
@@ -92,6 +96,8 @@ export const defaultEdgeSettings: EdgeSettings = {
   heartbeatSync: true,
   keepVideoOnStop: false,
   switchVideoPerCommand: false,
+  videoSound: 'end',
+  skipIntro: false,
   tones: { strong: false, tease: false, abuse: false, sweet: false, feet: false },
   toneLine: { show: true, before: true, after: 'half' }
 }
@@ -102,6 +108,7 @@ const lengths: InstructionLength[] = ['standard', 'long', 'veryLong']
 const hands: Hand[] = ['right', 'left']
 const redBeats: RedBeat[] = ['heartbeat', 'both', 'metronome']
 const restModes: RestMode[] = ['random', 'fixed']
+const videoSounds: EdgeSettings['videoSound'][] = ['off', 'end', 'always']
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
@@ -241,6 +248,8 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     heartbeatSync: boolOr(raw.heartbeatSync, defaultEdgeSettings.heartbeatSync),
     keepVideoOnStop: boolOr(raw.keepVideoOnStop, defaultEdgeSettings.keepVideoOnStop),
     switchVideoPerCommand: boolOr(raw.switchVideoPerCommand, defaultEdgeSettings.switchVideoPerCommand),
+    videoSound: pickValue(raw.videoSound, videoSounds, defaultEdgeSettings.videoSound),
+    skipIntro: boolOr(raw.skipIntro, defaultEdgeSettings.skipIntro),
     tones: readTones(raw.tones),
     toneLine: readToneLine(raw.toneLine)
   }
