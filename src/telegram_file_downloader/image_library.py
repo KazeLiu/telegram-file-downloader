@@ -319,10 +319,14 @@ class ImageLibrary:
             if not records:
                 return dict(moved=[], failures=failures)
             result = await asyncio.to_thread(mark, records)
-            with self.db:
-                self.db.executemany("UPDATE images SET active=0 WHERE id=?", ((image_id,) for image_id in result["moved"]))
+            if result["moved"]:
+                self.remove(*result["moved"])
             result["failures"].extend(failures)
             return result
+
+    def remove(self, image_id, *other_ids):
+        with self.db:
+            self.db.executemany("UPDATE images SET active=0 WHERE id=?", ((value,) for value in (image_id, *other_ids)))
 
     async def close(self):
         if self.task and not self.task.done():
