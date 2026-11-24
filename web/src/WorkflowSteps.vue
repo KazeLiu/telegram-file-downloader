@@ -14,7 +14,7 @@ const cleanupDetail = computed(() => {
   if (task?.deleted_psds || task?.deleted_txts) return `旧版记录：直接删除 ${task.deleted_psds || 0} 个 PSD、${task.deleted_txts || 0} 个 TXT。`
   return '将本次资源的 PSD、TXT 移入持久回收站，可还原；PDF 保留。'
 })
-watch(() => props.task?.id, () => { workflowModel.selected = props.task?.manual_extract_only ? 'extract' : props.task?.stage === 'complete' ? props.task?.steps?.image_check ? 'image_check' : 'organize' : props.task?.stage || 'download' }, { immediate: true })
+watch(() => props.task?.id, () => { workflowModel.selected = props.task?.manual_extract_only ? 'extract' : props.task?.stage === 'complete' ? props.task?.steps?.image_group ? 'image_group' : props.task?.steps?.image_check ? 'image_check' : 'organize' : props.task?.stage || 'download' }, { immediate: true })
 const nodes = computed(() => [
   { id: 'receive', title: '接收转发', icon: 'telegram', detail: props.task ? `任务 #${props.task.id} 已记录` : '群里的新附件会记录到下载队列。' },
   { id: 'download', title: '下载文件', icon: 'down', detail: props.task ? `${bytes(props.task.downloaded)} / ${bytes(props.task.size)} · ${percent(props.task).toFixed(1)}%` : `最多 ${props.settings?.parallel_files || 5} 个文件，每个文件最多 ${props.settings?.download_parallelism || 4} 路；实际文件数遵守 Telegram 队列上限。` },
@@ -23,11 +23,12 @@ const nodes = computed(() => [
   { id: 'organize', title: '平铺到根目录', icon: 'workflow', detail: props.task?.result_files ? `已整理 ${props.task.result_files} 个文件到下载根目录。` : '资源A/第一套/001.jpg → 资源A-第一套-001.jpg' },
   { id: legacyPdf.value ? 'pdf' : legacyPsd.value ? 'psd' : 'cleanup', title: legacyPdf.value ? '旧版 PDF 清理' : legacyPsd.value ? '旧版 PSD 清理' : '回收 PSD / TXT', icon: 'trash', detail: cleanupDetail.value },
   { id: 'image_check', title: '已存图片检查', icon: 'compare', detail: props.task?.image_check_error || props.task?.image_check_reason || (props.task?.image_check_total ? `本批已检查 ${props.task.image_check_done || 0} / ${props.task.image_check_total} 张，重复图 ${props.task.image_check_compressed || 0} 张。在「本地图片快筛 → 重复图」对照后决定是否回收。` : '在「图片去重」中开启工作流自动检查并保存目录后，整理后的图片只与所选目录比对，结果在「本地图片快筛 → 重复图」查看。') },
+  { id: 'image_group', title: '相似图片分组', icon: 'photo', detail: props.task?.image_group_error || props.task?.image_group_reason || (props.task?.image_group_total ? `本批已处理 ${props.task.image_group_done || 0} / ${props.task.image_group_total} 张。后台自动计算并缓存分组，可在「本地图片快筛」打开分组查看。` : '下载图片或解压平铺完成后，自动在后台按相似度分组，不需要打开图片页面；结果缓存后供分组开关直接读取。') },
   { id: 'cloud', title: '小米云相册', icon: 'cloud', detail: '在侧栏打开「小米云相册」手动上传；此工作流不自动上传。' },
 ])
 function state(id: string) {
-  if (props.task?.manual_extract_only && ['organize', 'cleanup', 'image_check', 'cloud'].includes(id)) return 'skipped'
-  if (id === 'image_check' && props.task?.stage === 'complete' && !props.task.steps?.image_check) return 'skipped'
+  if (props.task?.manual_extract_only && ['organize', 'cleanup', 'image_check', 'image_group', 'cloud'].includes(id)) return 'skipped'
+  if (['image_check', 'image_group'].includes(id) && props.task?.stage === 'complete' && !props.task.steps?.[id]) return 'skipped'
   if (id === 'cloud') return 'pending'
   if (props.task?.stage === id && ['paused', 'waiting', 'waiting_volumes', 'interrupted'].includes(props.task.status)) return 'waiting'
   const saved = props.task?.steps?.[id]

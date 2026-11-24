@@ -33,6 +33,7 @@ export interface Task {
   archive_group_warning?: string; manual_extract_only?: boolean; manual_source?: 'app' | 'external'
   manual_processed_at?: string; manual_previous_error?: string
   image_check_total?: number; image_check_done?: number; image_check_compressed?: number; image_check_error?: string; image_check_reason?: string
+  image_group_total?: number; image_group_done?: number; image_group_error?: string; image_group_reason?: string
 }
 export type TaskAction = 'pause' | 'resume' | 'retry' | 'extract_only' | 'mark_manual_extracted'
 export interface Status {

@@ -231,11 +231,19 @@ def create_app():
         or bool(runtime.manual_task and not runtime.manual_task.done())))
     linked_recycle = LinkedRecycle(store, xiaomi, local_index)
     dedup = ImageDedup(data_dir, store, xiaomi, local_index)
-    groups = ImageGroups(library, dedup)
     saved_check = SavedImageCheck(library, dedup, local_index, xiaomi, store,
         lambda: runtime.operation_lock.locked() or library.state["running"] or bool(dedup.task and not dedup.task.done()))
+    groups = ImageGroups(library, dedup, store,
+        lambda: runtime.operation_lock.locked() or library.state["running"] or saved_check.state["running"]
+        or bool(dedup.task and not dedup.task.done()))
     library.saved_check = saved_check
-    runtime.check_images = saved_check.queue_batch
+    library.groups = groups
+
+    def check_images(task_ids, names):
+        saved_check.queue_batch(task_ids, names)
+        groups.queue_batch(task_ids, names)
+
+    runtime.check_images = check_images
     recycle_cleaner = RecycleCleaner(local_index, download_dir, runtime.operation_lock)
     failures: dict[str, list[float]] = {}
 
@@ -244,6 +252,7 @@ def create_app():
         await runtime.start()
         local_index.start()
         saved_check.start()
+        groups.start()
         recycle_cleaner.start()
         try:
             yield
