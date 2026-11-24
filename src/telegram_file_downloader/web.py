@@ -6,7 +6,6 @@ import errno
 import re
 import shutil
 import time
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -802,19 +801,8 @@ def create_app():
     @app.post("/api/images/recycle")
     async def recycle_images(body: ImagesSelection):
         ensure_library_idle()
-        moved, failures = [], []
         async with runtime.operation_lock:
-            with RecycleBin(download_dir) as recycle:
-                for item in body.items:
-                    try:
-                        record, file = library.selected(item.id, item.version)
-                        recycle.move(file, uuid.uuid4().hex, "image")
-                        library.remove(item.id)
-                        moved.append(item.id)
-                    except (OSError, ValueError) as exc:
-                        failures.append(dict(id=item.id, error=str(exc)))
-                    await asyncio.sleep(0)
-        return dict(moved=moved, failures=failures)
+            return await library.recycle({item.id: item.version for item in body.items})
 
     recycle_thumbnail_slots = asyncio.Semaphore(4)
 

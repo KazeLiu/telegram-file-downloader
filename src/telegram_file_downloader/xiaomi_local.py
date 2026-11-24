@@ -10,7 +10,7 @@ from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
 
-from .storage import file_version, inside, internal_directory, is_link
+from .storage import file_version, inside, internal_directory, is_link, is_recycle_marker
 
 REFRESH_INTERVAL = 6 * 3600
 
@@ -22,7 +22,7 @@ def folder_entries(root):
         folder = pending.pop()
         with os.scandir(folder) as entries:
             for entry in entries:
-                if internal_directory(entry.name):
+                if internal_directory(entry.name) or is_recycle_marker(entry.name):
                     continue
                 try:
                     if is_link(entry):

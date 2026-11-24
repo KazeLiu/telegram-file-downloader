@@ -5,12 +5,16 @@ import logging
 import os
 import re
 import sqlite3
+import stat
 import time
 from pathlib import Path
+from uuid import uuid4
 
 LOGGER = logging.getLogger(__name__)
 TRASH_DIRECTORY = ".tg-trash"
 RETENTION_SECONDS = 15 * 86400
+RECYCLED_IMAGE_PREFIX = ".tg-recycled-"
+IN_PLACE_IMAGE = "image_in_place"
 
 
 def file_version(stat):
@@ -22,6 +26,10 @@ def file_version(stat):
 def internal_directory(name):
     name = name.casefold()
     return name in {".tg-work", TRASH_DIRECTORY} or name.startswith(".tg-extract-")
+
+
+def is_recycle_marker(name):
+    return re.fullmatch(RECYCLED_IMAGE_PREFIX + r"[a-f0-9]{32}", name.casefold()) is not None
 
 
 def inside(root: Path, value: str = "") -> Path:
@@ -82,21 +90,26 @@ class RecycleBin:
     def __exit__(self, *_):
         self.db.close()
 
-    def _paths(self, record):
-        original = inside(self.root, record["original"])
-        target = inside(self.root, f"{TRASH_DIRECTORY}/files/{record['id']}")
-        return original, target
+    def _target(self, record):
+        if record["reason"] == IN_PLACE_IMAGE:
+            return inside(self.root, RECYCLED_IMAGE_PREFIX + record["id"])
+        return inside(self.root, f"{TRASH_DIRECTORY}/files/{record['id']}")
 
     def _recover(self):
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             for record in self.db.execute("SELECT * FROM items WHERE state IN ('pending','restoring','purging','exporting','windows')").fetchall():
-                original, target = self._paths(record)
+                target = self._target(record)
                 if record["state"] == "pending" and target.is_file():
-                    if original.exists() and original.samefile(target):
-                        original.unlink()
+                    if record["reason"] != IN_PLACE_IMAGE:
+                        original = inside(self.root, record["original"])
+                        if original.exists() and original.samefile(target):
+                            original.unlink()
                     self.db.execute("UPDATE items SET state='trashed' WHERE id=?", (record["id"],))
-                elif record["state"] == "restoring" and original.is_file():
+                elif record["state"] == "restoring":
+                    original = inside(self.root, record["original"])
+                    if not original.is_file():
+                        continue
                     if target.exists():
                         if not original.samefile(target):
                             continue
@@ -131,7 +144,7 @@ class RecycleBin:
             self.db.execute("BEGIN IMMEDIATE")
             if self.db.execute("SELECT state FROM items WHERE id=?", (record_id,)).fetchone()[0] in {"restored", "purged"}:
                 return record_id
-            _, target = self._paths(record)
+            target = self._target(record)
             if file.exists():
                 if target.exists():
                     if not file.samefile(target):
@@ -147,6 +160,40 @@ class RecycleBin:
         LOGGER.debug("recycle moved id=%s source=%s reason=%s", record_id, relative, reason)
         return record_id
 
+    def mark_images(self, records):
+        pending, moved, failures = [], [], []
+        created = time.time()
+        for record in records:
+            record_id = uuid4().hex
+            target = self.root / (RECYCLED_IMAGE_PREFIX + record_id)
+            if os.path.lexists(target):
+                failures.append(dict(id=record["id"], error="回收标记已存在，请重试"))
+                continue
+            pending.append((record, record_id, target))
+        # Commit the original names before renaming; recovery can identify completed renames.
+        with self.db:
+            self.db.executemany("INSERT INTO items VALUES (?,?,?,?,?,?)", (
+                (record_id, record["name"], record["size"], created, IN_PLACE_IMAGE, "pending")
+                for record, record_id, _ in pending))
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            for record, record_id, target in pending:
+                file = self.root / record["name"]
+                try:
+                    info = file.stat(follow_symlinks=False)
+                    if (not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400
+                            or (info.st_size, info.st_mtime_ns) != (record["size"], record["mtime_ns"])):
+                        raise ValueError("图片已发生变化，请刷新后重新选择")
+                    file.rename(target)
+                except (OSError, ValueError) as exc:
+                    failures.append(dict(id=record["id"], error=str(exc)))
+                    if not os.path.lexists(target):
+                        self.db.execute("DELETE FROM items WHERE id=?", (record_id,))
+                else:
+                    self.db.execute("UPDATE items SET state='trashed' WHERE id=?", (record_id,))
+                    moved.append(record["id"])
+        return dict(moved=moved, failures=failures)
+
     def listing(self, page=1, search=""):
         states = "('trashed','restoring','purging','exporting')"
         condition = f"state IN {states} AND (?='' OR instr(lower(original),lower(?))>0)"
@@ -160,7 +207,7 @@ class RecycleBin:
         record = self.db.execute("SELECT * FROM items WHERE id=? AND state IN ('trashed','restoring','purging')", (record_id,)).fetchone()
         if not record:
             raise ValueError("回收文件不存在或不可预览")
-        _, file = self._paths(record)
+        file = self._target(record)
         if not file.is_file() or file.stat().st_size != record["size"]:
             raise ValueError("回收文件缺失或大小已变化")
         return dict(record), file
@@ -171,7 +218,8 @@ class RecycleBin:
             record = self.db.execute("SELECT * FROM items WHERE id=?", (record_id,)).fetchone()
             if not record or record["state"] not in {"trashed", "restoring", "purging"}:
                 raise ValueError("回收文件不存在、已还原或已永久删除")
-            original, target = self._paths(record)
+            original = inside(self.root, record["original"])
+            target = self._target(record)
             if not target.is_file():
                 raise ValueError("找不到回收文件，可能已永久删除或被移走")
             if target.stat().st_size != record["size"]:
@@ -210,7 +258,7 @@ class RecycleBin:
                     current = self.db.execute("SELECT * FROM items WHERE id=?", (record["id"],)).fetchone()
                     if current["state"] not in {"trashed", "purging"} or current["created"] > cutoff:
                         continue
-                    _, file = self._paths(current)
+                    file = self._target(current)
                     info = file.stat()
                     if not file.is_file() or info.st_size != current["size"]:
                         raise ValueError("回收文件大小或类型已变化，已停止清理")
@@ -222,7 +270,7 @@ class RecycleBin:
                     state = self.db.execute("SELECT state FROM items WHERE id=?", (record["id"],)).fetchone()[0]
                     if state != "purging":
                         continue
-                    _, file = self._paths(current)
+                    file = self._target(current)
                     info = file.stat()
                     if info.st_mtime > cutoff or info.st_size != current["size"]:
                         self.db.execute("UPDATE items SET state='trashed' WHERE id=?", (record["id"],))

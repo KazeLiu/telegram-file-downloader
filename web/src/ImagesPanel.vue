@@ -48,6 +48,8 @@ let observer: IntersectionObserver | undefined
 let loadRevision = 0
 let polling = false
 let press: { pointerId: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | undefined
+let hoverTimer: ReturnType<typeof setTimeout> | undefined
+const hoverPreview = ref<{ item: Picture; left: number; top: number; width: number; height: number }>()
 let held = false
 let loadedScope = ''
 let activeReview: number | null = null
@@ -57,7 +59,7 @@ let disposed = false
 function cancelReads() {
   readController.abort(); readController = new AbortController(); ++loadRevision
   imageModel.loading = imageModel.loadingMore = false
-  observer?.disconnect(); stopPress()
+  observer?.disconnect(); stopPress(); hideHoverPreview()
 }
 
 function imageRoute(value = imageModel.view, page = 1, search = imageModel.appliedSearch, root = imageModel.recycleRoot) {
@@ -213,6 +215,34 @@ function selectDay(day: string, items: Picture[]) {
     else imageModel.selected.delete(item.id)
   }
 }
+function hideHoverPreview() {
+  clearTimeout(hoverTimer)
+  hoverPreview.value = undefined
+}
+function showHoverPreview(event: PointerEvent, item: Picture) {
+  const { width: imageWidth, height: imageHeight } = item
+  if (event.pointerType !== 'mouse' || !imageModel.organizing || blocked.value || !imageWidth || !imageHeight || item.error || imageModel.broken[item.id]) return
+  hideHoverPreview()
+  const anchor = event.currentTarget as HTMLButtonElement
+  hoverTimer = setTimeout(() => {
+    if (!anchor.isConnected || !anchor.matches(':hover') || anchor.disabled) return
+    const rect = anchor.getBoundingClientRect()
+    const gap = 12
+    const viewportWidth = document.documentElement.clientWidth
+    const viewportHeight = window.innerHeight
+    const scale = Math.min(480 / Math.max(imageWidth, imageHeight), (viewportWidth - 2 * gap) / imageWidth, viewportHeight * .65 / imageHeight)
+    const width = imageWidth * scale
+    const height = imageHeight * scale
+    const right = rect.right + gap
+    const left = right + width <= viewportWidth - gap ? right : Math.max(gap, rect.left - gap - width)
+    const top = Math.max(gap, Math.min(rect.top + (rect.height - height) / 2, viewportHeight - height - gap))
+    hoverPreview.value = { item, left, top, width, height }
+  }, 160)
+}
+watch([() => imageModel.organizing, blocked, () => route.fullPath], hideHoverPreview)
+function dismissPreview(event: KeyboardEvent) {
+  if (event.key === 'Escape') hideHoverPreview()
+}
 function stopPress(event?: PointerEvent) {
   if (!press || (event && press.pointerId !== event.pointerId)) return
   clearTimeout(press.timer)
@@ -254,6 +284,7 @@ function finishReview(items: Picture[], submit: boolean, kept: Picture[]) {
 }
 async function confirm(items?: Picture[]) {
   if (!imageModel.organizing || blocked.value) return
+  hideHoverPreview()
   imageModel.confirmation = items || [...imageModel.selected.values()]
   if (!imageModel.confirmation.length) return
   await nextTick(); confirmDialog.value?.showModal()
@@ -288,7 +319,7 @@ async function recycle() {
       imageModel.counts.candidates = Math.max(0, imageModel.counts.candidates - removed.filter(item => item.monochrome).length)
       imageModel.counts.compressed = Math.max(0, imageModel.counts.compressed - removed.filter(item => item.saved_match).length)
       imageModel.counts.errors = Math.max(0, imageModel.counts.errors - removed.filter(item => item.error).length)
-      emit('message', `已将 ${moved.size} 张图片移入回收站`)
+      emit('message', `已回收 ${moved.size} 张图片`)
     }
     imageModel.error = failures.join('；'); imageModel.busy = false
   }
@@ -383,6 +414,9 @@ watch(moreButton, button => {
   if (button) observer?.observe(button)
 }, { flush: 'post' })
 onMounted(() => {
+  window.addEventListener('scroll', hideHoverPreview, { capture: true, passive: true })
+  window.addEventListener('resize', hideHoverPreview)
+  window.addEventListener('keydown', dismissPreview)
   if ('IntersectionObserver' in window) {
     observer = new IntersectionObserver(entries => {
       if (!disposed && !imageModel.error && entries.some(entry => entry.isIntersecting && entry.target === moreButton.value)) loadMore()
@@ -393,7 +427,12 @@ onMounted(() => {
   }, 2000)
   void readRoute()
 })
-onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
+onBeforeUnmount(() => {
+  disposed = true; clearInterval(timer); cancelReads()
+  window.removeEventListener('scroll', hideHoverPreview, true)
+  window.removeEventListener('resize', hideHoverPreview)
+  window.removeEventListener('keydown', dismissPreview)
+})
 </script>
 
 <template>
@@ -431,10 +470,11 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
       <VirtualPhotoWall :class="imageModel.view === 'compressed' ? 'compressed-wall' : 'image-grid'" :items="imageModel.items" :disabled="blocked" :is-selected="isSelected" :aria-busy="imageModel.loading || imageModel.loadingMore" @toggle-day="selectDay">
         <template #default="{ item }">
         <article class="image-card">
-          <button type="button" class="image-preview" :title="(item.saved_match ? '重复图 · ' : '') + item.name" :disabled="blocked"
+          <button type="button" class="image-preview" :title="imageModel.organizing ? undefined : (item.saved_match ? '重复图 · ' : '') + item.name" :disabled="blocked"
             :aria-label="(imageModel.organizing ? '选择 ' : '快速审阅 ') + (item.saved_match ? '重复图 ' : '') + item.name" :aria-pressed="imageModel.organizing ? isSelected(item) : undefined"
             aria-keyshortcuts="Shift+Enter" @click="activateImage($event, item)" @keydown.shift.enter.prevent="!$event.repeat && review(item)"
-            @pointerdown="startPress($event, item)" @pointermove="movePress" @pointerup="stopPress" @pointerleave="stopPress" @pointercancel="stopPress" @contextmenu.prevent>
+            @pointerenter="showHoverPreview($event, item)" @pointerleave="hideHoverPreview(); stopPress($event)"
+            @pointerdown="startPress($event, item)" @pointermove="movePress" @pointerup="stopPress" @pointercancel="stopPress" @contextmenu.prevent>
             <span v-if="imageModel.view === 'compressed' && item.saved_match" class="compressed-pair">
               <span><strong>下载图片</strong><img :src="thumbnail(item)" alt="下载图片" draggable="false" loading="lazy" /><small>{{ item.width }} × {{ item.height }} · {{ bytes(item.size) }}</small></span>
               <span><strong>已存图片</strong><img :src="`/api/images/${item.id}/saved/thumbnail?version=${encodeURIComponent(item.version)}`" alt="绑定目录中的已存图片" draggable="false" loading="lazy" /><small>{{ item.saved_match.width }} × {{ item.saved_match.height }} · {{ bytes(item.saved_match.size) }}</small></span>
@@ -455,7 +495,7 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
         <button v-if="imageModel.view === 'compressed' && ['disabled', 'unbound'].includes(imageModel.comparison?.phase ?? '')" class="secondary" @click="router.push('/dedup')">设置工作流自动检查</button>
         <p v-if="!imageModel.scan.running && !imageModel.appliedSearch && imageModel.view === 'all'">这里只展示直接放在下载根目录的图片，不进入子文件夹。</p>
       </div>
-      <button v-if="imageModel.organizing && selectedCount" class="danger recycle-selection" :disabled="blocked" @click="confirm()"><Icon name="trash" :size="16" />移入回收站 · {{ selectedCount }} 张</button>
+      <button v-if="imageModel.organizing && selectedCount" class="danger recycle-selection" :disabled="blocked" @click="confirm()"><Icon name="trash" :size="16" />回收 · {{ selectedCount }} 张</button>
     </template>
     <template v-else>
       <p class="muted recycle-help">文件在项目回收站保留 15 天，期间可还原到原路径且不覆盖同名文件。到期后由容器自动永久删除，不进入 Windows 回收站，也无法再从这里恢复。</p>
@@ -488,6 +528,11 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
     </template>
     <div v-if="imageModel.view === 'recycle'" class="pagination"><span>第 {{ imageModel.page }} / {{ Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize)) }} 页</span><button class="secondary" :disabled="blocked || imageModel.page === 1" @click="page(-1)">上一页</button><button class="secondary" :disabled="blocked || imageModel.page * imageModel.pageSize >= imageModel.total" @click="page(1)">下一页</button></div>
     <ImageReviewDialog ref="reviewDialog" :load-page="listImages" :is-selected="isSelected" @change="reviewChanged" @finish="finishReview" />
+    <Teleport to="body">
+      <img v-if="hoverPreview" :key="hoverPreview.item.id" class="image-hover-preview" :src="thumbnail(hoverPreview.item)" alt="" aria-hidden="true"
+        :style="{ left: `${hoverPreview.left}px`, top: `${hoverPreview.top}px`, width: `${hoverPreview.width}px`, height: `${hoverPreview.height}px` }"
+        decoding="async" @error="hideHoverPreview" />
+    </Teleport>
     <dialog ref="restoreDialog" class="task-dialog" aria-labelledby="restore-title" @cancel="imageModel.busy && $event.preventDefault()">
       <h2 id="restore-title">还原 {{ restoreModel.targets.length }} 项文件？</h2><p class="my-3">还原到各自的原路径，不覆盖已有同名文件。未成功的项目继续保留在回收站。</p>
       <div class="recycle-confirm-list"><p v-for="item in restoreModel.targets" :key="item.id">{{ item.original }}</p></div>
@@ -500,11 +545,11 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
       <div class="dialog-actions"><button class="secondary" @click="copyRecycledNames">{{ canCopy ? '复制文件名' : '选中文件名' }}</button></div>
     </dialog>
     <dialog ref="confirmDialog" class="task-dialog recycle-dialog" aria-labelledby="recycle-title" @cancel="imageModel.busy && $event.preventDefault()">
-      <div class="section-heading"><h2 id="recycle-title">移入回收站？</h2><button class="icon-button" :disabled="imageModel.busy" aria-label="取消回收" @click="confirmDialog?.close()"><Icon name="close" /></button></div>
-      <p>将选中的 {{ imageModel.confirmation.length }} 张图片移入项目回收站，保留 15 天后自动永久删除。</p>
+      <div class="section-heading"><h2 id="recycle-title">回收所选图片？</h2><button class="icon-button" :disabled="imageModel.busy" aria-label="取消回收" @click="confirmDialog?.close()"><Icon name="close" /></button></div>
+      <p>将 {{ imageModel.confirmation.length }} 张图片在原目录标记为已回收，可在回收站还原，保留 15 天后自动永久删除。</p>
       <div class="recycle-confirm-list"><p v-for="item in imageModel.confirmation" :key="item.id">{{ item.name }}</p></div>
       <p v-if="imageModel.error" class="notice error" role="alert">{{ imageModel.error }}</p>
-      <div class="dialog-actions"><button class="secondary" :disabled="imageModel.busy" @click="confirmDialog?.close()">取消</button><button class="danger" :disabled="toolbarBlocked" @click="recycle"><Icon :name="imageModel.busy ? 'loader' : 'trash'" :class="{ 'loading-icon': imageModel.busy }" :size="16" />{{ imageModel.busy ? '正在移入…' : '确认移入回收站' }}</button></div>
+      <div class="dialog-actions"><button class="secondary" :disabled="imageModel.busy" @click="confirmDialog?.close()">取消</button><button class="danger" :disabled="toolbarBlocked" @click="recycle"><Icon :name="imageModel.busy ? 'loader' : 'trash'" :class="{ 'loading-icon': imageModel.busy }" :size="16" />{{ imageModel.busy ? '正在回收…' : '确认回收' }}</button></div>
     </dialog>
   </section>
 </template>
@@ -521,6 +566,7 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); cancelReads() })
 .compressed-pair img { @apply h-0 min-h-0 w-full flex-1 object-contain; }
 .compressed-pair small { @apply truncate text-xs text-muted; }
 .image-preview[aria-pressed=true] .compressed-pair { @apply ring-2 ring-primary ring-inset; }
+.image-hover-preview { @apply pointer-events-none fixed z-[14] rounded-lg border border-solid border-hairline bg-media object-contain shadow-xl; }
 .compressed-mark { @apply absolute right-0 bottom-0 grid size-5 place-items-center rounded-tl-md bg-primary text-white; }
 .recycle-wall { @apply grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
 .recycle-toolbar { @apply my-3 flex flex-wrap items-end gap-3; }

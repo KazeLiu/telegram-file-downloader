@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps, UnidentifiedImageError
 
-from .storage import inside, is_link
+from .storage import RecycleBin, inside, is_link
 
 LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif"}
@@ -153,6 +153,7 @@ class ImageLibrary:
         self.db.execute("CREATE INDEX IF NOT EXISTS images_active_time ON images(active,sort_time DESC,id DESC)")
         self.db.execute("DROP INDEX IF EXISTS images_active_name")
         self.db.commit()
+        self.snapshot_lock = asyncio.Lock()
         self.task = None
         self.scan_requested = False
         self.saved_check = None
@@ -177,10 +178,11 @@ class ImageLibrary:
         started = time.monotonic()
         self.state.update(done=0, total=0, error="")
         try:
-            records = await asyncio.to_thread(root_images, self.root)
-            with self.db:
-                self.db.execute("UPDATE images SET active=0")
-                self.db.executemany("""INSERT INTO images(name,size,mtime_ns,created_ms,sort_time) VALUES (?,?,?,?,?)
+            async with self.snapshot_lock:
+                records = await asyncio.to_thread(root_images, self.root)
+                with self.db:
+                    self.db.execute("UPDATE images SET active=0")
+                    self.db.executemany("""INSERT INTO images(name,size,mtime_ns,created_ms,sort_time) VALUES (?,?,?,?,?)
                     ON CONFLICT(name) DO UPDATE SET active=1,
                     width=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.width END,
                     height=CASE WHEN images.size=excluded.size AND images.mtime_ns=excluded.mtime_ns THEN images.height END,
@@ -295,9 +297,32 @@ class ImageLibrary:
         record = self.public(dict(row), self.saved_scope())
         return self.selected(image_id, record["version"])[0]
 
-    def remove(self, image_id):
-        with self.db:
-            self.db.execute("UPDATE images SET active=0 WHERE id=?", (image_id,))
+    async def recycle(self, selection):
+        def mark(records):
+            with RecycleBin(self.root) as recycle:
+                return recycle.mark_images(records)
+
+        # A concurrent scan must not publish a snapshot from before the renames.
+        async with self.snapshot_lock:
+            ids = ",".join("?" for _ in selection)
+            indexed = {row["id"]: row for row in self.db.execute(
+                f"SELECT id,name,size,mtime_ns FROM images WHERE active=1 AND id IN ({ids})", tuple(selection))}
+            records, failures = [], []
+            for image_id, version in selection.items():
+                record = indexed.get(image_id)
+                if not record:
+                    failures.append(dict(id=image_id, error="图片已移走或不存在，请刷新"))
+                elif version != f"{record['mtime_ns']}:{record['size']}":
+                    failures.append(dict(id=image_id, error="图片已发生变化，请刷新后重新选择"))
+                else:
+                    records.append(record)
+            if not records:
+                return dict(moved=[], failures=failures)
+            result = await asyncio.to_thread(mark, records)
+            with self.db:
+                self.db.executemany("UPDATE images SET active=0 WHERE id=?", ((image_id,) for image_id in result["moved"]))
+            result["failures"].extend(failures)
+            return result
 
     async def close(self):
         if self.task and not self.task.done():

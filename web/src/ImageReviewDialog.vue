@@ -293,7 +293,7 @@ function needsRecycle(i: number) {
         </div>
         <button class="secondary recycle" :disabled="!current || loading" aria-keyshortcuts="ArrowUp ArrowDown" @click="decide(currentMarked ? 'keep' : 'recycle')"><Icon :name="currentMarked ? 'restore' : 'trash'" :size="17" />{{ currentMarked ? '取消回收' : current?.saved_match ? '标记回收下载图' : '标记回收' }} <kbd>↑ / ↓</kbd></button>
         <button class="secondary" :disabled="!history.length || loading" aria-keyshortcuts="Control+Z Meta+Z" @click="undo">撤销</button>
-        <button v-if="pending.length" class="danger" @click="dialog?.close('recycle')">移入回收站 · {{ pending.length }} 张</button>
+        <button v-if="pending.length" class="danger" @click="dialog?.close('recycle')">回收 · {{ pending.length }} 张</button>
       </footer>
     </div>
   </dialog>

@@ -10,7 +10,7 @@ from heapq import nsmallest
 from pathlib import Path
 
 from .files import safe_filename
-from .storage import inside, is_link, internal_directory, RecycleBin
+from .storage import inside, is_link, internal_directory, is_recycle_marker, RecycleBin
 
 LOGGER = logging.getLogger(__name__)
 CLEANUP_EXTENSIONS = frozenset({".psd", ".txt"})
@@ -68,7 +68,7 @@ def entries(root: Path, source: Path, directories=None, skip_root_files=False):
         folders, files = [], []
         with os.scandir(folder) as scan:
             for entry in scan:
-                if folder == root and internal_directory(entry.name):
+                if is_recycle_marker(entry.name) or (folder == root and internal_directory(entry.name)):
                     continue
                 directory = entry.is_dir(follow_symlinks=False)
                 if folder == root and skip_root_files and not directory and not (
@@ -95,7 +95,7 @@ def browse(root, value="", page=1, search=""):
         nonlocal total
         with os.scandir(folder) as scan:
             for entry in scan:
-                if folder == root and internal_directory(entry.name):
+                if is_recycle_marker(entry.name) or (folder == root and internal_directory(entry.name)):
                     continue
                 if needle not in entry.name.casefold() or is_link(entry):
                     continue
