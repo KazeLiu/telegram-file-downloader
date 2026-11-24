@@ -2,7 +2,7 @@
 // 句式对齐参考站：`10 分钟 · 普通 · 抽签 · 指令 81 种 · 语音播报 指令`。
 import { maleCommands } from './commands.ts'
 import {
-  difficultyLabels, finaleLabels, instructionLengthLabels, modeLabels, permitRate, restModeLabels,
+  difficultyLabels, finaleLabels, instructionLengthLabels, modeLabels, permitRate, restModeLabels, toneLabels, toneOrder,
 } from './engine.ts'
 import type { EdgeSettings } from './settings.ts'
 
@@ -25,6 +25,8 @@ export function settingsSummary(settings: EdgeSettings) {
   parts.push(restModeLabels[settings.rest.mode] === '随机' ? rest : rest)
   if (settings.nipple.on) parts.push('只玩乳头')
   if (settings.glans.on) parts.push('只玩龟头')
+  const tones = toneOrder.filter(key => settings.tones[key])
+  if (tones.length) parts.push(`口吻 ${tones.map(key => toneLabels[key]).join('+')}`)
   if (settings.hand === 'left') parts.push('左撇子')
   parts.push(settings.metronome ? '节拍声开' : '节拍声关')
   return parts.filter(Boolean).join(' · ')

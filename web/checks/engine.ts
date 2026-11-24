@@ -11,8 +11,9 @@ import {
   modeOrder, mulberry32, permitMaxGain, permitRate, permitStep, pickCommandAt, pickIndex, pickMode, planFocus,
   presets, presetOrder, randomBpm, randomSeed, redBeatOrder, restFixedChoices, restMax, restMin, restRangeChoices,
   restSeconds, rewardChoices, shareOf, swapHands, taskAt, taskSeconds, textOpacityMin, textScaleMin, timeShareOf, toneAfterOrder,
-  toneOrder, type EdgeMode
+  toneAfterForCommand, toneForTask, pickToneLine, toneLabels, toneOrder, type EdgeMode
 } from '../src/playback/engine.ts'
+import { abuseLines, feetLines, strongLines, sweetLines, teaseLines, toneNotes } from '../src/playback/tones.ts'
 import { maleCommands } from '../src/playback/commands.ts'
 import { defaultEdgeSettings, edgeSchemaVersion, edgeStorageKey, normalizeEdgeSettings, readEdgeSettings, writeEdgeSettings } from '../src/playback/settings.ts'
 import { EdgeSession } from '../src/playback/session.ts'
@@ -398,5 +399,46 @@ assert.equal(ruin.ruined, true, '松手射精的奖励屏要走 ruin 文案')
 for (let index = 0; index < 6; index += 1) ruin.tick(1000)
 assert.equal(ruin.outcome, 'ruin')
 assert.equal(ruin.finished, true)
+// 随机时长：每局在 5～20 分钟之间决定，不再看 minutes。
+const randomDuration = new EdgeSession({ ...defaults, seed: 7, minutes: 90, durationRandom: true })
+assert.ok(randomDuration.totalMs >= 5 * 60_000 && randomDuration.totalMs <= 20 * 60_000, '随机时长应当落在 5～20 分钟')
+assert.equal(randomDuration.totalMs % 60_000, 0, '随机时长按整分钟取')
+const fixedDuration = new EdgeSession({ ...defaults, seed: 7, minutes: 90, durationRandom: false })
+assert.equal(fixedDuration.totalMs, 90 * 60_000, '没开随机就用设定分钟数')
+
+// —— 口吻：按第几条指令轮流、前后各自随机、寸止指令不加后置 ——
+assert.deepEqual(toneOrder, ['strong', 'tease', 'abuse', 'sweet', 'feet'])
+assert.deepEqual(Object.keys(toneLabels), toneOrder.slice())
+assert.deepEqual(Object.keys(toneNotes), toneOrder.slice())
+for (const lines of [strongLines, teaseLines, abuseLines, sweetLines, feetLines]) {
+  for (const mode of ['go', 'slow', 'stop'] as const) {
+    assert.ok(lines[mode].before.length >= 3, `${mode} 前置短句至少 3 条`)
+    assert.ok(lines[mode].after.length >= 2, `${mode} 后置短句至少 2 条`)
+  }
+}
+assert.ok(abuseLines.nipple.before.length >= 3, '辱骂口吻要有乳头专用短句')
+const noTones = { strong: false, tease: false, abuse: false, sweet: false, feet: false }
+assert.equal(toneForTask(noTones, 1), 'normal')
+assert.equal(toneForTask({ ...noTones, strong: true }, 1), 'strong')
+// 同时开两种时按第几条轮流。
+const twoTones = { ...noTones, strong: true, tease: true }
+assert.deepEqual([1, 2, 3, 4].map(count => toneForTask(twoTones, count)), ['strong', 'tease', 'strong', 'tease'])
+const toneZeros = () => 0
+assert.deepEqual(pickToneLine(strongLines.go, toneZeros, { before: true, after: 'always' }), { before: '动。', after: '再骚一点。' })
+assert.deepEqual(pickToneLine(strongLines.go, toneZeros, { before: false, after: 'half' }), { after: '再骚一点。' })
+assert.deepEqual(pickToneLine(strongLines.go, toneZeros, { before: false, after: 'never' }), {})
+assert.equal(toneAfterForCommand({ category: 'edge' }, 'always'), 'never', '寸止指令不加后置短句')
+assert.equal(toneAfterForCommand({ category: 'basic' }, 'always'), 'always')
+// 会话里：开了口吻就有前后短句，同一条指令重复取到同一句。
+const toned = new EdgeSession({ ...defaults, seed: 42, minutes: 1, tones: { ...noTones, strong: true } })
+const tonedFrame = toned.frame()
+assert.ok(tonedFrame.toneBefore.length > 0, '开了口吻后要在指令前给出短句')
+assert.equal(tonedFrame.tone, 'strong')
+assert.equal(toned.frame().toneBefore, tonedFrame.toneBefore, '同一条指令的口吻短句要稳定')
+// 关掉就不出现。
+const plain = new EdgeSession({ ...defaults, seed: 42, minutes: 1 })
+assert.equal(plain.frame().tone, 'normal')
+assert.equal(plain.frame().toneBefore, '')
+assert.equal(plain.frame().toneAfter, '')
 
 console.log('edge engine checks passed')

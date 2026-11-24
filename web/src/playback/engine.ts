@@ -511,3 +511,33 @@ export function formatClock(milliseconds: number) {
   const seconds = Math.max(0, Math.ceil(milliseconds / 1000))
   return `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`
 }
+
+/** 挑一条口令里的一句话：用预生成的随机数做索引，结果可复现。 */
+function pickLine(lines: string[], random: Random) {
+  return lines.length ? lines[Math.min(lines.length - 1, Math.floor(random() * lines.length))] : undefined
+}
+
+/** 当前该用哪种口吻：按「第几条指令」轮流用开启的几种。 */
+export function toneForTask(tones: Record<ToneKind, boolean>, count: number): ToneKind | 'normal' {
+  const active = toneOrder.filter(kind => tones[kind])
+  if (!active.length) return 'normal'
+  return active[(((count - 1) % active.length) + active.length) % active.length]!
+}
+
+/** 挑出口吻短句；`before` 与 `after` 各自独立随机。 */
+export function pickToneLine(
+  lines: { before?: string[]; after?: string[] },
+  random: Random,
+  options: { before: boolean; after: ToneAfter }
+) {
+  const before = options.before ? pickLine(lines.before ?? [], random) : undefined
+  const afterChance = options.after === 'always' ? 1 : options.after === 'half' ? 0.5 : 0
+  const after = afterChance > 0 && random() < afterChance ? pickLine(lines.after ?? [], random) : undefined
+  return { ...(before ? { before } : {}), ...(after ? { after } : {}) }
+}
+
+/** 寸止类指令不加后置短句，避免把「松手」冲淡。 */
+export function toneAfterForCommand(command: { category: string } | null, after: ToneAfter): ToneAfter {
+  return command?.category === 'edge' ? 'never' : after
+}
+

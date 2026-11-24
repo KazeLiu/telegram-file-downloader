@@ -159,6 +159,9 @@ export function buildTimeline(options: TimelineOptions): Task[]
 export function bindCommands(tasks: Task[], pool: EdgeCommand[], nipplePool?: EdgeCommand[], glansPool?: EdgeCommand[]): Task[]
 export function taskAt(tasks: Task[], at: number): Task | null
 export function formatClock(ms: number): string   // 'm:ss'
+export function toneForTask(tones: Record<ToneKind, boolean>, count: number): ToneKind | 'normal'
+export function pickToneLine(lines: ToneLine, random: Random, options: { before: boolean; after: ToneAfter }): { before?: string; after?: string }
+export function toneAfterForCommand(command: { category: string } | null, after: ToneAfter): ToneAfter
 ```
 
 规则要点：
@@ -173,6 +176,9 @@ export function formatClock(ms: number): string   // 'm:ss'
   **两段专属之间至少隔一条普通指令**（按 `previousFocus` 判断，不是一次性布尔量）。
 - `bindCommands`：指令自带 `seconds` 时改写该段时长并把后续 `at` 顺移。
 - 节拍 BPM 优先用**指令自带 `bpm`**，缺省回落到播放列表的 `bpm`。
+- `toneForTask`：开着几种口吻就按「第几条指令」轮流用（`((count-1) % n + n) % n`），没开返回 `normal`。
+- `pickToneLine`：前置短句直接取；后置按 `always = 1` / `half = 0.5` / `never = 0` 的概率决定给不给。
+- `toneAfterForCommand`：`category === 'edge'` 的寸止指令**强制不加后置短句**，免得把「松手」冲淡。
 
 ## 指令池：`web/src/playback/commands.ts`
 
@@ -193,9 +199,49 @@ export interface EdgeCommand {
 - `glansCommands`：5 条，全部 `slow` + `category: 'glans'`。
 - `filterByCategories` 里 `basic` 与 `custom` **恒定允许**，其余看 `categories` 开关。
 
+## 口吻：`web/src/playback/tones.ts`
+
+```ts
+export interface ToneLine { before: string[]; after: string[] }
+export type ToneLines = Record<EdgeMode, ToneLine>
+export interface AbuseLines extends ToneLines { nipple: ToneLine }
+
+export const strongLines / teaseLines / abuseLines: ToneLines / AbuseLines
+export const sweetLines / feetLines: ToneLines
+export const toneLines: Record<ToneKind, ToneLines | AbuseLines>
+export const toneNotes: Record<ToneKind, string>   // 设置面板里的一句话说明
+```
+
+- 五种口吻：`strong` 强势、`tease` 挑逗、`abuse` 羞辱（多一组乳头专用短句）、`sweet` 温柔、`feet` 足控。
+- 每种口吻按 `go` / `slow` / `stop` 各备一组前置、一组后置短句，文案照官方中文原文。
+- 只做文字，**不做语音播报**；`abuse` 命中 `touching`（乳头指令，或 `stop` 下的挑逗／轻度疼痛）时优先用 `nipple` 那一组。
+
 ## 局内状态机：`web/src/playback/session.ts`
 
 ```ts
+export interface SessionFrame {
+  phase: SessionPhase
+  round: number
+  elapsed: number
+  totalMs: number
+  task: Task | null
+  mode: EdgeMode
+  text: string
+  hint: string
+  /** 口吻前置短句，`toneLine.before` 关掉或本轮没开时为空串 */
+  toneBefore: string
+  /** 口吻后置短句，同上 */
+  toneAfter: string
+  tone: ToneKind | 'normal'
+  taskProgress: number
+  taskSeconds: number
+  cooling: boolean
+  held: number
+  permit: number
+  windowLeft: number
+  note: string
+}
+
 export type SessionPhase = 'run' | 'allow' | 'done'
 export type SessionOutcome = 'allow' | 'deny' | 'ruin' | 'lost' | 'manual'
 export interface SessionFrame {

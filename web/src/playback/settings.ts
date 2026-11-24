@@ -3,7 +3,7 @@
 import {
   brightnessMin, customCommandLimit, customCommandTextLimit, restMax, restMin, videoVolumeMax,
   type Categories, type CustomCommand, type Difficulty, type Finale, type Hand, type InstructionLength,
-  type Mix, type RedBeat, type RestMode, type Tune
+  toneAfterOrder, toneOrder, type Mix, type RedBeat, type RestMode, type ToneAfter, type ToneKind, type Tune
 } from './engine.ts'
 
 export interface EdgeRest {
@@ -47,6 +47,9 @@ export interface EdgeSettings {
   keepVideoOnStop: boolean
   /** 每换一条指令就换一个视频 */
   switchVideoPerCommand: boolean
+  /** 口吻：每种开启后在指令前后加一句同口吻的短句 */
+  tones: Record<ToneKind, boolean>
+  toneLine: { show: boolean; before: boolean; after: ToneAfter }
 }
 
 export const edgeStorageKey = 'shicun.edge.v1'
@@ -82,7 +85,9 @@ export const defaultEdgeSettings: EdgeSettings = {
   hideRemaining: false,
   mixAudio: false,
   keepVideoOnStop: false,
-  switchVideoPerCommand: false
+  switchVideoPerCommand: false,
+  tones: { strong: false, tease: false, abuse: false, sweet: false, feet: false },
+  toneLine: { show: true, before: true, after: 'half' }
 }
 
 const difficulties: Difficulty[] = ['easy', 'normal', 'hard', 'hell']
@@ -127,6 +132,21 @@ function readCategories(value: unknown): Categories {
     tease: boolOr(value.tease, allCategories.tease),
     pose: boolOr(value.pose, allCategories.pose),
     pain: boolOr(value.pain, allCategories.pain)
+  }
+}
+function readTones(value: unknown): Record<ToneKind, boolean> {
+  const base = { ...defaultEdgeSettings.tones }
+  if (!isRecord(value)) return base
+  for (const kind of toneOrder) base[kind] = boolOr(value[kind], base[kind])
+  return base
+}
+function readToneLine(value: unknown): EdgeSettings['toneLine'] {
+  const base = { ...defaultEdgeSettings.toneLine }
+  if (!isRecord(value)) return base
+  return {
+    show: boolOr(value.show, base.show),
+    before: boolOr(value.before, base.before),
+    after: pickValue(value.after, toneAfterOrder, base.after)
   }
 }
 function readRest(value: unknown): EdgeRest {
@@ -204,7 +224,9 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     hideRemaining: boolOr(raw.hideRemaining, defaultEdgeSettings.hideRemaining),
     mixAudio: boolOr(raw.mixAudio, defaultEdgeSettings.mixAudio),
     keepVideoOnStop: boolOr(raw.keepVideoOnStop, defaultEdgeSettings.keepVideoOnStop),
-    switchVideoPerCommand: boolOr(raw.switchVideoPerCommand, defaultEdgeSettings.switchVideoPerCommand)
+    switchVideoPerCommand: boolOr(raw.switchVideoPerCommand, defaultEdgeSettings.switchVideoPerCommand),
+    tones: readTones(raw.tones),
+    toneLine: readToneLine(raw.toneLine)
   }
 }
 

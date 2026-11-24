@@ -1,9 +1,10 @@
 import {
   bindCommands, buildTimeline, commandPool, decideFinale, filterByCategories, mulberry32, permitRate,
-  randomSeed, restSeconds, taskAt,
-  type EdgeCommand, type EdgeMode, type Task,
+  pickToneLine, randomSeed, restSeconds, taskAt, toneAfterForCommand, toneForTask,
+  type EdgeCommand, type EdgeMode, type Task, type ToneKind,
 } from './engine.ts'
 import type { EdgeSettings } from './settings.ts'
+import { toneLines } from './tones.ts'
 
 /** 一局寸止的状态机：与界面无关，只吃时间增量、吐当前该显示什么。 */
 export type SessionPhase = 'run' | 'allow' | 'done'
@@ -41,10 +42,20 @@ export interface SessionFrame {
   windowLeft: number
   /** 提示语（加时 / 新一轮） */
   note: string
+  /** 口吻短句：放在指令前的一句 */
+  toneBefore: string
+  /** 口吻短句：放在指令后的一句 */
+  toneAfter: string
+  /** 这一条用的口吻（normal 表示没有口吻） */
+  tone: ToneKind | 'normal'
 }
 
 export const cooldownText = '松手。等它平息。'
 export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
+
+/** 随机时长的取值范围（分钟）：参考站「随机」固定在 5～20 分钟之间决定。 */
+export const durationRandomMin = 5
+export const durationRandomMax = 20
 
 /** 大会话按 seed 铺一整条时间线；乳头 / 龟头专属段需要额外的指令池。 */
 function makeTimeline(
@@ -82,6 +93,7 @@ export class EdgeSession {
   note = ''
   private coolingStart = 0
   private coolingEnd = 0
+  private toneCache = new Map<number, { tone: ToneKind | 'normal'; before: string; after: string }>()
   readonly seed: number
 
   constructor(settings: EdgeSettings, options: { nipple?: EdgeCommand[]; glans?: EdgeCommand[] } = {}) {
@@ -91,7 +103,11 @@ export class EdgeSession {
     this.glansPool = options.glans ?? []
     this.seed = settings.seed || randomSeed()
     this.random = mulberry32(this.seed)
-    this.totalMs = Math.max(60_000, Math.round(settings.minutes * 60_000))
+    // 随机时长：每局在 5～20 分钟之间重新决定，结束前不知道有多久（也不显示剩余时间）。
+    const minutes = settings.durationRandom
+      ? durationRandomMin + Math.floor(this.random() * (durationRandomMax - durationRandomMin + 1))
+      : settings.minutes
+    this.totalMs = Math.max(60_000, Math.round(minutes * 60_000))
     this.tasks = makeTimeline(settings, this.pool, this.seed, this.totalMs, this.nipplePool, this.glansPool)
   }
 
@@ -106,10 +122,41 @@ export class EdgeSession {
 
   get cooling() { return this.phase === 'run' && this.elapsed < this.coolingEnd }
 
+  /** 这一条的口吻短句；同一条始终返回同一句，便于渲染时不抖动。 */
+  private toneOf(task: Task | null) {
+    if (!task) return { tone: 'normal' as const, before: '', after: '' }
+    const cached = this.toneCache.get(task.index)
+    if (cached) return cached
+    const settings = this.settings
+    const tone = toneForTask(settings.tones, task.index + 1)
+    let before = ''
+    let after = ''
+    if (tone !== 'normal' && settings.toneLine.show) {
+      const command = task.command
+      const touching = command?.category === 'nipple'
+        || (task.mode === 'stop' && (command?.category === 'tease' || command?.category === 'pain'))
+      const table = toneLines[tone] as Record<string, { before: string[]; after: string[] } | undefined>
+      const lines = (touching && table.nipple) || table[task.mode] || null
+      if (lines) {
+        const random = mulberry32((this.seed ^ Math.imul(task.index + 1, 0x9e3779b1)) >>> 0)
+        const picked = pickToneLine(lines, random, {
+          before: settings.toneLine.before,
+          after: toneAfterForCommand(command ?? null, settings.toneLine.after)
+        })
+        before = picked.before ?? ''
+        after = picked.after ?? ''
+      }
+    }
+    const value = { tone, before, after }
+    this.toneCache.set(task.index, value)
+    return value
+  }
+
   frame(): SessionFrame {
     const task = this.task
     const cooling = this.cooling
     const mode: EdgeMode = cooling ? 'stop' : task?.mode ?? 'stop'
+    const tone = cooling ? { tone: 'normal' as const, before: '', after: '' } : this.toneOf(task)
     const seconds = task ? task.seconds : 0
     const progress = task ? Math.min(1, Math.max(0, (this.elapsed - task.at) / Math.max(1, seconds * 1000))) : 0
     const coolSpan = Math.max(1, this.coolingEnd - this.coolingStart)
@@ -130,6 +177,9 @@ export class EdgeSession {
       permit: this.permit,
       windowLeft: this.windowLeft,
       note: this.note,
+      tone: cooling ? ('normal' as const) : tone.tone,
+      toneBefore: cooling ? '' : tone.before,
+      toneAfter: cooling ? '' : tone.after
     }
   }
 
@@ -189,6 +239,7 @@ export class EdgeSession {
       this.round += 1
       this.totalMs += Math.max(60_000, Math.round(this.totalMs / 4))
       this.tasks = makeTimeline(settings, this.pool, randomSeed(), this.totalMs, this.nipplePool, this.glansPool)
+      this.toneCache.clear()
       this.note = `加时 ${this.round - 1}`
       this.coolingEnd = 0
       return
@@ -204,6 +255,7 @@ export class EdgeSession {
       this.windowLeft = 0
       this.totalMs = Math.max(60_000, Math.round(this.settings.minutes * 60_000))
       this.tasks = makeTimeline(this.settings, this.pool, randomSeed(), this.totalMs, this.nipplePool, this.glansPool)
+      this.toneCache.clear()
       this.coolingStart = 0
       this.coolingEnd = 0
       this.phase = 'run'

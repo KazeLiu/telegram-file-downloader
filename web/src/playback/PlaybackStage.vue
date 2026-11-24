@@ -17,6 +17,9 @@ const props = defineProps<{
   canHold: boolean
   held: number
   note: string
+  /** 口吻短句：放在指令前 / 后（没有口吻时为空串） */
+  toneBefore?: string
+  toneAfter?: string
 }>()
 
 const emit = defineEmits<{ hold: []; lost: [] }>()
@@ -63,7 +66,9 @@ const sentences = computed(() => {
         <span>{{ bpm }} BPM</span>
       </span>
     </div>
-    <p class="sd-command" data-sundome-command><span v-for="(line, index) in sentences" :key="index" class="sd-sentence">{{ line }}</span></p>
+    <p v-if="toneBefore" class="sd-tone sd-tone-before" data-sundome-tone="before">{{ toneBefore }}</p>
+    <p class="sd-command" :class="{ 'sd-command-tight': toneBefore }" data-sundome-command><span v-for="(line, index) in sentences" :key="index" class="sd-sentence">{{ line }}</span></p>
+    <p v-if="toneAfter" class="sd-tone sd-tone-after" data-sundome-tone="after">{{ toneAfter }}</p>
     <p v-if="hint" class="sd-command-hint" data-sundome-hint>{{ hint }}</p>
     <div class="sd-taskbar" data-sundome-task-bar role="progressbar" :aria-valuenow="Math.round(clampedProgress * 100)">
       <div
@@ -120,6 +125,25 @@ const sentences = computed(() => {
   text-wrap: balance;
   word-break: auto-phrase;
   animation: sd-fade-in .35s ease both;
+}
+/* 口吻短句：比指令淡一点、加字距，位置在指令上下（对齐参考站 data-sundome-tone）。 */
+.sd-tone {
+  margin: 20px 0 0;
+  max-width: 30ch;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, .85);
+  text-wrap: balance;
+  animation: sd-fade-in .35s ease both;
+}
+.sd-tone-after { margin: 12px 0 0; font-size: 16px; }
+.sd-command-tight { margin-top: 12px; }
+@media (min-width: 640px) {
+  .sd-tone { font-size: 24px; }
+  .sd-tone-after { font-size: 20px; }
+  .sd-command-tight { margin-top: 12px; }
 }
 /* 多句时逐句 inline-block：每句尽量整句换行（对齐参考站 Sentences）。 */
 .sd-sentence { display: inline-block; max-width: 100%; word-break: keep-all; overflow-wrap: anywhere; }

@@ -83,6 +83,8 @@ defineProps<{
   canHold: boolean
   held: number
   note: string
+  toneBefore?: string     // 口吻前置短句，空串表示不显示
+  toneAfter?: string      // 口吻后置短句，空串表示不显示
 }>()
 defineEmits<{ hold: []; lost: [] }>()
 ```
@@ -91,6 +93,7 @@ defineEmits<{ hold: []; lost: [] }>()
 - 指令**按「。！？」逐句渲染**（参考站的 `Sentences`）：每句 `<span class="sd-sentence">`（`display: inline-block; max-width: 100%; word-break: keep-all; overflow-wrap: anywhere`），句子之间不切断词。
 - 「射了」先弹二次确认 `data-sundome-lost-ask`（`记为中途结束的一局吗？` ＋ 白底「记录并结束」`data-sundome-lost-yes` / 描边「继续」`data-sundome-lost-no`），换条（`taskKey` 变化）时自动收起。
 - `cooling` 时主按钮文案变「等它平息…」并禁用。
+- 口吻短句：`toneBefore` 渲染在指令**上方**（`data-sundome-tone="before"`，18px／≥640px 24px，700，`.85` 白），`toneAfter` 渲染在指令**下方**（`data-sundome-tone="after"`，16px／20px）；同时有前置时指令的上边距收到 12px。文字只做展示，不朗读。
 
 ## PlaybackBottom.vue
 

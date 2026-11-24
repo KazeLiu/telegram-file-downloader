@@ -100,7 +100,9 @@ const windowLeft = computed(() => Math.max(0, Math.ceil(frame.value?.windowLeft 
 const totalMs = computed(() => frame.value?.totalMs ?? 0)
 const elapsedMs = computed(() => frame.value?.elapsed ?? 0)
 const progressPercent = computed(() => (totalMs.value ? Math.min(1, elapsedMs.value / totalMs.value) : 0))
-const remainingText = computed(() => (settings.value.hideRemaining ? '' : formatClock(Math.max(0, totalMs.value - elapsedMs.value))))
+// 随机时长结束前不让人知道有多久，所以这种情况下也一并藏起剩余时间。
+const hideClock = computed(() => settings.value.hideRemaining || settings.value.durationRandom)
+const remainingText = computed(() => (hideClock.value ? '' : formatClock(Math.max(0, totalMs.value - elapsedMs.value))))
 const summary = computed(() => {
   const item = playlist.value
   if (!item) return ''
@@ -750,7 +752,7 @@ onBeforeUnmount(() => {
             :name="options?.name || ''"
             :position="{ index: frame?.task?.index ?? 0, total: session?.tasks.length ?? 0, cycle: frame?.round ?? 1 }"
             :remaining="remainingText"
-            :hide-time="settings.hideRemaining"
+            :hide-time="hideClock"
             :paused="paused"
             :playing="screen === 'playing'"
             :held="held"
@@ -782,6 +784,8 @@ onBeforeUnmount(() => {
           :can-hold="canHold"
           :held="held"
           :note="note"
+          :tone-before="frame?.toneBefore ?? ''"
+          :tone-after="frame?.toneAfter ?? ''"
           @hold="hold"
           @lost="lose"
         />
@@ -792,7 +796,7 @@ onBeforeUnmount(() => {
             :progress="progressPercent"
             :allowed="allowed"
             :window-left="windowLeft"
-            :hide-time="settings.hideRemaining"
+            :hide-time="hideClock"
             @skip="step(1)"
           />
         </template>

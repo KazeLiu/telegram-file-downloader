@@ -10,10 +10,12 @@ import {
   instructionLengthOrder, mixOf, modeLabels, modeOrder, presets, presetLabels, presetOrder,
   redBeatLabels, redBeatOrder, restFixedChoices, restModeLabels, restModeOrder, restRangeChoices,
   rewardChoices, toneAfterLabels, toneAfterOrder, difficulties, permitRate,
+  toneLabels, toneOrder,
   type Difficulty, type EdgeMode,
 } from './playback/engine'
 import { maleCommands } from './playback/commands'
 import { defaultEdgeSettings, readEdgeSettings } from './playback/settings'
+import { toneNotes } from './playback/tones'
 import type { EdgeSettings } from './playback/settings'
 
 const settings = defineModel<EdgeSettings>({ required: true })
@@ -24,7 +26,7 @@ const search = ref('')
 // 分组顺序对齐参考站：玩法 / 指令 / 视频·图片 / 声音 / 其他。
 const groups = computed(() => [
   { id: 'play', label: '玩法', keywords: '推荐 第一次 标准 慢慢来 时间 分钟 随机 难度 简单 普通 困难 地狱 许可率 自己调 混合 可以撸 慢慢来 不许碰 结局 抽签 必定 松手 连续 加时 允许射精 秒 等待 随机 固定 指令时长 较长 很长 乳头 龟头' },
-  { id: 'command', label: '指令', keywords: '分类 寸止 挑逗 姿势 羞耻 轻度疼痛 惯用手 左右手 自定义 口令 启停 禁用' },
+  { id: 'command', label: '指令', keywords: '分类 寸止 挑逗 姿势 羞耻 轻度疼痛 惯用手 左右手 自定义 口令 启停 禁用 口吻 强势 挑逗 羞辱 温柔 足控 短句' },
   { id: 'media', label: '视频·图片', keywords: '视频 图片 混合 仅图片 仅视频 顺序 随机 文件名 每轮 数量 间隔 切图 BPM 循环 喜欢 收藏' },
   { id: 'sound', label: '声音', keywords: '节拍 音量 心跳 红 媒体 视频 音量 变暗 混音' },
   { id: 'other', label: '其他', keywords: '隐藏 剩余 时间 进度 画面 亮度 变暗 混音' },
@@ -33,6 +35,7 @@ const visible = computed(() => groups.value.filter(group => (search.value.trim()
   ? `${group.label} ${group.keywords}`.toLowerCase().includes(search.value.trim().toLowerCase())
   : group.id === selected.value) && !(props.runtime && group.id === 'media')))
 const summary = computed(() => settingsSummary(settings.value))
+const activeTones = computed(() => toneOrder.filter(key => settings.value.tones[key]))
 
 function selectGroup(id: string) {
   selected.value = id
@@ -70,6 +73,8 @@ function resetGroup() {
     item.hand = base.hand
     item.custom.splice(0, item.custom.length)
     item.disabled.splice(0, item.disabled.length)
+    item.tones = { ...base.tones }
+    item.toneLine = { ...base.toneLine }
   } else if (selected.value === 'media') {
     const defaults = newPlaylist()
     const media = props.media
@@ -312,6 +317,23 @@ void secondsLabel
         </div>
         <p class="muted">选左手时，指令里的左右手会自动对调。</p>
 
+        <h5 class="field-label">口吻</h5>
+        <p class="muted">开启后会在指令前后各加一句同口吻的短句；“强势”是命令式，“挑逗”是一边调侃一边撩你，“羞辱”会出现很重的话，“温柔”像恋人在旁边陪着，“足控”只有话语、指令不变。同时开两种以上时，每条指令轮流使用。</p>
+        <div class="chips">
+          <button v-for="key in toneOrder" :key="key" type="button" class="chip" :aria-pressed="settings.tones[key]" @click="settings.tones[key] = !settings.tones[key]">{{ toneLabels[key] }}</button>
+        </div>
+        <div v-if="activeTones.length" class="tone-tuning">
+          <p class="muted">{{ activeTones.map(key => `${toneLabels[key]}：${toneNotes[key]}`).join('　') }}</p>
+          <label class="toggle"><input :checked="settings.toneLine.show" type="checkbox" @change="settings.toneLine.show = ($event.target as HTMLInputElement).checked" />显示在屏幕上</label>
+          <label class="toggle"><input :checked="settings.toneLine.before" type="checkbox" @change="settings.toneLine.before = ($event.target as HTMLInputElement).checked" />放在指令前</label>
+          <div class="settings-grid">
+            <label>放在指令后<select :value="settings.toneLine.after" @change="settings.toneLine.after = ($event.target as HTMLSelectElement).value as 'never'">
+              <option v-for="key in toneAfterOrder" :key="key" :value="key">{{ toneAfterLabels[key] }}</option>
+            </select></label>
+          </div>
+          <p class="muted">指令类型是「寸止指令」时不会加后置短句，避免把“松手”冲淡。</p>
+        </div>
+
         <h5 class="field-label">自定义口令（{{ settings.custom.length }}/{{ customCommandLimit }}）</h5>
         <div class="command-form">
           <label>口令内容<input v-model="draftCommand" type="text" :maxlength="customCommandTextLimit" placeholder="例如：停三秒再继续" @keydown.enter.prevent="addCommand" /></label>
@@ -421,6 +443,7 @@ void secondsLabel
 .toggle { display: flex; flex-direction: row; align-items: center; gap: 10px; min-height: 44px; margin-block: 12px; }
 .settings-section p { margin-top: 12px; font-size: 14px; line-height: 1.6; }
 input[type="range"] { padding: 0; min-height: 44px; accent-color: var(--color-primary); }
+.tone-tuning { margin-top: 4px; }
 .field-label { margin: 16px 0 10px; font-size: 14px; font-weight: 600; color: var(--color-supporting); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 4px 0; }
 .chip { min-height: 38px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--color-hairline); background: var(--color-pearl); font-size: 14px; line-height: 1.4; }
