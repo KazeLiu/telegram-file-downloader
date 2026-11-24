@@ -29,6 +29,19 @@ def filename_series(name):
     return match[1].rstrip() if match and not TERMINAL_DATE.search(stem) else ""
 
 
+def partition_groups(items, keys, mode):
+    buckets = {}
+    for item in items:
+        key = keys[item["id"]][mode]
+        if key:
+            buckets.setdefault(key, []).append(item)
+    groups = [dict(key=f"{mode}:{key}", label=key if mode == "filename" else members[0]["name"],
+                   mode=mode, primary_count=len(members), items=members)
+              for key, members in buckets.items() if len(members) > 1]
+    assigned = {item["id"] for group in groups for item in group["items"]}
+    return groups, [item for item in items if item["id"] not in assigned]
+
+
 class ImageGroups:
     def __init__(self, library, dedup, store, busy):
         self.library, self.dedup = library, dedup
@@ -123,37 +136,43 @@ class ImageGroups:
                 self.state.update(phase="error", error=str(exc))
                 self.update_tasks()
 
-    def listing(self, mode, search):
-        groups, singles = {}, []
+    def listing(self, mode, search, related=False):
+        items, keys = [], {}
         scope = self.library.saved_scope()
         for row in self.library.group_records():
             item = self.library.public(dict(row), scope)
-            if mode == "filename":
-                label = filename_series(item["name"])
-                key = f"filename:{label}" if label else ""
-            else:
-                member = self.members.get(item["id"])
-                key = f"similarity:{member[1]}" if member and member[1] and member[0] == item["version"] and not item["error"] else ""
-                label = ""
-            if key:
-                groups.setdefault(key, dict(key=key, label=label, items=[]))["items"].append(item)
-            else:
-                singles.append(item)
+            member = self.members.get(item["id"])
+            similarity = member[1] if member and member[0] == item["version"] and not item["error"] else 0
+            keys[item["id"]] = dict(filename=filename_series(item["name"]), similarity=similarity)
+            items.append(item)
 
-        result = []
+        secondary = "similarity" if mode == "filename" else "filename"
+        groups, remaining = partition_groups(items, keys, mode)
+        if related:
+            owners = {}
+            # Only original primary members define associations; existing groups never merge or form chains.
+            for group in groups:
+                for item in group["items"]:
+                    key = keys[item["id"]][secondary]
+                    if key:
+                        owners.setdefault(key, group)
+            unassigned = []
+            for item in remaining:
+                owner = owners.get(keys[item["id"]][secondary])
+                if owner is None:
+                    unassigned.append(item)
+                else:
+                    owner["items"].append(item)
+                    owner["related_by"] = secondary
+            remaining = unassigned
+        secondary_groups, singles = partition_groups(remaining, keys, secondary)
         needle = search.casefold()
-        for group in groups.values():
-            items = group["items"]
-            if len(items) == 1:
-                singles.extend(items)
-            elif not needle or any(needle in item["name"].casefold() for item in items):
-                group["label"] = group["label"] or items[0]["name"]
-                result.append(group)
+        result = [group for group in groups + secondary_groups
+                  if not needle or any(needle in item["name"].casefold() for item in group["items"])]
         singles = [item for item in singles if needle in item["name"].casefold()]
         if singles:
-            singles.sort(key=lambda item: (item["sort_time"], item["id"]), reverse=True)
-            result.append(dict(key="ungrouped", label="未分组", items=singles))
-        return dict(groups=result, grouping=self.state if mode == "similarity" else None)
+            result.append(dict(key="ungrouped", label="未分组", primary_count=len(singles), items=singles))
+        return dict(groups=result, grouping=self.state)
 
     async def compute(self, records):
         index, anchors, exact, members = PerceptualIndex(), {}, {}, {}

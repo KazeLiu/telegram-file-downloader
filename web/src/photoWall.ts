@@ -1,7 +1,7 @@
 import { photoDay } from './xiaomiMedia.ts'
 
 export type WallPhoto = { id: string | number; sort_time: number | null }
-export type PhotoGroup<T> = { key: string; label?: string; count?: number; items: T[] }
+export type PhotoGroup<T> = { key: string; label?: string; count?: number; items: T[]; dividerAt?: number; dividerLabel?: string }
 export type PhotoDemand = { day: string; end: number }
 export type PhotoRow<T> = { key: string; group: PhotoGroup<T>; kind: 'day' | 'photos'; items: T[]; start: number; count: number }
 

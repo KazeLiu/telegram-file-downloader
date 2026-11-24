@@ -13,6 +13,7 @@ import type { PhotoGroup } from './photoWall'
 interface Recycled { id: string; original: string; size: number; created: number; reason: string; state: string; is_image: boolean }
 type View = 'all' | 'candidates' | 'compressed' | 'recycle'
 type GroupMode = 'filename' | 'similarity'
+type PictureGroup = PhotoGroup<Picture> & { mode?: GroupMode; primary_count: number; related_by?: GroupMode }
 type Grouping = { phase: 'waiting' | 'running' | 'ready' | 'error'; done: number; total: number; skipped: number; error: string; last_check: number | null }
 type Comparison = { running: boolean; phase: string; done: number; total: number; baselines: number; errors: number; error: string; current: string; last_check: number | null }
 const route = useRoute()
@@ -25,9 +26,17 @@ const imageModel = reactive({ view: 'all' as View, organizing: false, items: [] 
   search: '', appliedSearch: '', loading: false, loadingMore: false, busy: false, error: '', selected: new Map<number, Picture>(), selectedDays: new Set<string>(),
   confirmation: [] as Picture[], broken: {} as Record<number, boolean> })
 const groupMode = ref<GroupMode | ''>('')
-const groups = ref<PhotoGroup<Picture>[]>([])
+const includeRelated = ref(false)
+const groups = ref<PictureGroup[]>([])
 const grouping = ref<Grouping | null>(null)
-const groupsByKey = computed(() => new Map(groups.value.map(group => [group.key, group.items])))
+const groupsByKey = computed(() => new Map(groups.value.map(group => [group.key, group])))
+const wallGroups = computed(() => groups.value.map(group => ({ ...group,
+  dividerAt: group.primary_count > 0 && group.primary_count < group.items.length ? group.primary_count : undefined,
+  dividerLabel: group.related_by === 'similarity' ? '以下为相似差分关联图片' : '以下为文件名关联图片',
+})))
+const relatedHint = computed(() => groupMode.value === 'similarity'
+  ? '将剩余的同文件名系列图片补入相似主组；已有组不合并，每张图只出现一次'
+  : '将剩余的相似差分图片补入文件名主组；已有组不合并，每张图只出现一次')
 const props = defineProps<{ lastLocalRecycle: string[] }>()
 const emit = defineEmits<{ message: [value: string]; recycled: [names: string[]] }>()
 const confirmDialog = ref<HTMLDialogElement>()
@@ -50,7 +59,7 @@ const listedComparison = ref<number | null>(null)
 const listedGrouping = ref<number | null>(null)
 const indexUpdated = computed(() => !imageModel.scan.running && !imageModel.scan.error && imageModel.scan.last_scan !== listedScan.value
   || !!imageModel.comparison?.last_check && !imageModel.comparison.running && imageModel.comparison.last_check !== listedComparison.value
-  || groupMode.value === 'similarity' && grouping.value?.phase === 'ready' && grouping.value.last_check !== listedGrouping.value)
+  || !!groupMode.value && grouping.value?.phase === 'ready' && grouping.value.last_check !== listedGrouping.value)
 const allSelected = computed(() => imageModel.items.length > 0 && imageModel.items.every(isSelected))
 let timer: ReturnType<typeof setInterval>
 let observer: IntersectionObserver | undefined
@@ -71,13 +80,16 @@ function cancelReads() {
   observer?.disconnect(); stopPress(); hideHoverPreview()
 }
 
-function imageRoute(value = imageModel.view, page = 1, search = imageModel.appliedSearch, root = imageModel.recycleRoot, mode = groupMode.value) {
+function imageRoute(value = imageModel.view, page = 1, search = imageModel.appliedSearch, root = imageModel.recycleRoot, mode = groupMode.value, related = includeRelated.value) {
   return router.push({ path: value === 'all' ? '/images' : `/images/${value}`, query: value === 'recycle'
     ? { root: root !== 'downloads' ? root : undefined, page: page > 1 ? String(page) : undefined, search: search || undefined }
-    : { search: search || undefined, group: value === 'all' && mode || undefined } })
+    : { search: search || undefined, group: value === 'all' && mode || undefined, related: value === 'all' && mode && related ? '1' : undefined } })
 }
 function changeGrouping(mode: GroupMode | '') {
   void imageRoute('all', 1, imageModel.appliedSearch, imageModel.recycleRoot, mode)
+}
+function changeRelated(checked: boolean) {
+  void imageRoute('all', 1, imageModel.appliedSearch, imageModel.recycleRoot, groupMode.value, checked)
 }
 async function readRoute() {
   if (disposed || !route.path.startsWith('/images')) return
@@ -88,14 +100,15 @@ async function readRoute() {
   const page = queryPage(route.query.page)
   const queryGroup = queryText(route.query.group)
   const mode = view === 'all' && (queryGroup === 'filename' || queryGroup === 'similarity') ? queryGroup : ''
-  const scope = JSON.stringify([view, search, root, page, mode])
+  const related = !!mode && queryText(route.query.related) === '1'
+  const scope = JSON.stringify([view, search, root, page, mode, related])
   let signal = readController.signal
   if (scope !== loadedScope) {
     if (view !== imageModel.view || root !== restoreModel.selectionRoot || search !== imageModel.appliedSearch) { restoreModel.selected.clear(); restoreModel.broken.clear(); restoreModel.note = ''; restoreModel.selectionRoot = root }
     loadedScope = scope; cancelReads()
     signal = readController.signal
     Object.assign(imageModel, { view, page, search, appliedSearch: search, recycleRoot: root, items: [], trash: [], total: 0, nextCursor: null })
-    groupMode.value = mode; groups.value = []; grouping.value = null; listedGrouping.value = null
+    groupMode.value = mode; includeRelated.value = related; groups.value = []; grouping.value = null; listedGrouping.value = null
     clearSelection(); reviewDialog.value?.close(); activeReview = null
     if (view === 'recycle') imageModel.organizing = false
     await load()
@@ -152,8 +165,8 @@ async function load({ append = false } = {}) {
       imageModel.trash = result.items; imageModel.total = result.total; imageModel.pageSize = result.page_size
       imageModel.cleanup = result.cleanup
     } else if (groupMode.value) {
-      const query = new URLSearchParams({ mode: groupMode.value, search: imageModel.appliedSearch })
-      const result = await api<ImageStatus & { groups: PhotoGroup<Picture>[] | null; grouping: Grouping | null }>(`/images/groups?${query}`, undefined, 'GET', signal)
+      const query = new URLSearchParams({ mode: groupMode.value, search: imageModel.appliedSearch, related: String(includeRelated.value) })
+      const result = await api<ImageStatus & { groups: PictureGroup[] }>(`/images/groups?${query}`, undefined, 'GET', signal)
       if (revision !== loadRevision) return
       imageModel.scan = result.scan; imageModel.counts = result.counts; imageModel.comparison = result.comparison
       grouping.value = result.grouping
@@ -199,7 +212,7 @@ async function pollStatus() {
     imageModel.scan = result.scan; imageModel.counts = result.counts
     imageModel.comparison = result.comparison
     if (groupMode.value) {
-      grouping.value = groupMode.value === 'similarity' ? result.grouping : null
+      grouping.value = result.grouping
       const firstGroups = !imageModel.items.length && result.total > 0 && !imageModel.scan.running && !imageModel.error
       if (firstGroups && activeReview === null && !confirmDialog.value?.open) await load()
     } else {
@@ -332,7 +345,7 @@ async function confirm(items?: Picture[]) {
   await nextTick(); confirmDialog.value?.showModal()
 }
 function confirmGroup(key: string) {
-  const items = groupsByKey.value.get(key)
+  const items = groupsByKey.value.get(key)?.items
   if (items?.length) void confirm(items)
 }
 async function recycle() {
@@ -363,7 +376,10 @@ async function recycle() {
       if (scope === loadedScope) {
         moved.forEach(id => imageModel.selected.delete(id))
         imageModel.items = imageModel.items.filter(item => !moved.has(item.id))
-        if (groupMode.value) groups.value = groups.value.map(group => ({ ...group, items: group.items.filter(item => !moved.has(item.id)) })).filter(group => group.items.length)
+        if (groupMode.value) groups.value = groups.value.map(group => ({ ...group,
+          primary_count: group.items.slice(0, group.primary_count).filter(item => !moved.has(item.id)).length,
+          items: group.items.filter(item => !moved.has(item.id)),
+        })).filter(group => group.items.length)
         imageModel.total = groupMode.value ? imageModel.items.length : Math.max(0, imageModel.total - moved.size)
         imageModel.counts.total = Math.max(0, imageModel.counts.total - moved.size)
         imageModel.counts.candidates = Math.max(0, imageModel.counts.candidates - removed.filter(item => item.monochrome).length)
@@ -517,9 +533,10 @@ onBeforeUnmount(() => {
         <form class="search-box" @submit.prevent="filter"><Icon name="search" :size="17" /><input v-model="imageModel.search" :disabled="toolbarBlocked" maxlength="255" placeholder="搜索根目录图片" aria-label="搜索根目录图片" /><button class="text-button" :disabled="toolbarBlocked">搜索</button></form>
         <div v-if="imageModel.view === 'all'" class="image-group-controls">
           <label><input type="checkbox" role="switch" :checked="!!groupMode" :disabled="toolbarBlocked" @change="changeGrouping(groupMode ? '' : 'filename')" />分组</label>
-          <select v-if="groupMode" :value="groupMode" :disabled="toolbarBlocked" aria-label="分组方式" @change="changeGrouping(($event.target as HTMLSelectElement).value === 'similarity' ? 'similarity' : 'filename')">
-            <option value="filename">按文件名</option><option value="similarity">按相似度（含差分）</option>
+          <select v-if="groupMode" :value="groupMode" :disabled="toolbarBlocked" aria-label="分组优先顺序" @change="changeGrouping(($event.target as HTMLSelectElement).value === 'similarity' ? 'similarity' : 'filename')">
+            <option value="filename">文件名优先</option><option value="similarity">相似度优先</option>
           </select>
+          <label v-if="groupMode" class="group-related" :title="relatedHint"><input type="checkbox" :checked="includeRelated" :disabled="toolbarBlocked" @change="changeRelated(($event.target as HTMLInputElement).checked)" />补入关联图片</label>
         </div>
         <span v-if="groupMode" class="muted" role="status">{{ imageModel.total }} 张</span>
         <span v-else class="muted" title="拍摄时间优先，其次图片日期，缺失时使用原修改时间">{{ imageModel.total }} 张 · 按照片时间从新到旧</span>
@@ -529,11 +546,13 @@ onBeforeUnmount(() => {
       <div v-else-if="grouping?.phase === 'running'" class="image-scan" role="status"><span><Icon name="loader" class="loading-icon" :size="16" />后台相似分组 · {{ grouping.done }} / {{ grouping.total }} 张，可继续浏览</span><progress v-if="grouping.total" :value="grouping.done" :max="grouping.total" aria-label="相似分组进度" /></div>
       <p v-else-if="grouping?.phase === 'error'" class="notice error" role="alert">相似分组失败：{{ grouping.error }}。请刷新图片后更新列表。</p>
       <p v-else-if="grouping?.skipped" class="notice">{{ grouping.skipped }} 张图片未能参与相似分组，可在「未分组」查看。</p>
-      <VirtualPhotoWall :class="imageModel.view === 'compressed' ? 'compressed-wall' : 'image-grid'" :items="imageModel.items" :groups="groupMode ? groups : undefined" :disabled="blocked" :is-selected="isSelected" :aria-busy="imageModel.loading || imageModel.loadingMore" @toggle-day="selectDay">
+      <VirtualPhotoWall :class="imageModel.view === 'compressed' ? 'compressed-wall' : 'image-grid'" :items="imageModel.items" :groups="groupMode ? wallGroups : undefined" :disabled="blocked" :is-selected="isSelected" :aria-busy="imageModel.loading || imageModel.loadingMore" @toggle-day="selectDay">
         <template v-if="groupMode" #heading="{ group }">
           <div class="image-group-heading">
             <button v-if="group.key !== 'ungrouped'" class="text-button danger-text" :aria-label="`回收整组 ${group.label}，共 ${group.items.length} 张`" :disabled="toolbarBlocked" @click="confirmGroup(group.key)"><Icon name="trash" :size="15" />回收整组</button>
             <h3 :title="group.label">{{ group.label }}</h3><span>{{ group.items.length }} 张</span>
+            <span v-if="groupsByKey.get(group.key)?.mode" class="group-method">{{ groupsByKey.get(group.key)?.mode === 'filename' ? '文件名' : '相似度' }}</span>
+            <span v-if="group.dividerAt !== undefined" :title="group.dividerLabel">含关联 {{ group.items.length - group.dividerAt }} 张</span>
           </div>
         </template>
         <template #default="{ item }">
@@ -635,12 +654,15 @@ onBeforeUnmount(() => {
 .compressed-pair small { @apply truncate text-xs text-muted; }
 .image-preview[aria-pressed=true] .compressed-pair { @apply ring-2 ring-primary ring-inset; }
 .image-hover-preview { @apply pointer-events-none fixed z-[14] rounded-lg border border-solid border-hairline bg-media object-contain shadow-xl; }
-.image-group-controls { @apply flex shrink-0 items-center gap-2 whitespace-nowrap; }
+.image-group-controls { @apply flex max-w-full flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap; }
 .image-group-controls label { @apply inline-flex min-h-11 flex-row items-center gap-2 text-sm; }
 .image-group-controls select { @apply w-auto; }
+.group-related input { @apply size-[18px] rounded-sm; appearance: auto; accent-color: var(--color-primary); }
+.group-related input::after { content: none; }
 .image-group-heading { @apply flex h-11 min-w-0 items-center gap-2 whitespace-nowrap; }
 .image-group-heading h3 { @apply m-0 min-w-0 truncate text-sm font-semibold; }
 .image-group-heading span { @apply shrink-0 text-xs text-muted; }
+.image-group-heading .group-method { @apply hidden sm:inline; }
 .image-group-heading button { @apply inline-flex min-h-11 shrink-0 items-center gap-1.5; }
 .compressed-mark { @apply absolute right-0 bottom-0 grid size-5 place-items-center rounded-tl-md bg-primary text-white; }
 .recycle-wall { @apply grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }

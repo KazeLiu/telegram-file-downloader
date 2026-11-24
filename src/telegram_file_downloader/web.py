@@ -776,8 +776,8 @@ def create_app():
         return library.status(candidate, search, compressed)
 
     @app.get("/api/images/groups")
-    async def gallery_groups(mode: Literal["filename", "similarity"], search: str = Query(default="", max_length=255)):
-        return {**library.status(), **groups.listing(mode, search)}
+    async def gallery_groups(mode: Literal["filename", "similarity"], search: str = Query(default="", max_length=255), related: bool = False):
+        return {**library.status(), **groups.listing(mode, search, related)}
 
     @app.get("/api/images/{image_id}")
     async def image_details(image_id: int):

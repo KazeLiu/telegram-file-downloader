@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { defaultRangeExtractor, useWindowVirtualizer } from '@tanstack/vue-virtual'
 import Icon from './Icon.vue'
-import { groupPhotos, photoRows, type PhotoDemand, type PhotoGroup, type WallPhoto } from './photoWall'
+import { groupPhotos, photoRows, type PhotoDemand, type PhotoGroup, type PhotoRow, type WallPhoto } from './photoWall'
 
 const props = defineProps<{ items: T[]; groups?: PhotoGroup<T>[]; caption?: boolean; topInset?: number; disabled: boolean; isSelected: (item: T) => boolean }>()
 const emit = defineEmits<{ toggleDay: [day: string, items: T[]]; demand: [ranges: PhotoDemand[]]; activeDay: [day: string] }>()
@@ -48,6 +48,9 @@ const visibleRows = computed(() => virtualizer.value.getVirtualItems().flatMap(v
 }))
 const totalHeight = computed(() => virtualizer.value.getTotalSize())
 const totalCount = computed(() => groups.value.reduce((sum, group) => sum + (group.count ?? group.items.length), 0))
+function startsRelated(row: PhotoRow<T>, index = 0) {
+  return row.group.dividerAt !== undefined && row.start + index - groupStarts.value.get(row.group.key)! === row.group.dividerAt
+}
 watch(visibleRows, (visible) => {
   if (width.value <= 0 || photoHeight.value <= 0) return
   const viewport = visible.filter(({ virtual }) => virtual.end > window.scrollY + (props.topInset ?? 0) + 1 && virtual.start < window.scrollY + window.innerHeight)
@@ -116,9 +119,9 @@ onUnmounted(() => { observer.disconnect(); window.removeEventListener('resize', 
 </script>
 
 <template>
-  <div ref="wall" class="virtual-photo-wall" role="list" @focusin="focus" @focusout="blur">
+  <div ref="wall" class="virtual-photo-wall" :style="{ '--wall-column-gap': `${gap}px` }" role="list" @focusin="focus" @focusout="blur">
     <div class="virtual-photo-space" role="presentation" :style="{ height: `${totalHeight}px` }">
-      <div v-for="{ virtual, row } in visibleRows" :key="row.key" class="virtual-photo-row" :data-wall-row="row.key" role="presentation"
+      <div v-for="{ virtual, row } in visibleRows" :key="row.key" class="virtual-photo-row" :class="{ 'related-row-start': row.kind === 'photos' && startsRelated(row) }" :data-wall-row="row.key" role="presentation"
         :style="{ height: `${virtual.size}px`, transform: `translateY(${virtual.start - margin}px)`, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, columnGap: `${gap}px` }">
         <div v-if="row.kind === 'day' && $slots.heading" class="wall-day"><slot name="heading" :group="row.group" /></div>
         <h3 v-else-if="row.kind === 'day'" class="wall-day">
@@ -129,7 +132,9 @@ onUnmounted(() => { observer.disconnect(); window.removeEventListener('resize', 
             <span>{{ row.group.label ?? row.group.key }}</span><span class="text-xs text-muted">{{ row.group.count ?? row.group.items.length }} 项</span>
           </button>
         </h3>
-        <div v-for="(item, index) in row.items" :key="item.id" class="virtual-photo-cell" role="listitem" :aria-posinset="row.start + index + 1" :aria-setsize="totalCount"><slot :item="item" /></div>
+        <div v-for="(item, index) in row.items" :key="item.id" class="virtual-photo-cell" :class="{ 'related-cell-start': index > 0 && startsRelated(row, index) }" role="listitem" :aria-posinset="row.start + index + 1" :aria-setsize="totalCount">
+          <span v-if="startsRelated(row, index)" class="sr-only">{{ row.group.dividerLabel }}</span><slot :item="item" />
+        </div>
         <div v-for="index in row.count - row.items.length" :key="`pending:${index}`" class="virtual-photo-cell"><slot name="pending" :day="row.group.key"><div class="aspect-square rounded-lg bg-soft" /></slot></div>
       </div>
     </div>
@@ -142,6 +147,10 @@ onUnmounted(() => { observer.disconnect(); window.removeEventListener('resize', 
 .virtual-photo-space { @apply relative col-span-full min-w-0; }
 .virtual-photo-row { @apply absolute top-0 left-0 grid w-full items-start; }
 .virtual-photo-cell { @apply min-w-0; }
+.related-cell-start { @apply relative; }
+.related-cell-start::before, .related-row-start::before { content: ''; @apply pointer-events-none absolute bg-hairline; }
+.related-cell-start::before { left: calc(var(--wall-column-gap) / -2 - 1px); top: 0; bottom: var(--wall-column-gap); width: 2px; }
+.related-row-start::before { left: 0; right: 0; top: calc(var(--wall-column-gap) / -2 - 1px); height: 2px; }
 .wall-day { @apply col-span-full m-0 min-w-0 text-sm font-semibold; }
 .day-select { @apply flex min-h-[44px] max-w-full items-center gap-2 p-0 text-left; }
 .day-check { @apply grid size-[18px] shrink-0 place-items-center rounded-sm border border-solid border-hairline bg-canvas; }
