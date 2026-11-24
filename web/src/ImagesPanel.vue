@@ -8,9 +8,12 @@ import VirtualPhotoWall from './VirtualPhotoWall.vue'
 import Icon from './Icon.vue'
 import { formatNames, photoDay } from './xiaomiMedia'
 import { useBeforeUnload } from './useBeforeUnload'
+import type { PhotoGroup } from './photoWall'
 
 interface Recycled { id: string; original: string; size: number; created: number; reason: string; state: string; is_image: boolean }
 type View = 'all' | 'candidates' | 'compressed' | 'recycle'
+type GroupMode = 'filename' | 'similarity'
+type Grouping = { phase: 'waiting' | 'running' | 'ready' | 'error'; done: number; total: number; skipped: number; error: string }
 type Comparison = { running: boolean; phase: string; done: number; total: number; baselines: number; errors: number; error: string; current: string; last_check: number | null }
 const route = useRoute()
 const router = useRouter()
@@ -21,6 +24,13 @@ const imageModel = reactive({ view: 'all' as View, organizing: false, items: [] 
   comparison: null as Comparison | null,
   search: '', appliedSearch: '', loading: false, loadingMore: false, busy: false, error: '', selected: new Map<number, Picture>(), selectedDays: new Set<string>(),
   confirmation: [] as Picture[], broken: {} as Record<number, boolean> })
+const groupMode = ref<GroupMode | ''>('')
+const groups = ref<PhotoGroup<Picture>[]>([])
+const grouping = ref<Grouping | null>(null)
+const expanded = reactive(new Set<string>())
+const groupsByKey = computed(() => new Map(groups.value.map(group => [group.key, group.items])))
+const groupsOnWall = computed(() => groups.value.map(group => expanded.has(group.key) || group.key === 'ungrouped' || group.items.length <= 4
+  ? group : { ...group, items: group.items.slice(0, 4) }))
 const props = defineProps<{ lastLocalRecycle: string[] }>()
 const emit = defineEmits<{ message: [value: string]; recycled: [names: string[]] }>()
 const confirmDialog = ref<HTMLDialogElement>()
@@ -62,10 +72,13 @@ function cancelReads() {
   observer?.disconnect(); stopPress(); hideHoverPreview()
 }
 
-function imageRoute(value = imageModel.view, page = 1, search = imageModel.appliedSearch, root = imageModel.recycleRoot) {
+function imageRoute(value = imageModel.view, page = 1, search = imageModel.appliedSearch, root = imageModel.recycleRoot, mode = groupMode.value) {
   return router.push({ path: value === 'all' ? '/images' : `/images/${value}`, query: value === 'recycle'
     ? { root: root !== 'downloads' ? root : undefined, page: page > 1 ? String(page) : undefined, search: search || undefined }
-    : { search: search || undefined } })
+    : { search: search || undefined, group: value === 'all' && mode || undefined } })
+}
+function changeGrouping(mode: GroupMode | '') {
+  void imageRoute('all', 1, imageModel.appliedSearch, imageModel.recycleRoot, mode)
 }
 async function readRoute() {
   if (disposed || !route.path.startsWith('/images')) return
@@ -74,13 +87,16 @@ async function readRoute() {
   const search = queryText(route.query.search)
   const root = queryText(route.query.root) || 'downloads'
   const page = queryPage(route.query.page)
-  const scope = JSON.stringify([view, search, root, page])
+  const queryGroup = queryText(route.query.group)
+  const mode = view === 'all' && (queryGroup === 'filename' || queryGroup === 'similarity') ? queryGroup : ''
+  const scope = JSON.stringify([view, search, root, page, mode])
   let signal = readController.signal
   if (scope !== loadedScope) {
     if (view !== imageModel.view || root !== restoreModel.selectionRoot || search !== imageModel.appliedSearch) { restoreModel.selected.clear(); restoreModel.broken.clear(); restoreModel.note = ''; restoreModel.selectionRoot = root }
     loadedScope = scope; cancelReads()
     signal = readController.signal
     Object.assign(imageModel, { view, page, search, appliedSearch: search, recycleRoot: root, items: [], trash: [], total: 0, nextCursor: null })
+    groupMode.value = mode; groups.value = []; grouping.value = null; expanded.clear()
     clearSelection(); reviewDialog.value?.close(); activeReview = null
     if (view === 'recycle') imageModel.organizing = false
     await load()
@@ -94,7 +110,12 @@ async function readRoute() {
     if (signal.aborted || disposed || queryText(route.query.photo) !== String(photo)) return
     const listed = imageModel.items.includes(item)
     activeReview = photo
-    reviewDialog.value?.open(listed ? imageModel.items : [item], item, listed ? imageModel.nextCursor : item.id, imageModel.total)
+    if (groupMode.value) {
+      const queue = groups.value.find(group => group.items.includes(item))?.items ?? [item]
+      reviewDialog.value?.open(queue, item, null, queue.length)
+    } else {
+      reviewDialog.value?.open(listed ? imageModel.items : [item], item, listed ? imageModel.nextCursor : item.id, imageModel.total)
+    }
   } catch (error) { if (!disposed && (error as Error).name !== 'AbortError') imageModel.error = (error as Error).message }
 }
 watch(() => route.fullPath, () => void readRoute())
@@ -108,11 +129,11 @@ function clearSelection() { imageModel.selected.clear(); imageModel.selectedDays
 function imageQuery() {
   return new URLSearchParams({ candidate: String(imageModel.view === 'candidates'), compressed: String(imageModel.view === 'compressed'), search: imageModel.appliedSearch })
 }
+type ImageStatus = { total: number; scan: typeof imageModel.scan; counts: typeof imageModel.counts; comparison: Comparison | null }
 function listImages(after?: number | null) {
   const query = imageQuery()
   if (after != null) query.set('after', String(after))
-  return api<{ items: Picture[]; total: number; next_cursor: number | null;
-    scan: typeof imageModel.scan; counts: typeof imageModel.counts; comparison: Comparison | null }>(`/images?${query}`, undefined, 'GET', readController.signal)
+  return api<ImageStatus & { items: Picture[]; next_cursor: number | null }>(`/images?${query}`, undefined, 'GET', readController.signal)
 }
 async function load({ append = false } = {}) {
   if (disposed || imageModel.loading || imageModel.loadingMore || (append && (!canLoadMore.value || blocked.value))) return
@@ -131,6 +152,20 @@ async function load({ append = false } = {}) {
       if (revision !== loadRevision) return
       imageModel.trash = result.items; imageModel.total = result.total; imageModel.pageSize = result.page_size
       imageModel.cleanup = result.cleanup
+    } else if (groupMode.value) {
+      const query = new URLSearchParams({ mode: groupMode.value, search: imageModel.appliedSearch })
+      const result = await api<ImageStatus & { groups: PhotoGroup<Picture>[] | null; grouping: Grouping | null }>(`/images/groups?${query}`, undefined, 'GET', signal)
+      if (revision !== loadRevision) return
+      imageModel.scan = result.scan; imageModel.counts = result.counts; imageModel.comparison = result.comparison
+      grouping.value = result.grouping
+      if (result.groups) {
+        groups.value = result.groups
+        imageModel.items = result.groups.flatMap(group => group.items)
+        imageModel.total = imageModel.items.length
+        imageModel.broken = {}
+        listedScan.value = result.scan.last_scan
+        listedComparison.value = result.comparison?.last_check ?? null
+      }
     } else {
       const result = await listImages(append ? imageModel.nextCursor : null)
       if (revision !== loadRevision) return
@@ -159,11 +194,18 @@ async function pollStatus() {
   polling = true
   const revision = loadRevision
   try {
-    const result = await api<{ total: number; scan: typeof imageModel.scan; counts: typeof imageModel.counts; comparison: Comparison | null }>(`/images/status?${imageQuery()}`, undefined, 'GET', readController.signal)
+    const result = await api<ImageStatus>(`/images/status?${imageQuery()}`, undefined, 'GET', readController.signal)
     if (revision !== loadRevision) return
-    imageModel.scan = result.scan; imageModel.counts = result.counts; imageModel.total = result.total
+    imageModel.scan = result.scan; imageModel.counts = result.counts
     imageModel.comparison = result.comparison
-    if (!imageModel.items.length && result.total && activeReview === null && !confirmDialog.value?.open) await load()
+    if (groupMode.value) {
+      const pending = grouping.value?.phase === 'waiting' || grouping.value?.phase === 'running'
+      const firstGroups = groupMode.value === 'filename' && !imageModel.items.length && result.total > 0 && !imageModel.error
+      if ((pending || firstGroups) && activeReview === null && !confirmDialog.value?.open) await load()
+    } else {
+      imageModel.total = result.total
+      if (!imageModel.items.length && result.total && activeReview === null && !confirmDialog.value?.open) await load()
+    }
   } catch (error) { if (revision === loadRevision) imageModel.error = (error as Error).message }
   finally { polling = false }
 }
@@ -283,11 +325,15 @@ function finishReview(items: Picture[], submit: boolean, kept: Picture[]) {
   if (submit) void confirm(items)
 }
 async function confirm(items?: Picture[]) {
-  if (!imageModel.organizing || blocked.value) return
+  if (toolbarBlocked.value || (!items && !imageModel.organizing)) return
   hideHoverPreview()
   imageModel.confirmation = items || [...imageModel.selected.values()]
   if (!imageModel.confirmation.length) return
   await nextTick(); confirmDialog.value?.showModal()
+}
+function confirmGroup(key: string) {
+  const items = groupsByKey.value.get(key)
+  if (items?.length) void confirm(items)
 }
 async function recycle() {
   if (toolbarBlocked.value) return
@@ -296,6 +342,7 @@ async function recycle() {
   const moved = new Set<number>()
   const failures: string[] = []
   const targets = imageModel.confirmation
+  const scope = loadedScope
   try {
     for (let offset = 0; offset < targets.length; offset += 200) {
       const batch = targets.slice(offset, offset + 200)
@@ -312,16 +359,20 @@ async function recycle() {
       confirmDialog.value?.close()
       const removed = targets.filter(item => moved.has(item.id))
       emit('recycled', removed.map(item => item.name))
-      moved.forEach(id => imageModel.selected.delete(id))
-      imageModel.items = imageModel.items.filter(item => !moved.has(item.id))
-      imageModel.total = Math.max(0, imageModel.total - moved.size)
-      imageModel.counts.total = Math.max(0, imageModel.counts.total - moved.size)
-      imageModel.counts.candidates = Math.max(0, imageModel.counts.candidates - removed.filter(item => item.monochrome).length)
-      imageModel.counts.compressed = Math.max(0, imageModel.counts.compressed - removed.filter(item => item.saved_match).length)
-      imageModel.counts.errors = Math.max(0, imageModel.counts.errors - removed.filter(item => item.error).length)
       emit('message', `已回收 ${moved.size} 张图片`)
+      if (scope === loadedScope) {
+        moved.forEach(id => imageModel.selected.delete(id))
+        imageModel.items = imageModel.items.filter(item => !moved.has(item.id))
+        if (groupMode.value) groups.value = groups.value.map(group => ({ ...group, items: group.items.filter(item => !moved.has(item.id)) })).filter(group => group.items.length)
+        imageModel.total = groupMode.value ? imageModel.items.length : Math.max(0, imageModel.total - moved.size)
+        imageModel.counts.total = Math.max(0, imageModel.counts.total - moved.size)
+        imageModel.counts.candidates = Math.max(0, imageModel.counts.candidates - removed.filter(item => item.monochrome).length)
+        imageModel.counts.compressed = Math.max(0, imageModel.counts.compressed - removed.filter(item => item.saved_match).length)
+        imageModel.counts.errors = Math.max(0, imageModel.counts.errors - removed.filter(item => item.error).length)
+      }
     }
-    imageModel.error = failures.join('；'); imageModel.busy = false
+    if (scope === loadedScope) imageModel.error = failures.join('；')
+    imageModel.busy = false
   }
 }
 async function copyRecycledNames() {
@@ -460,14 +511,32 @@ onBeforeUnmount(() => {
     <p v-if="imageModel.counts.comparison_errors && imageModel.view !== 'recycle'" class="notice">{{ imageModel.counts.comparison_errors }} 张图片的已存检查未完成，可点“刷新图片”重试；原文件保留。</p>
     <p v-if="imageModel.counts.errors && imageModel.view !== 'recycle'" class="notice">{{ imageModel.counts.errors }} 张图片读取失败，可在“全部图片”中查看；原文件保留。</p>
     <div v-if="imageModel.scan.running && imageModel.view !== 'recycle'" class="image-scan" role="status"><span><Icon name="loader" class="loading-icon" :size="16" />{{ imageModel.scan.total ? `后台已检查 ${imageModel.scan.done} / ${imageModel.scan.total} 张 · 已就绪 ${imageModel.counts.ready || 0} 张，可继续浏览` : '正在后台读取根目录图片…' }}</span><progress v-if="imageModel.scan.total" :value="imageModel.scan.done" :max="imageModel.scan.total" aria-label="图片分析进度" /></div>
-    <p v-if="indexUpdated && imageModel.view !== 'recycle'" class="notice" role="status">后台图片检查已完成。<button class="text-button" :disabled="toolbarBlocked || selectedCount > 0" @click="updateImages">更新图片列表</button><span v-if="selectedCount">请先处理或清空已选图片。</span></p>
+    <p v-if="indexUpdated && imageModel.view !== 'recycle' && (!grouping || grouping.phase === 'ready' || grouping.phase === 'error')" class="notice" role="status">后台图片检查已完成。<button class="text-button" :disabled="toolbarBlocked || selectedCount > 0" @click="updateImages">更新图片列表</button><span v-if="selectedCount">请先处理或清空已选图片。</span></p>
     <template v-if="imageModel.view !== 'recycle'">
       <div class="image-actions">
         <form class="search-box" @submit.prevent="filter"><Icon name="search" :size="17" /><input v-model="imageModel.search" :disabled="toolbarBlocked" maxlength="255" placeholder="搜索根目录图片" aria-label="搜索根目录图片" /><button class="text-button" :disabled="toolbarBlocked">搜索</button></form>
-        <span class="muted" title="拍摄时间优先，其次图片日期，缺失时使用原修改时间">{{ imageModel.total }} 张 · 按照片时间从新到旧</span>
-        <button v-if="imageModel.organizing" class="text-button" :disabled="blocked || !imageModel.items.length" @click="selectLoaded">{{ allSelected ? '取消已加载选择' : '全选已加载' }}</button>
+        <div v-if="imageModel.view === 'all'" class="image-group-controls">
+          <label><input type="checkbox" role="switch" :checked="!!groupMode" :disabled="toolbarBlocked" @change="changeGrouping(groupMode ? '' : 'filename')" />分组</label>
+          <select v-if="groupMode" :value="groupMode" :disabled="toolbarBlocked" aria-label="分组方式" @change="changeGrouping(($event.target as HTMLSelectElement).value === 'similarity' ? 'similarity' : 'filename')">
+            <option value="filename">按文件名</option><option value="similarity">按相似度（含差分）</option>
+          </select>
+        </div>
+        <span v-if="groupMode" class="muted" role="status">{{ imageModel.total }} 张</span>
+        <span v-else class="muted" title="拍摄时间优先，其次图片日期，缺失时使用原修改时间">{{ imageModel.total }} 张 · 按照片时间从新到旧</span>
+        <button v-if="imageModel.organizing && !groupMode" class="text-button" :disabled="blocked || !imageModel.items.length" @click="selectLoaded">{{ allSelected ? '取消已加载选择' : '全选已加载' }}</button>
       </div>
-      <VirtualPhotoWall :class="imageModel.view === 'compressed' ? 'compressed-wall' : 'image-grid'" :items="imageModel.items" :disabled="blocked" :is-selected="isSelected" :aria-busy="imageModel.loading || imageModel.loadingMore" @toggle-day="selectDay">
+      <p v-if="grouping?.phase === 'waiting'" class="image-scan" role="status">图片扫描完成后开始相似分组。</p>
+      <div v-else-if="grouping?.phase === 'running'" class="image-scan" role="status"><span><Icon name="loader" class="loading-icon" :size="16" />正在按相似度分组 · {{ grouping.done }} / {{ grouping.total }} 张</span><progress v-if="grouping.total" :value="grouping.done" :max="grouping.total" aria-label="相似分组进度" /></div>
+      <p v-else-if="grouping?.phase === 'error'" class="notice error" role="alert">相似分组失败：{{ grouping.error }}。请刷新图片后更新列表。</p>
+      <p v-else-if="grouping?.skipped" class="notice">{{ grouping.skipped }} 张图片未能参与相似分组，可在「未分组」查看。</p>
+      <VirtualPhotoWall :class="imageModel.view === 'compressed' ? 'compressed-wall' : 'image-grid'" :items="imageModel.items" :groups="groupMode ? groupsOnWall : undefined" :disabled="blocked" :is-selected="isSelected" :aria-busy="imageModel.loading || imageModel.loadingMore" @toggle-day="selectDay">
+        <template v-if="groupMode" #heading="{ group }">
+          <div class="image-group-heading">
+            <h3 :title="group.label">{{ group.label }}</h3><span>{{ groupsByKey.get(group.key)?.length }} 张</span>
+            <button v-if="group.key !== 'ungrouped' && (groupsByKey.get(group.key)?.length ?? 0) > 4" class="text-button" :aria-expanded="expanded.has(group.key)" :aria-label="`${expanded.has(group.key) ? '收起' : '展开'} ${group.label}`" @click="expanded.has(group.key) ? expanded.delete(group.key) : expanded.add(group.key)">{{ expanded.has(group.key) ? '收起' : '展开' }}</button>
+            <button v-if="group.key !== 'ungrouped'" class="text-button group-recycle" :aria-label="`回收整组 ${group.label}，共 ${groupsByKey.get(group.key)?.length} 张`" :disabled="toolbarBlocked" @click="confirmGroup(group.key)"><Icon name="trash" :size="15" />回收整组</button>
+          </div>
+        </template>
         <template #default="{ item }">
         <article class="image-card">
           <button type="button" class="image-preview" :title="imageModel.organizing ? undefined : (item.saved_match ? '重复图 · ' : '') + item.name" :disabled="blocked"
@@ -489,7 +558,7 @@ onBeforeUnmount(() => {
         </template>
       </VirtualPhotoWall>
       <div v-if="canLoadMore" class="image-more"><button ref="moreButton" class="text-button" :disabled="toolbarBlocked" @click="loadMore">{{ imageModel.loadingMore ? '正在加载…' : '加载更多' }}</button></div>
-      <div v-if="!imageModel.items.length && !canLoadMore && !imageModel.loading && !imageModel.error" class="empty-list tall">
+      <div v-if="!imageModel.items.length && !canLoadMore && !imageModel.loading && !imageModel.error && (!grouping || grouping.phase === 'ready')" class="empty-list tall">
         <Icon name="photo" :size="38" />
         <h2>{{ imageModel.scan.running ? '正在整理图片索引' : imageModel.appliedSearch ? '没有匹配的图片' : imageModel.view === 'compressed' ? imageModel.comparison?.running ? '正在与已存图片比对' : imageModel.comparison?.phase === 'disabled' ? '工作流自动检查已关闭' : imageModel.comparison?.phase === 'unbound' ? '尚未选择有效的工作流检查目录' : imageModel.comparison?.phase === 'waiting' ? '等待目录索引和当前文件操作完成' : '暂无重复图' : imageModel.view === 'candidates' ? '暂无黑白候选' : '根目录还没有图片' }}</h2>
         <button v-if="imageModel.view === 'compressed' && ['disabled', 'unbound'].includes(imageModel.comparison?.phase ?? '')" class="secondary" @click="router.push('/dedup')">设置工作流自动检查</button>
@@ -567,6 +636,15 @@ onBeforeUnmount(() => {
 .compressed-pair small { @apply truncate text-xs text-muted; }
 .image-preview[aria-pressed=true] .compressed-pair { @apply ring-2 ring-primary ring-inset; }
 .image-hover-preview { @apply pointer-events-none fixed z-[14] rounded-lg border border-solid border-hairline bg-media object-contain shadow-xl; }
+.image-group-controls { @apply flex shrink-0 items-center gap-2 whitespace-nowrap; }
+.image-group-controls label { @apply inline-flex min-h-11 items-center gap-2 text-sm; }
+.image-group-controls label input { @apply size-4; }
+.image-group-controls select { @apply w-auto; }
+.image-group-heading { @apply flex h-11 min-w-0 items-center gap-2 whitespace-nowrap; }
+.image-group-heading h3 { @apply m-0 min-w-0 truncate text-sm font-semibold; }
+.image-group-heading span { @apply shrink-0 text-xs text-muted; }
+.image-group-heading button { @apply inline-flex min-h-11 shrink-0 items-center gap-1.5; }
+.image-group-heading .group-recycle { @apply ml-auto; }
 .compressed-mark { @apply absolute right-0 bottom-0 grid size-5 place-items-center rounded-tl-md bg-primary text-white; }
 .recycle-wall { @apply grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10; }
 .recycle-toolbar { @apply my-3 flex flex-wrap items-end gap-3; }

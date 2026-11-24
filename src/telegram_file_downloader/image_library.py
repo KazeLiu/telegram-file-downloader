@@ -267,6 +267,9 @@ class ImageLibrary:
         return dict(items=items, **self.status(candidate, search, compressed), page=page, page_size=PAGE_SIZE,
                     next_cursor=items[-1]["id"] if len(rows) > PAGE_SIZE else None)
 
+    def group_records(self):
+        return self.db.execute(f"SELECT {IMAGE_FIELDS} FROM images WHERE {READY_IMAGES} ORDER BY sort_time DESC,id DESC").fetchall()
+
     @staticmethod
     def public(record, saved_scope=""):
         scope = record.pop("saved_scope", "")

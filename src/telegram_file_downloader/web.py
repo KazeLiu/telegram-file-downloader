@@ -27,6 +27,7 @@ from .diagnostics import configure_logs, read_log
 from .organizer import browse, plan_counts
 from .image_library import IMAGE_EXTENSIONS, ImageLibrary, recycle_thumbnail
 from .image_dedup import ImageDedup
+from .image_groups import ImageGroups
 from .saved_image_check import SavedImageCheck
 from .linked_recycle import LinkedRecycle
 from .recycle_cleanup import RecycleCleaner
@@ -230,6 +231,7 @@ def create_app():
         or bool(runtime.manual_task and not runtime.manual_task.done())))
     linked_recycle = LinkedRecycle(store, xiaomi, local_index)
     dedup = ImageDedup(data_dir, store, xiaomi, local_index)
+    groups = ImageGroups(library, dedup)
     saved_check = SavedImageCheck(library, dedup, local_index, xiaomi, store,
         lambda: runtime.operation_lock.locked() or library.state["running"] or bool(dedup.task and not dedup.task.done()))
     library.saved_check = saved_check
@@ -247,6 +249,7 @@ def create_app():
             yield
         finally:
             await saved_check.close()
+            await groups.close()
             await dedup.close()
             await recycle_cleaner.close()
             await local_index.close()
@@ -762,6 +765,10 @@ def create_app():
         if len(search) > 255:
             raise ValueError("无效的图片查询")
         return library.status(candidate, search, compressed)
+
+    @app.get("/api/images/groups")
+    async def gallery_groups(mode: Literal["filename", "similarity"], search: str = Query(default="", max_length=255)):
+        return {**library.status(), **groups.listing(mode, search)}
 
     @app.get("/api/images/{image_id}")
     async def image_details(image_id: int):

@@ -120,7 +120,8 @@ onUnmounted(() => { observer.disconnect(); window.removeEventListener('resize', 
     <div class="virtual-photo-space" role="presentation" :style="{ height: `${totalHeight}px` }">
       <div v-for="{ virtual, row } in visibleRows" :key="row.key" class="virtual-photo-row" :data-wall-row="row.key" role="presentation"
         :style="{ height: `${virtual.size}px`, transform: `translateY(${virtual.start - margin}px)`, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, columnGap: `${gap}px` }">
-        <h3 v-if="row.kind === 'day'" class="wall-day">
+        <div v-if="row.kind === 'day' && $slots.heading" class="wall-day"><slot name="heading" :group="row.group" /></div>
+        <h3 v-else-if="row.kind === 'day'" class="wall-day">
           <button type="button" role="checkbox" class="day-select" :aria-checked="dayStates.get(row.group.key)" :disabled="disabled || !row.group.items.length"
             :aria-label="`${dayStates.get(row.group.key) === true ? '取消选择' : '选择'} ${row.group.label ?? row.group.key} 已加载的 ${row.group.items.length} 项`"
             title="选择这一天已加载的图片，后续加载的同日图片会继续选中" @click="emit('toggleDay', row.group.key, row.group.items)">
