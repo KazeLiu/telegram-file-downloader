@@ -61,14 +61,17 @@ const indexUpdated = computed(() => !imageModel.scan.running && !imageModel.scan
   || !!imageModel.comparison?.last_check && !imageModel.comparison.running && imageModel.comparison.last_check !== listedComparison.value
   || !!groupMode.value && grouping.value?.phase === 'ready' && grouping.value.last_check !== listedGrouping.value)
 const allSelected = computed(() => imageModel.items.length > 0 && imageModel.items.every(isSelected))
+const picturePositions = computed(() => new Map(imageModel.items.map((item, index) => [item.id, index])))
+const rangeSelecting = ref(false)
 let timer: ReturnType<typeof setInterval>
 let observer: IntersectionObserver | undefined
 let loadRevision = 0
 let polling = false
-let press: { pointerId: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | undefined
+let press: { pointerId: number; x: number; y: number; currentX: number; currentY: number; mouse: boolean; item: Picture;
+  button: HTMLButtonElement; timer: ReturnType<typeof setTimeout>; range?: { anchor: number; end: number; base: Map<number, Picture> } } | undefined
 let hoverTimer: ReturnType<typeof setTimeout> | undefined
 const hoverPreview = ref<{ item: Picture; left: number; top: number; width: number; height: number }>()
-let held = false
+let ignorePointerClick = false
 let loadedScope = ''
 let activeReview: number | null = null
 let readController = new AbortController()
@@ -276,7 +279,7 @@ function hideHoverPreview() {
 }
 function showHoverPreview(event: PointerEvent, item: Picture) {
   const { width: imageWidth, height: imageHeight } = item
-  if (event.pointerType !== 'mouse' || !imageModel.organizing || blocked.value || !imageWidth || !imageHeight || item.error || imageModel.broken[item.id]) return
+  if (event.pointerType !== 'mouse' || press || !imageModel.organizing || blocked.value || !imageWidth || !imageHeight || item.error || imageModel.broken[item.id]) return
   hideHoverPreview()
   const anchor = event.currentTarget as HTMLButtonElement
   hoverTimer = setTimeout(() => {
@@ -300,27 +303,82 @@ function dismissPreview(event: KeyboardEvent) {
 }
 function stopPress(event?: PointerEvent) {
   if (!press || (event && press.pointerId !== event.pointerId)) return
-  clearTimeout(press.timer)
+  if (press.range && event?.type === 'pointerup') updateMouseRange(event.clientX, event.clientY)
+  const current = press
   press = undefined
+  clearTimeout(current.timer)
+  rangeSelecting.value = false
+  if (current.range) ignorePointerClick = true
+  if (current.button.hasPointerCapture(current.pointerId)) current.button.releasePointerCapture(current.pointerId)
+}
+function resetPointerClick() { ignorePointerClick = false }
+function preventPointerClick(event: MouseEvent) {
+  if (!ignorePointerClick || !event.detail) return
+  ignorePointerClick = false
+  event.preventDefault()
+  event.stopImmediatePropagation()
+}
+function endPress() { stopPress() }
+function leaveImage(event: PointerEvent) {
+  hideHoverPreview()
+  if (event.pointerType !== 'mouse') stopPress(event)
+}
+function updateRangeEnd(end: number) {
+  const range = press?.range
+  if (!range || range.end === end) return
+  range.end = end
+  const selected = new Map(range.base)
+  for (let index = Math.min(range.anchor, end); index <= Math.max(range.anchor, end); index++) {
+    const item = imageModel.items[index]!
+    selected.set(item.id, item)
+  }
+  imageModel.selected = selected
+}
+function updateMouseRange(x: number, y: number) {
+  const target = document.elementFromPoint(x, y)?.closest<HTMLButtonElement>('button[data-library-picture]')
+  if (!target) return
+  const end = picturePositions.value.get(Number(target.dataset.libraryPicture))
+  if (end !== undefined) updateRangeEnd(end)
+}
+function scrollImages() {
+  hideHoverPreview()
+  if (!press?.range) { stopPress(); return }
+  void nextTick(() => { if (press?.range) updateMouseRange(press.currentX, press.currentY) })
 }
 function startPress(event: PointerEvent, item: Picture) {
   if (!event.isPrimary || event.button !== 0) return
   stopPress()
-  held = false
+  hideHoverPreview()
   const button = event.currentTarget as HTMLButtonElement
   const timer = setTimeout(() => {
     press = undefined
     if (!button.isConnected || button.disabled) return
-    held = true
+    ignorePointerClick = true
     review(item)
   }, 450)
-  press = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timer }
+  press = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, currentX: event.clientX, currentY: event.clientY,
+    mouse: event.pointerType === 'mouse', item, button, timer }
 }
 function movePress(event: PointerEvent) {
-  if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 9) stopPress(event)
+  if (!press || press.pointerId !== event.pointerId) return
+  if (blocked.value || (press.mouse && !(event.buttons & 1))) { stopPress(event); return }
+  press.currentX = event.clientX; press.currentY = event.clientY
+  if (!press.range) {
+    if (Math.hypot(event.clientX - press.x, event.clientY - press.y) <= 9) return
+    if (!press.mouse) { stopPress(event); return }
+    clearTimeout(press.timer)
+    const anchor = picturePositions.value.get(press.item.id)!
+    press.range = { anchor, end: -1, base: new Map(imageModel.selected) }
+    press.button.setPointerCapture(press.pointerId)
+    rangeSelecting.value = true
+    imageModel.organizing = true
+    imageModel.selectedDays.clear()
+    updateRangeEnd(anchor)
+  }
+  event.preventDefault()
+  updateMouseRange(event.clientX, event.clientY)
 }
-function activateImage(event: MouseEvent, item: Picture) {
-  if (held && event.detail) { held = false; return }
+function activateImage(item: Picture) {
   if (imageModel.organizing) select(item, !isSelected(item))
   else review(item)
 }
@@ -481,9 +539,15 @@ watch(moreButton, button => {
   if (button) observer?.observe(button)
 }, { flush: 'post' })
 onMounted(() => {
-  window.addEventListener('scroll', hideHoverPreview, { capture: true, passive: true })
+  window.addEventListener('scroll', scrollImages, { capture: true, passive: true })
   window.addEventListener('resize', hideHoverPreview)
   window.addEventListener('keydown', dismissPreview)
+  window.addEventListener('pointerdown', resetPointerClick, true)
+  window.addEventListener('click', preventPointerClick, true)
+  window.addEventListener('pointermove', movePress)
+  window.addEventListener('pointerup', stopPress)
+  window.addEventListener('pointercancel', stopPress)
+  window.addEventListener('blur', endPress)
   if ('IntersectionObserver' in window) {
     observer = new IntersectionObserver(entries => {
       if (!disposed && !imageModel.error && entries.some(entry => entry.isIntersecting && entry.target === moreButton.value)) loadMore()
@@ -496,14 +560,20 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true; clearInterval(timer); cancelReads()
-  window.removeEventListener('scroll', hideHoverPreview, true)
+  window.removeEventListener('scroll', scrollImages, true)
   window.removeEventListener('resize', hideHoverPreview)
   window.removeEventListener('keydown', dismissPreview)
+  window.removeEventListener('pointerdown', resetPointerClick, true)
+  window.removeEventListener('click', preventPointerClick, true)
+  window.removeEventListener('pointermove', movePress)
+  window.removeEventListener('pointerup', stopPress)
+  window.removeEventListener('pointercancel', stopPress)
+  window.removeEventListener('blur', endPress)
 })
 </script>
 
 <template>
-  <section class="image-library" :class="{ 'has-floating-actions': imageModel.view !== 'recycle' }">
+  <section class="image-library" :class="{ 'has-floating-actions': imageModel.view !== 'recycle', 'range-selecting': rangeSelecting }">
     <div class="image-library-toolbar">
       <nav class="image-tabs" aria-label="图片视图">
         <button :aria-current="imageModel.view === 'all' ? 'page' : undefined" :disabled="imageModel.busy" @click="view('all')">全部图片 <span>{{ imageModel.counts.total || 0 }}</span></button>
@@ -557,11 +627,11 @@ onBeforeUnmount(() => {
         </template>
         <template #default="{ item }">
         <article class="image-card">
-          <button type="button" class="image-preview" :title="imageModel.organizing ? undefined : (item.saved_match ? '重复图 · ' : '') + item.name" :disabled="blocked"
+          <button type="button" class="image-preview" :data-library-picture="item.id" :title="imageModel.organizing ? undefined : (item.saved_match ? '重复图 · ' : '') + item.name" :disabled="blocked"
             :aria-label="(imageModel.organizing ? '选择 ' : '快速审阅 ') + (item.saved_match ? '重复图 ' : '') + item.name" :aria-pressed="imageModel.organizing ? isSelected(item) : undefined"
-            aria-keyshortcuts="Shift+Enter" @click="activateImage($event, item)" @keydown.shift.enter.prevent="!$event.repeat && review(item)"
-            @pointerenter="showHoverPreview($event, item)" @pointerleave="hideHoverPreview(); stopPress($event)"
-            @pointerdown="startPress($event, item)" @pointermove="movePress" @pointerup="stopPress" @pointercancel="stopPress" @contextmenu.prevent>
+            aria-keyshortcuts="Shift+Enter" @click="activateImage(item)" @keydown.shift.enter.prevent="!$event.repeat && review(item)"
+            @pointerenter="showHoverPreview($event, item)" @pointerleave="leaveImage"
+            @pointerdown="startPress($event, item)" @contextmenu.prevent>
             <span v-if="imageModel.view === 'compressed' && item.saved_match" class="compressed-pair">
               <span><strong>下载图片</strong><img :src="thumbnail(item)" alt="下载图片" draggable="false" loading="lazy" /><small>{{ item.width }} × {{ item.height }} · {{ bytes(item.size) }}</small></span>
               <span><strong>已存图片</strong><img :src="`/api/images/${item.id}/saved/thumbnail?version=${encodeURIComponent(item.version)}`" alt="绑定目录中的已存图片" draggable="false" loading="lazy" /><small>{{ item.saved_match.width }} × {{ item.saved_match.height }} · {{ bytes(item.saved_match.size) }}</small></span>
@@ -644,6 +714,8 @@ onBeforeUnmount(() => {
 <style scoped>
 @reference '../app/assets/main.css';
 .image-library { overflow-anchor: none; }
+.range-selecting { user-select: none; }
+.range-selecting .image-preview { cursor: crosshair; }
 .image-tabs { @apply max-w-full overflow-x-auto whitespace-nowrap; }
 .image-tabs button { @apply shrink-0; }
 .compressed-wall { @apply grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3; }
