@@ -91,6 +91,12 @@ const mode = computed(() => frame.value?.mode ?? 'stop')
 const commandText = computed(() => frame.value?.text ?? '')
 const commandHint = computed(() => frame.value?.hint ?? '')
 const beatBpm = computed(() => frame.value?.task?.command?.bpm ?? 0)
+/** 图片「按 BPM · 每拍一张」：慢速取快速节拍的 60%，红色（不许碰）不切图。 */
+const imageBeatMode = computed(() => options.value?.kind === 'image' && options.value.imageTiming === 'beat')
+const imageBeatBpm = computed(() => {
+  const base = options.value?.bpm || 100
+  return mode.value === 'slow' ? Math.max(20, Math.round(base * 0.6)) : base
+})
 const taskProgress = computed(() => frame.value?.taskProgress ?? 0)
 const taskSeconds = computed(() => frame.value?.taskSeconds ?? 0)
 const taskKey = computed(() => frame.value?.task?.index ?? -1)
@@ -107,7 +113,8 @@ const summary = computed(() => {
   const item = playlist.value
   if (!item) return ''
   return [({ mixed: '混合', image: '仅图片', video: '仅视频' } as const)[item.kind], item.order === 'shuffle' ? '随机顺序' : '文件名顺序',
-    item.kind === 'video' ? '' : `每张 ${item.imageSeconds} 秒`, item.kind === 'video' ? '' : item.imageCount ? `每轮 ${item.imageCount} 张` : '全部未展示图片',
+    item.kind === 'video' ? '' : item.kind === 'image' && item.imageTiming === 'beat' ? `每拍一张 · 快速 ${item.bpm} BPM` : `每张 ${item.imageSeconds} 秒`,
+    item.kind === 'video' ? '' : item.imageCount ? `每轮 ${item.imageCount} 张` : '全部未展示图片',
     settings.value.durationRandom ? '随机时长' : `${settings.value.minutes} 分钟`, settings.value.metronome ? '节拍声开' : '节拍声关'].filter(Boolean).join(' · ')
 })
 const canHold = computed(() => screen.value === 'playing' && !paused.value && !error.value && !allowed.value && !runtimeSettings.value && !cooling.value)
@@ -421,15 +428,19 @@ function pulse(now: number) {
   const redBeat = settings.value.redBeat
   const useBeat = currentMode === 'stop' ? redBeat !== 'heartbeat' : true
   const useHeart = currentMode === 'stop' ? redBeat !== 'metronome' : false
-  const bpm = beatBpm.value || 60
-  const interval = currentMode === 'stop' ? Math.max(400, beatIntervalFor(60)) : beatIntervalFor(bpm)
+  const bpm = imageBeatMode.value && currentMode !== 'stop' ? imageBeatBpm.value : beatBpm.value || 60
+  // 心跳跟随 BPM：红色带 BPM 且开着时，心跳按指令的 BPM 打；关掉后固定 60。
+  const stopBpm = settings.value.heartbeatSync && useHeart && beatBpm.value ? beatBpm.value : 60
+  const interval = currentMode === 'stop' ? Math.max(400, beatIntervalFor(stopBpm)) : beatIntervalFor(bpm)
   if (!interval) return
   if (!nextBeat) { nextBeat = now + interval; return }
   if (now < nextBeat) return
   nextBeat = now + interval
+  if (imageBeatMode.value && currentMode !== 'stop') step(1)
   const volume = { beatVolume: settings.value.beatVolume, heartbeatVolume: settings.value.heartbeatVolume }
   if (useHeart && settings.value.heartbeat) void sound.heartbeat(volume)
-  if (useBeat && settings.value.metronome) void sound.beat(currentMode === 'slow' ? 'slow' : 'go', volume)
+  // 「每拍一张」时即使关掉节拍器也要出声，否则图片不动。
+  if (useBeat && (settings.value.metronome || imageBeatMode.value)) void sound.beat(currentMode === 'slow' ? 'slow' : 'go', volume)
 }
 
 function tick() {
@@ -446,7 +457,7 @@ function tick() {
     return
   }
   pulse(now)
-  if (current.value?.kind === 'image' && imageSeconds.value > 0) {
+  if (!imageBeatMode.value && current.value?.kind === 'image' && imageSeconds.value > 0) {
     imageElapsed.value += delta
     if (imageElapsed.value >= imageSeconds.value * 1000) step(1)
   }

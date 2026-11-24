@@ -91,6 +91,8 @@ interface DifficultyProfile {
 | `mixAudio` | boolean | `false` |
 | `keepVideoOnStop` | boolean（红色时也继续放视频、不变暗） | `false` |
 | `switchVideoPerCommand` | boolean（每换一条指令就切下一个视频） | `false` |
+| `bpmRandom` | `{ on: boolean, min: 20–300, max: 20–300 }`（开启后每条绿黄指令的 BPM 在范围内重随机，红色固定 60 不参与） | `{ on: false, min: 60, max: 160 }` |
+| `heartbeatSync` | boolean（心跳跟随 BPM；关掉后红色带 BPM 时心跳仍固定 60） | `true` |
 
 导出：`edgeStorageKey`、`edgeSchemaVersion`、`defaultEdgeSettings`、`normalizeEdgeSettings(raw)`、
 `readEdgeSettings(value: string | null)`、`writeEdgeSettings(settings): string`（返回错误串，空串＝成功）。
@@ -162,6 +164,11 @@ export function formatClock(ms: number): string   // 'm:ss'
 export function toneForTask(tones: Record<ToneKind, boolean>, count: number): ToneKind | 'normal'
 export function pickToneLine(lines: ToneLine, random: Random, options: { before: boolean; after: ToneAfter }): { before?: string; after?: string }
 export function toneAfterForCommand(command: { category: string } | null, after: ToneAfter): ToneAfter
+export function varyBpm(
+  command: EdgeCommand | null,
+  range: { on: boolean; min: number; max: number } | null,
+  random: Random,
+): EdgeCommand | null
 ```
 
 规则要点：
@@ -179,6 +186,7 @@ export function toneAfterForCommand(command: { category: string } | null, after:
 - `toneForTask`：开着几种口吻就按「第几条指令」轮流用（`((count-1) % n + n) % n`），没开返回 `normal`。
 - `pickToneLine`：前置短句直接取；后置按 `always = 1` / `half = 0.5` / `never = 0` 的概率决定给不给。
 - `toneAfterForCommand`：`category === 'edge'` 的寸止指令**强制不加后置短句**，免得把「松手」冲淡。
+- `varyBpm`：`bpmRandom.on` 且指令带 `bpm` 且不是红色时，用 `randomBpm(range, mode, random)` 换一个 BPM；红色与无 BPM 的指令原样返回。
 
 ## 指令池：`web/src/playback/commands.ts`
 
@@ -310,7 +318,7 @@ export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
 | 玩法 | 推荐预设 `presets`、只玩乳头 / 龟头 `nipple` `glans`、时长 `minutes` + `durationRandom`、难度 `difficulty`、自己调 `tune`（许可概率 / 三相位 mix）、结局 `finale` + `allowRuin`、`rewardSeconds`、`rest`、`instructionLength`、图例与规则句 |
 | 指令 | 分类 `categories`、惯用手 `hand`、自定义口令 `custom`（≤30 条 / 60 字）、逐条启停 `disabled`（按 `modeOrder` 分组列 `maleCommands`） |
 | 视频·图片 | 直接绑 `Playlist`：`kind / order / imageCount / imageTiming / imageSeconds / bpm(20–300) / loop / favoritesOnly` + `keepVideoOnStop` + `switchVideoPerCommand` |
-| 声音 | `metronome` + `beatVolume(0–300)`、`mediaVolume(0–100)`、`heartbeat` + `heartbeatVolume(0–300)` + `redBeat` |
+| 声音 | `metronome` + `beatVolume(0–300)`、`mediaVolume(0–100)`、`heartbeat` + `heartbeatVolume(0–300)` + `redBeat` + `heartbeatSync`、`bpmRandom(on/min/max)` |
 | 其他 | `hideRemaining`、`brightness(20–100)`、`mixAudio` |
 
 摘要行 `web/src/playback/summary.ts` 的 `settingsSummary(settings)` 输出形如

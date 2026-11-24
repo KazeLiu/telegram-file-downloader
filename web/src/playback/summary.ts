@@ -27,6 +27,7 @@ export function settingsSummary(settings: EdgeSettings) {
   if (settings.glans.on) parts.push('只玩龟头')
   const tones = toneOrder.filter(key => settings.tones[key])
   if (tones.length) parts.push(`口吻 ${tones.map(key => toneLabels[key]).join('+')}`)
+  if (settings.bpmRandom.on) parts.push(`每次变换节奏 ${settings.bpmRandom.min}–${settings.bpmRandom.max}`)
   if (settings.hand === 'left') parts.push('左撇子')
   parts.push(settings.metronome ? '节拍声开' : '节拍声关')
   return parts.filter(Boolean).join(' · ')

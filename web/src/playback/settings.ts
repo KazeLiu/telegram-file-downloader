@@ -1,7 +1,7 @@
 // 寸止玩法的全局设置：对齐参考实现的 settings 结构（去掉联机、语音播报与道具模式）。
 // 与播放列表分离：列表负责「放哪些媒体」，设置负责「怎么玩」。
 import {
-  brightnessMin, customCommandLimit, customCommandTextLimit, restMax, restMin, videoVolumeMax,
+  bpmRandomMax, bpmRandomMin, brightnessMin, customCommandLimit, customCommandTextLimit, restMax, restMin, videoVolumeMax,
   type Categories, type CustomCommand, type Difficulty, type Finale, type Hand, type InstructionLength,
   toneAfterOrder, toneOrder, type Mix, type RedBeat, type RestMode, type ToneAfter, type ToneKind, type Tune
 } from './engine.ts'
@@ -43,6 +43,10 @@ export interface EdgeSettings {
   brightness: number
   hideRemaining: boolean
   mixAudio: boolean
+  /** 每次变换节奏：绿黄指令的 BPM 在范围内每次重新随机 */
+  bpmRandom: { on: boolean; min: number; max: number }
+  /** 心跳跟随 BPM：关掉后红色带 BPM 时心跳仍保持固定节奏 */
+  heartbeatSync: boolean
   /** 红色（不许碰）时也继续播放视频：关掉时红色会暂停并额外变暗（参考站默认行为） */
   keepVideoOnStop: boolean
   /** 每换一条指令就换一个视频 */
@@ -84,6 +88,8 @@ export const defaultEdgeSettings: EdgeSettings = {
   brightness: 55,
   hideRemaining: false,
   mixAudio: false,
+  bpmRandom: { on: false, min: 60, max: 160 },
+  heartbeatSync: true,
   keepVideoOnStop: false,
   switchVideoPerCommand: false,
   tones: { strong: false, tease: false, abuse: false, sweet: false, feet: false },
@@ -188,6 +194,14 @@ function readFocus(value: unknown, fallback: { on: boolean; times: number }) {
   return { on: boolOr(value.on, fallback.on), times: clampNumber(value.times, 1, 4, fallback.times) }
 }
 
+function readBpmRandom(value: unknown): EdgeSettings['bpmRandom'] {
+  const base = { ...defaultEdgeSettings.bpmRandom }
+  if (!isRecord(value)) return base
+  const min = clampNumber(value.min, bpmRandomMin, bpmRandomMax, base.min)
+  const max = clampNumber(value.max, bpmRandomMin, bpmRandomMax, base.max)
+  return { on: boolOr(value.on, base.on), min: Math.min(min, max), max: Math.max(min, max) }
+}
+
 /** 容错读入：任何字段坏了都退回默认值，绝不抛错。 */
 export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
   if (!isRecord(raw)) return { ...defaultEdgeSettings, categories: { ...allCategories }, tune: { ...defaultEdgeSettings.tune }, rest: { ...defaultEdgeSettings.rest }, custom: [], disabled: [] }
@@ -223,6 +237,8 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     brightness: clampNumber(raw.brightness, brightnessMin, 100, defaultEdgeSettings.brightness),
     hideRemaining: boolOr(raw.hideRemaining, defaultEdgeSettings.hideRemaining),
     mixAudio: boolOr(raw.mixAudio, defaultEdgeSettings.mixAudio),
+    bpmRandom: readBpmRandom(raw.bpmRandom),
+    heartbeatSync: boolOr(raw.heartbeatSync, defaultEdgeSettings.heartbeatSync),
     keepVideoOnStop: boolOr(raw.keepVideoOnStop, defaultEdgeSettings.keepVideoOnStop),
     switchVideoPerCommand: boolOr(raw.switchVideoPerCommand, defaultEdgeSettings.switchVideoPerCommand),
     tones: readTones(raw.tones),

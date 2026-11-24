@@ -4,7 +4,7 @@ import { newPlaylist } from './playback'
 import type { Playlist } from './playback'
 import { settingsSummary } from './playback/summary'
 import {
-  adjustMix, beatVolumeMax, brightnessMin, categoryHints, categoryLabels, categoryOrder,
+  adjustMix, beatVolumeMax, bpmRandomMax, bpmRandomMin, brightnessMin, categoryHints, categoryLabels, categoryOrder,
   customCommandLimit, customCommandTextLimit, difficultyHints, difficultyLabels, difficultyOrder,
   durationMax, durationMin, finaleHints, finaleLabels, finaleOrder, instructionLengthLabels,
   instructionLengthOrder, mixOf, modeLabels, modeOrder, presets, presetLabels, presetOrder,
@@ -96,11 +96,20 @@ function resetGroup() {
     item.heartbeat = base.heartbeat
     item.heartbeatVolume = base.heartbeatVolume
     item.mediaVolume = base.mediaVolume
+    item.bpmRandom = { ...base.bpmRandom }
+    item.heartbeatSync = base.heartbeatSync
   } else {
     item.hideRemaining = base.hideRemaining
     item.brightness = base.brightness
     item.mixAudio = base.mixAudio
   }
+}
+
+// 每次变换节奏的上下限：20～300，按 5 取整。
+function clampBpm(value: string, fallback: number) {
+  const parsed = Math.round(Number(value))
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(bpmRandomMax, Math.max(bpmRandomMin, 5 * Math.round(parsed / 5)))
 }
 
 // 推荐预设：只覆盖时长/难度/结局与三类开关，微调值（tune）一并归零，与参考站一致。
@@ -404,6 +413,12 @@ void secondsLabel
           <label v-if="media?.kind !== 'image'">视频音量 · {{ settings.mediaVolume }}%<input :value="settings.mediaVolume" type="range" min="0" max="100" step="5" @input="settings.mediaVolume = Number(($event.target as HTMLInputElement).value)" /></label>
         </div>
         <p class="muted">节拍音量最高 {{ beatVolumeMax }}%，比默认响得多；觉得吵就往下拉。</p>
+        <label class="toggle"><input :checked="settings.bpmRandom.on" type="checkbox" @change="settings.bpmRandom.on = ($event.target as HTMLInputElement).checked" />每次变换节奏</label>
+        <p class="muted">绿色和黄色指令的节奏会在设定范围内每次变化。绿色取较快的一半，黄色取较慢的一半。</p>
+        <div v-if="settings.bpmRandom.on" class="settings-grid">
+          <label>最慢 · {{ settings.bpmRandom.min }}<input :value="settings.bpmRandom.min" type="number" :min="bpmRandomMin" :max="bpmRandomMax" step="5" @change="settings.bpmRandom.min = clampBpm(($event.target as HTMLInputElement).value, settings.bpmRandom.min)" /></label>
+          <label>最快 · {{ settings.bpmRandom.max }}<input :value="settings.bpmRandom.max" type="number" :min="bpmRandomMin" :max="bpmRandomMax" step="5" @change="settings.bpmRandom.max = clampBpm(($event.target as HTMLInputElement).value, settings.bpmRandom.max)" /></label>
+        </div>
         <label class="toggle"><input :checked="settings.heartbeat" type="checkbox" @change="settings.heartbeat = ($event.target as HTMLInputElement).checked" />心跳声</label>
         <div v-if="settings.heartbeat" class="settings-grid">
           <label>心跳音量 · {{ settings.heartbeatVolume }}%<input :value="settings.heartbeatVolume" type="range" min="0" :max="beatVolumeMax" step="5" @input="settings.heartbeatVolume = Number(($event.target as HTMLInputElement).value)" /></label>
@@ -411,6 +426,8 @@ void secondsLabel
             <option v-for="key in redBeatOrder" :key="key" :value="key">{{ redBeatLabels[key] }}</option>
           </select></label>
         </div>
+        <label class="toggle"><input :checked="settings.heartbeatSync" type="checkbox" @change="settings.heartbeatSync = ($event.target as HTMLInputElement).checked" />心跳跟随 BPM</label>
+        <p class="muted">关掉后，即使红色带 BPM，心跳也保持固定节奏。</p>
         <p class="muted">全部是浏览器实时合成的音，不加载任何音频文件。</p>
       </template>
 

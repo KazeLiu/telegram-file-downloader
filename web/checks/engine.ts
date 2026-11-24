@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 // 浮点相加会带来 0.8999999999999999 这类尾差，概率一律按 1e-9 容差比较。
 const assertClose = (actual: number, expected: number, message?: string) => assert.ok(Math.abs(actual - expected) < 1e-9, message ?? `${actual} 应当接近 ${expected}`)
 import {
+  varyBpm,
   adjustMix, beatVolumeMax, bindCommands, buildTimeline, categoryOrder, commandPool, customCommandLimit,
   customCommandTextLimit, decideFinale, difficulties, difficultyOrder, durationChoices, durationMax, durationMin,
   filterByCategories, finaleOrder, finalHoldMs, formatClock, instructionLengthOrder, mixOf, modeColors, modeLabels,
@@ -323,6 +324,24 @@ assert.deepEqual(normalized.disabled, [1, 3], '停用下标要去重排序')
 assert.equal(normalized.tune.chance, 10, '手调许可率下限 10')
 assert.equal(normalized.tune.stop, 60, '手调不许碰上限 60')
 assert.equal(normalized.tune.mix, null, '三项和不为 100 的 mix 必须丢弃')
+assert.equal(defaults.bpmRandom.on, false)
+assert.equal(defaults.bpmRandom.min, 60)
+assert.equal(defaults.bpmRandom.max, 160)
+assert.equal(defaults.heartbeatSync, true)
+const ranged = normalizeEdgeSettings({ bpmRandom: { on: true, min: 999, max: 10 }, heartbeatSync: false })
+assert.equal(ranged.bpmRandom.on, true)
+assert.equal(ranged.bpmRandom.max, 300, '每次变换节奏上限 300')
+assert.equal(ranged.bpmRandom.min, 10 < 20 ? 20 : ranged.bpmRandom.min, '每次变换节奏下限 20')
+assert.equal(ranged.bpmRandom.min <= ranged.bpmRandom.max, true, 'bpmRandom 上下限必须纠正顺序')
+assert.equal(ranged.heartbeatSync, false)
+// 每次变换节奏：开启后绿黄指令的 BPM 落在范围内且是 5 的倍数；红色不动。
+const varySource = { text: '快一点。别停。', mode: 'go' as const, category: 'basic' as const, bpm: 90 }
+const varied = varyBpm(varySource, { on: true, min: 60, max: 160 }, mulberry32(7))!
+assert.equal(varied.bpm! >= 60 && varied.bpm! <= 160, true, '变换节奏的 BPM 必须落在范围内')
+assert.equal(varied.bpm! % 5, 0, '变换节奏的 BPM 必须是 5 的倍数')
+assert.equal(varied.bpm! >= 110, true, '绿色只取较快的一半')
+assert.equal(varyBpm(varySource, { on: false, min: 60, max: 160 }, mulberry32(7))!.bpm, 90, '关掉后原样返回')
+assert.equal(varyBpm({ ...varySource, mode: 'stop' as const }, { on: true, min: 60, max: 160 }, mulberry32(7))!.bpm, 90, '红色不参与变换节奏')
 assert.equal(normalizeEdgeSettings(null).minutes, 10, '整体损坏时退回默认值')
 assert.equal(normalizeEdgeSettings({ custom: [{ text: 'x'.repeat(100), mode: 'go' }] }).custom[0]!.text.length, 60, '自定义口令截断到 60 字')
 assert.equal(normalizeEdgeSettings({ custom: Array.from({ length: 50 }, () => ({ text: '口令', mode: 'go' })) }).custom.length, 30, '自定义口令上限 30 条')

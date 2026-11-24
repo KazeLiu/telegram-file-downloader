@@ -541,3 +541,12 @@ export function toneAfterForCommand(command: { category: string } | null, after:
   return command?.category === 'edge' ? 'never' : after
 }
 
+/** 每次变换节奏：开启后每条绿黄指令的 BPM 在范围内重新随机（红色固定 60，不参与）。 */
+export function varyBpm(
+  command: EdgeCommand | null,
+  range: { on: boolean; min: number; max: number } | null,
+  random: Random,
+) {
+  if (!command || !range || !range.on || !command.bpm || command.mode === 'stop') return command
+  return { ...command, bpm: randomBpm(range, command.mode, random) }
+}

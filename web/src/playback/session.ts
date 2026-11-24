@@ -1,8 +1,7 @@
 import {
   bindCommands, buildTimeline, commandPool, decideFinale, filterByCategories, mulberry32, permitRate,
   pickToneLine, randomSeed, restSeconds, taskAt, toneAfterForCommand, toneForTask,
-  type EdgeCommand, type EdgeMode, type Task, type ToneKind,
-} from './engine.ts'
+  type EdgeCommand, type EdgeMode, type Task, type ToneKind, varyBpm} from './engine.ts'
 import type { EdgeSettings } from './settings.ts'
 import { toneLines } from './tones.ts'
 
@@ -71,7 +70,15 @@ function makeTimeline(
     nipple: settings.nipple.on ? { times: settings.nipple.times } : undefined,
     glans: settings.glans.on ? { times: settings.glans.times } : undefined,
   })
-  return bindCommands(tasks, pool, nipple, glans)
+  const bound = bindCommands(tasks, pool, nipple, glans)
+  // 每次变换节奏：开启后每条绿黄指令的 BPM 在范围内重新随机（同一条始终稳定）。
+  if (settings.bpmRandom.on) {
+    for (const task of bound) {
+      const random = mulberry32((seed ^ Math.imul(task.index + 1, 0x9e3779b1)) >>> 0)
+      task.command = varyBpm(task.command, settings.bpmRandom, random)
+    }
+  }
+  return bound
 }
 
 export class EdgeSession {
