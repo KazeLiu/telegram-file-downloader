@@ -1,184 +1,202 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { customCommandLimit, customCommandTextLimit, newPlaylist } from './playback'
+import { newPlaylist } from './playback'
 import type { Playlist } from './playback'
-import { playbackSummary } from './playback/summary'
+import { settingsSummary } from './playback/summary'
 import {
-  builtinCommands, commandTypeLabels, difficultyOrder, difficultyProfiles, edgeWindowOptions, endingHints,
-  endingLabels, endingOrder, permitStep, propLabels, toneLabels, vibrateLabels, voicePitchLabels, waitPresets,
-} from './playback/edge'
-import type { CommandType, Tone } from './playback/edge'
+  adjustMix, beatVolumeMax, brightnessMin, categoryHints, categoryLabels, categoryOrder,
+  customCommandLimit, customCommandTextLimit, difficultyHints, difficultyLabels, difficultyOrder,
+  durationMax, durationMin, finaleHints, finaleLabels, finaleOrder, instructionLengthLabels,
+  instructionLengthOrder, mixOf, modeLabels, modeOrder, presets, presetLabels, presetOrder,
+  redBeatLabels, redBeatOrder, restFixedChoices, restModeLabels, restModeOrder, restRangeChoices,
+  rewardChoices, toneAfterLabels, toneAfterOrder, difficulties, permitRate,
+  type Difficulty, type EdgeMode,
+} from './playback/engine'
+import { maleCommands } from './playback/commands'
+import { defaultEdgeSettings, readEdgeSettings } from './playback/settings'
+import type { EdgeSettings } from './playback/settings'
 
-const settings = defineModel<Playlist>({ required: true })
-const props = defineProps<{ runtime?: boolean }>()
+const settings = defineModel<EdgeSettings>({ required: true })
+const props = defineProps<{ runtime?: boolean; media?: Playlist }>()
+
 const selected = ref('play')
 const search = ref('')
-// 分组顺序即契约里的「玩法 / 指令 / 内容 / 声音 / 其他」，关键词覆盖各组字段的中文别名。
+// 分组顺序对齐参考站：玩法 / 指令 / 视频·图片 / 声音 / 其他。
 const groups = computed(() => [
-  { id: 'play', label: '玩法', keywords: '总时长 分钟 难度 简单 普通 困难 地狱 许可率 相位 比例 抽签 结局 加时 许可窗口 忍住 等待 随机 固定 指令时长 节奏' },
-  { id: 'command', label: '指令', keywords: '口吻 强硬 挑逗 辱骂 温柔 类型 撸 慢 不许碰 乳头 龟头 惯用手 左右手 道具 飞机杯 前列腺 自定义 口令 启停 禁用' },
-  { id: 'content', label: '内容', keywords: '内容类型 混合 仅图片 仅视频 顺序 随机 文件名 每轮 数量 图片间隔 切图 节奏 BPM 循环 喜欢 收藏 去重' },
-  { id: 'sound', label: '声音', keywords: '音量 视频 媒体 静音 节拍器 BPM 语音 语速 音高 心跳 振动' },
-  { id: 'other', label: '其他', keywords: '隐藏 时间 进度 明暗 亮度 画面' },
+  { id: 'play', label: '玩法', keywords: '推荐 第一次 标准 慢慢来 时间 分钟 随机 难度 简单 普通 困难 地狱 许可率 自己调 混合 可以撸 慢慢来 不许碰 结局 抽签 必定 松手 连续 加时 允许射精 秒 等待 随机 固定 指令时长 较长 很长 乳头 龟头' },
+  { id: 'command', label: '指令', keywords: '分类 寸止 挑逗 姿势 羞耻 轻度疼痛 惯用手 左右手 自定义 口令 启停 禁用' },
+  { id: 'media', label: '视频·图片', keywords: '视频 图片 混合 仅图片 仅视频 顺序 随机 文件名 每轮 数量 间隔 切图 BPM 循环 喜欢 收藏' },
+  { id: 'sound', label: '声音', keywords: '节拍 音量 心跳 红 媒体 视频 音量 变暗 混音' },
+  { id: 'other', label: '其他', keywords: '隐藏 剩余 时间 进度 画面 亮度 变暗 混音' },
 ])
-const visible = computed(() => groups.value.filter(group => search.value.trim()
-  ? `${group.label} ${group.keywords}`.toLowerCase().includes(search.value.trim().toLowerCase()) : group.id === selected.value))
-const summary = computed(() => playbackSummary(settings.value))
-// 「恢复本组」只动当前分组，且要求再点一次确认，避免误触清掉还没记住的设置。
-const resetArmed = ref(false)
-const canReset = computed(() => !search.value.trim() && visible.value.length === 1)
-const resetLabel = computed(() => resetArmed.value ? '确认恢复？' : '恢复本组')
-watch([selected, search], () => { resetArmed.value = false })
-watch(settings, () => { resetArmed.value = false }, { deep: true })
+const visible = computed(() => groups.value.filter(group => (search.value.trim()
+  ? `${group.label} ${group.keywords}`.toLowerCase().includes(search.value.trim().toLowerCase())
+  : group.id === selected.value) && !(props.runtime && group.id === 'media')))
+const summary = computed(() => settingsSummary(settings.value))
+
 function selectGroup(id: string) {
   selected.value = id
   search.value = ''
   resetArmed.value = false
 }
 
-// 多选项（口吻、类型开关、道具）：就地点选/取消，保持数组引用不变，避免触发父组件整体替换。
-function toggleChoice<T extends string>(list: T[], value: T) {
-  const at = list.indexOf(value)
-  if (at >= 0) list.splice(at, 1)
-  else list.push(value)
-}
-const toneOptions = Object.keys(toneLabels) as Tone[]
-const commandTypeOptions = Object.keys(commandTypeLabels) as CommandType[]
-const propOptions = Object.keys(propLabels)
-const pitchOptions = Object.keys(voicePitchLabels)
-const vibrateOptions = Object.keys(vibrateLabels)
-// 契约只给了三档指令时长的倍率，没有文案表，标签写在这里。
-const paceLabels: Record<'standard' | 'long' | 'veryLong', string> = { standard: '标准', long: '偏长', veryLong: '很长' }
-const paceOptions = Object.keys(paceLabels) as (keyof typeof paceLabels)[]
-const profile = computed(() => difficultyProfiles[settings.value.difficulty])
-const ratioTotal = computed(() => Math.round(settings.value.ratioFast + settings.value.ratioSlow + settings.value.ratioRest))
-const beatsImages = computed(() => settings.value.kind === 'image' && settings.value.imageTiming === 'beat')
-
-// 等待时长：数字输入框的 v-model 走 input 事件、先于 @change 落值，所以在 @change 里夹取读到的已是新值；
-// select 的 v-model 与模板 @change 都挂 change 事件且 v-model 更晚绑定，故预设档改用可写 computed 避免读到旧值。
-// 夹取放在提交时（blur/回车）而不是每次按键，免得一边输入一边被改写。
-function clampWait(raw: number) {
-  const value = Number.isFinite(raw) ? Math.round(raw) : 3
-  return Math.min(120, Math.max(3, value))
-}
-const waitPreset = computed({
-  get: () => settings.value.waitPreset,
-  set: (id: Playlist['waitPreset']) => {
-    settings.value.waitPreset = id
-    const preset = waitPresets.find(item => item.id === id)
-    if (!preset) return
-    settings.value.waitMin = preset.min
-    settings.value.waitMax = preset.max
-  },
-})
-function syncWaitMin() {
-  const value = clampWait(settings.value.waitMin)
-  settings.value.waitMin = value
-  if (settings.value.waitMax < value) settings.value.waitMax = value
-}
-function syncWaitMax() {
-  const value = clampWait(settings.value.waitMax)
-  settings.value.waitMax = Math.max(value, settings.value.waitMin)
-}
-function syncWaitFixed() {
-  const value = clampWait(settings.value.waitMin)
-  settings.value.waitMin = value
-  settings.value.waitMax = value
-}
-
-// 自定义口令：上限 30 条、单条 60 字（与 playback.ts 的校验共用同一组常量）。
-const commandLimit = customCommandLimit
-const commandTextLimit = customCommandTextLimit
-const draftCommand = ref('')
-const draftType = ref<CommandType>('fast')
-const canAddCommand = computed(() => !!draftCommand.value.trim() && settings.value.customCommands.length < commandLimit)
-function addCommand() {
-  const text = draftCommand.value.trim().slice(0, commandTextLimit)
-  if (!text || settings.value.customCommands.length >= commandLimit) return
-  settings.value.customCommands.push({ text, type: draftType.value })
-  draftCommand.value = ''
-}
-function removeCommand(index: number) {
-  settings.value.customCommands.splice(index, 1)
-}
-
-// 内置口令按类型分组列出，点一下在启用/停用之间切换（存的是停用名单）。
-const commandGroups = computed(() => commandTypeOptions.map(type => ({
-  type, label: commandTypeLabels[type], items: builtinCommands.filter(command => command.type === type),
-})))
-function toggleCommand(id: string) {
-  toggleChoice(settings.value.disabledCommands, id)
-}
-function enableAllCommands() {
-  settings.value.disabledCommands.splice(0)
-}
-
+// 「恢复本组」要求再点一次确认，避免误触清掉还没记住的设置。
+const resetArmed = ref(false)
+const canReset = computed(() => !search.value.trim() && visible.value.length === 1)
+const resetLabel = computed(() => resetArmed.value ? '确认恢复？' : '恢复本组')
+watch([selected, search], () => { resetArmed.value = false })
+watch(settings, () => { resetArmed.value = false }, { deep: true })
 function resetGroup() {
   if (!resetArmed.value) { resetArmed.value = true; return }
   resetArmed.value = false
   draftCommand.value = ''
-  const defaults = newPlaylist()
   const item = settings.value
+  const base = defaultEdgeSettings
   if (selected.value === 'play') {
-    item.minutes = defaults.minutes
-    item.difficulty = defaults.difficulty
-    item.ratioFast = defaults.ratioFast
-    item.ratioSlow = defaults.ratioSlow
-    item.ratioRest = defaults.ratioRest
-    item.permitBase = defaults.permitBase
-    item.ending = defaults.ending
-    item.edgeWindow = defaults.edgeWindow
-    item.waitMode = defaults.waitMode
-    item.waitPreset = defaults.waitPreset
-    item.waitMin = defaults.waitMin
-    item.waitMax = defaults.waitMax
-    item.instructionPace = defaults.instructionPace
+    item.minutes = base.minutes
+    item.durationRandom = base.durationRandom
+    item.difficulty = base.difficulty
+    item.instructionLength = base.instructionLength
+    item.finale = base.finale
+    item.tune = { chance: null, stop: null, mix: null }
+    item.allowRuin = base.allowRuin
+    item.overtimeRounds = base.overtimeRounds
+    item.rewardSeconds = base.rewardSeconds
+    item.rest = { ...base.rest }
+    item.nipple = { ...base.nipple }
+    item.glans = { ...base.glans }
   } else if (selected.value === 'command') {
-    item.tones.splice(0, item.tones.length, ...defaults.tones)
-    item.commandTypes.splice(0, item.commandTypes.length, ...defaults.commandTypes)
-    item.hand = defaults.hand
-    item.props.splice(0, item.props.length, ...defaults.props)
-    item.customCommands.splice(0, item.customCommands.length)
-    item.disabledCommands.splice(0, item.disabledCommands.length)
-  } else if (selected.value === 'content') {
-    if (!props.runtime) {
-      item.kind = defaults.kind
-      item.order = defaults.order
-      item.imageCount = defaults.imageCount
-      item.favoritesOnly = defaults.favoritesOnly
+    item.categories = { ...base.categories }
+    item.hand = base.hand
+    item.custom.splice(0, item.custom.length)
+    item.disabled.splice(0, item.disabled.length)
+  } else if (selected.value === 'media') {
+    const defaults = newPlaylist()
+    const media = props.media
+    if (media) {
+      media.order = defaults.order
+      media.imageCount = defaults.imageCount
+      media.imageTiming = defaults.imageTiming
+      media.imageSeconds = defaults.imageSeconds
+      media.bpm = defaults.bpm
+      media.loop = defaults.loop
+      media.favoritesOnly = defaults.favoritesOnly
     }
-    item.imageSeconds = defaults.imageSeconds
-    item.imageTiming = defaults.imageTiming
-    item.bpm = defaults.bpm
-    item.loop = defaults.loop
+    item.keepVideoOnStop = base.keepVideoOnStop
+    item.switchVideoPerCommand = base.switchVideoPerCommand
   } else if (selected.value === 'sound') {
-    item.metronome = defaults.metronome
-    item.beatVolume = defaults.beatVolume
-    item.heartbeat = defaults.heartbeat
-    item.heartbeatVolume = defaults.heartbeatVolume
-    item.speech = defaults.speech
-    item.speechVolume = defaults.speechVolume
-    item.speechRate = defaults.speechRate
-    item.voicePitch = defaults.voicePitch
-    item.mediaVolume = defaults.mediaVolume
-    item.vibrate = defaults.vibrate
+    item.metronome = base.metronome
+    item.beatVolume = base.beatVolume
+    item.redBeat = base.redBeat
+    item.heartbeat = base.heartbeat
+    item.heartbeatVolume = base.heartbeatVolume
+    item.mediaVolume = base.mediaVolume
   } else {
-    item.hideTime = defaults.hideTime
-    item.brightness = defaults.brightness
+    item.hideRemaining = base.hideRemaining
+    item.brightness = base.brightness
+    item.mixAudio = base.mixAudio
   }
 }
+
+// 推荐预设：只覆盖时长/难度/结局与三类开关，微调值（tune）一并归零，与参考站一致。
+function applyPreset(key: keyof typeof presets) {
+  const preset = presets[key]
+  const item = settings.value
+  item.minutes = preset.minutes
+  item.durationRandom = false
+  item.difficulty = preset.difficulty
+  item.finale = preset.finale
+  Object.assign(item.categories, preset.categories)
+  item.tune = { chance: null, stop: null, mix: null }
+}
+
+// 自己调：滑杆直接写 tune；「恢复成难度的数值」把三项清空回落到难度预设。
+const mix = computed(() => mixOf(settings.value.difficulty, settings.value.tune))
+const chancePercent = computed(() => settings.value.tune.chance ?? Math.round(difficulties[settings.value.difficulty].chance * 100))
+function setChance(value: number) { settings.value.tune.chance = Math.round(value) }
+function setMix(mode: EdgeMode, value: number) {
+  settings.value.tune.mix = adjustMix({ ...mix.value }, mode, Math.round(value))
+}
+function restoreTune() { settings.value.tune = { chance: null, stop: null, mix: null } }
+const derivedMix = computed(() => mixOf(settings.value.difficulty, { chance: null, stop: null, mix: null }))
+
+const timeChoices = computed(() => [3, 5, 10, 15, 20, 30])
+function setMinutes(value: number) {
+  settings.value.minutes = Math.min(durationMax, Math.max(durationMin, Math.round(value)))
+  settings.value.durationRandom = false
+}
+// 等待时长：预设档改写上下限，数字输入在提交时夹取。
+function setRestRange(value: [number, number]) {
+  settings.value.rest.min = value[0]
+  settings.value.rest.max = value[1]
+}
+function clampRest(raw: number) {
+  const value = Number.isFinite(raw) ? Math.round(raw) : 8
+  return Math.min(120, Math.max(3, value))
+}
+function syncRestMin() {
+  const value = clampRest(settings.value.rest.min)
+  settings.value.rest.min = value
+  if (settings.value.rest.max < value) settings.value.rest.max = value
+}
+function syncRestMax() {
+  const value = clampRest(settings.value.rest.max)
+  settings.value.rest.max = Math.max(value, settings.value.rest.min)
+}
+function syncRestFixed() {
+  const value = clampRest(settings.value.rest.seconds)
+  settings.value.rest.seconds = value
+}
+
+// 指令分类：只抽选中的分类（傲气/道具类始终启用）。
+function toggleCategory(key: keyof EdgeSettings['categories']) {
+  settings.value.categories[key] = !settings.value.categories[key]
+}
+
+// 自定义口令：上限 30 条、单条 60 字。
+const draftCommand = ref('')
+const draftMode = ref<EdgeMode>('go')
+const canAddCommand = computed(() => !!draftCommand.value.trim() && settings.value.custom.length < customCommandLimit)
+function addCommand() {
+  const text = draftCommand.value.trim().slice(0, customCommandTextLimit)
+  if (!text || settings.value.custom.length >= customCommandLimit) return
+  settings.value.custom.push({ text, mode: draftMode.value })
+  draftCommand.value = ''
+}
+function removeCommand(index: number) {
+  settings.value.custom.splice(index, 1)
+}
+
+// 逐条启停内置口令：存的是停用下标，点一处在启用/停用间切换。
+const commandGroups = computed(() => modeOrder.map(mode => ({
+  mode,
+  label: modeLabels[mode],
+  items: maleCommands.map((command, index) => ({ index, command })).filter(item => item.command.mode === mode),
+})))
+function toggleCommand(index: number) {
+  const at = settings.value.disabled.indexOf(index)
+  if (at >= 0) settings.value.disabled.splice(at, 1)
+  else settings.value.disabled.push(index)
+}
+function enableAllCommands() { settings.value.disabled.splice(0) }
+
+// 视频·图片组只在不播放时出现：播放中改图库/顺序需要重新取队列，必须回列表。
+const media = computed(() => props.media)
+const beatsImages = computed(() => !!media.value && media.value.kind === 'image' && media.value.imageTiming === 'beat')
+const secondsLabel = computed(() => readEdgeSettings(null) ? '' : '')
+void secondsLabel
 </script>
 
 <template>
   <div class="settings-card" :class="{ runtime }">
     <header class="card-head">
       <div class="card-heading">
-        <h3 class="card-title">播放设置</h3>
+        <h3 class="card-title">玩法设置</h3>
         <p class="card-summary">{{ summary }}</p>
       </div>
       <button v-if="canReset" type="button" class="text-button card-reset" :title="resetArmed ? '再点一次把本组恢复为默认值' : '只把本组恢复为默认值，其他分组不变'" @click="resetGroup">{{ resetLabel }}</button>
     </header>
-    <label class="settings-search">查找设置<input v-model="search" type="search" placeholder="例如：难度、许可率、结局、口令" /></label>
+    <label class="settings-search">查找设置<input v-model="search" type="search" placeholder="例如：乳头、左手、速度、视频" /></label>
     <div class="settings-tabs" role="group" aria-label="设置分类">
       <button v-for="group in groups" :key="group.id" type="button" :aria-pressed="!search && selected === group.id" @click="selectGroup(group.id)">{{ group.label }}</button>
     </div>
@@ -187,163 +205,199 @@ function resetGroup() {
       <h4 v-if="search" class="section-title">{{ group.label }}</h4>
 
       <template v-if="group.id === 'play'">
-        <div class="settings-grid">
-          <label>总时长（分钟，0 为不限）<input v-model.number="settings.minutes" type="number" min="0" max="180" required /></label>
-          <label>难度<select v-model="settings.difficulty">
-            <option v-for="key in difficultyOrder" :key="key" :value="key">{{ difficultyProfiles[key].label }}</option>
-          </select></label>
-          <label>结局<select v-model="settings.ending">
-            <option v-for="key in endingOrder" :key="key" :value="key">{{ endingLabels[key] }}</option>
-          </select></label>
-          <label>许可窗口（秒）<select v-model="settings.edgeWindow">
-            <option v-for="value in edgeWindowOptions" :key="value" :value="value">{{ value }} 秒</option>
-          </select></label>
-          <label>指令时长<select v-model="settings.instructionPace">
-            <option v-for="key in paceOptions" :key="key" :value="key">{{ paceLabels[key] }}</option>
-          </select></label>
-          <label>忍住后等待<select v-model="settings.waitMode">
-            <option value="random">随机时长</option>
-            <option value="fixed">固定时长</option>
-          </select></label>
+        <h5 class="field-label">推荐</h5>
+        <div class="chips">
+          <button v-for="key in presetOrder" :key="key" type="button" class="chip" :aria-pressed="settings.minutes === presets[key].minutes && settings.difficulty === presets[key].difficulty && settings.finale === presets[key].finale" @click="applyPreset(key)">{{ presetLabels[key] }}</button>
         </div>
-        <p class="muted">{{ endingHints[settings.ending] }}；难度预设 {{ profile.label }}：比例 {{ profile.fast }} / {{ profile.slow }} / {{ profile.rest }}，基础许可率 {{ profile.permit }}%。</p>
+        <p class="muted">点一下换一套推荐组合：{{ presetLabels.first }} = 5 分钟·简单·必定允许；{{ presetLabels.standard }} = 10 分钟·普通·抽签；{{ presetLabels.long }} = 20 分钟·困难·抽签。</p>
 
-        <div v-if="settings.waitMode === 'random'" class="settings-grid">
-          <label>等待区间<select v-model="waitPreset">
-            <option v-for="preset in waitPresets" :key="preset.id" :value="preset.id">{{ preset.label }}</option>
-          </select></label>
-          <span class="hint-cell muted">选预设会同时改写下面两个数字，也可以直接改。</span>
-          <label>最短等待（秒）<input v-model.number="settings.waitMin" type="number" min="3" max="120" required @change="syncWaitMin" /></label>
-          <label>最长等待（秒）<input v-model.number="settings.waitMax" type="number" min="3" max="120" required @change="syncWaitMax" /></label>
+        <h5 class="field-label">只玩乳头 / 只玩龟头</h5>
+        <div class="settings-grid">
+          <label class="toggle"><input :checked="settings.nipple.on" type="checkbox" @change="settings.nipple.on = ($event.target as HTMLInputElement).checked" />只玩乳头</label>
+          <label v-if="settings.nipple.on">插入段数<input :value="settings.nipple.times" type="number" min="1" max="4" @change="settings.nipple.times = Math.min(4, Math.max(1, Math.round(Number(($event.target as HTMLInputElement).value) || 1)))" /></label>
+          <label class="toggle"><input :checked="settings.glans.on" type="checkbox" @change="settings.glans.on = ($event.target as HTMLInputElement).checked" />只玩龟头</label>
+          <label v-if="settings.glans.on">插入段数<input :value="settings.glans.times" type="number" min="1" max="4" @change="settings.glans.times = Math.min(4, Math.max(1, Math.round(Number(($event.target as HTMLInputElement).value) || 1)))" /></label>
         </div>
-        <div v-else class="settings-grid">
-          <label>固定等待（秒）<input v-model.number="settings.waitMin" type="number" min="3" max="120" required @change="syncWaitFixed" /></label>
+
+        <h5 class="field-label">时间</h5>
+        <div class="chips">
+          <button v-for="value in timeChoices" :key="value" type="button" class="chip" :aria-pressed="!settings.durationRandom && settings.minutes === value" @click="setMinutes(value)">{{ value }} 分钟</button>
+          <button type="button" class="chip" :aria-pressed="settings.durationRandom" @click="settings.durationRandom = true; settings.minutes = 5 + Math.floor(Math.random() * 16)">随机</button>
         </div>
-        <p class="muted">按下「忍住了」之后进入红色相位，等这段时长过去再回到循环。</p>
+        <div class="settings-grid">
+          <label>自定义时长（分钟，{{ durationMin }}–{{ durationMax }}）<input :value="settings.minutes" type="number" :min="durationMin" :max="durationMax" @change="setMinutes(Number(($event.target as HTMLInputElement).value))" /></label>
+          <span class="hint-cell muted">随机时长在 5～20 分钟之间，且播放时不显示剩余时间。</span>
+        </div>
+
+        <h5 class="field-label">难度</h5>
+        <div class="chips">
+          <button v-for="key in difficultyOrder" :key="key" type="button" class="chip" :aria-pressed="settings.difficulty === key" @click="settings.difficulty = key as Difficulty">{{ difficultyLabels[key] }}</button>
+        </div>
+        <p class="muted">{{ difficultyHints[settings.difficulty] }}</p>
 
         <details class="fold">
-          <summary>自己调三比例与基础许可率（当前合计 {{ ratioTotal }}%）</summary>
+          <summary>自己调（许可概率 {{ chancePercent }}% · 可以撸 {{ mix.go }}% · 慢慢来 {{ mix.slow }}% · 不许碰 {{ mix.stop }}%）</summary>
           <div class="settings-grid">
-            <label>绿·可以撸 {{ settings.ratioFast }}%<input v-model.number="settings.ratioFast" type="range" min="0" max="100" step="5" /></label>
-            <label>黄·慢慢来 {{ settings.ratioSlow }}%<input v-model.number="settings.ratioSlow" type="range" min="0" max="100" step="5" /></label>
-            <label>红·不许碰 {{ settings.ratioRest }}%<input v-model.number="settings.ratioRest" type="range" min="0" max="100" step="5" /></label>
-            <label>基础许可率 {{ settings.permitBase }}%<input v-model.number="settings.permitBase" type="range" min="30" :max="95" :step="permitStep" /></label>
+            <label>许可概率 {{ chancePercent }}%<input :value="chancePercent" type="range" min="10" max="100" step="5" @input="setChance(Number(($event.target as HTMLInputElement).value))" /></label>
+            <label>可以撸 {{ mix.go }}%<input :value="mix.go" type="range" min="0" max="100" step="5" @input="setMix('go', Number(($event.target as HTMLInputElement).value))" /></label>
+            <label>慢慢来 {{ mix.slow }}%<input :value="mix.slow" type="range" min="0" max="100" step="5" @input="setMix('slow', Number(($event.target as HTMLInputElement).value))" /></label>
+            <label>不许碰 {{ mix.stop }}%<input :value="mix.stop" type="range" min="0" max="60" step="5" @input="setMix('stop', Number(($event.target as HTMLInputElement).value))" /></label>
           </div>
-          <p class="muted">三者合计需为 100%，当前 {{ ratioTotal }}%；不相等时运行时会按比例归一化。</p>
+          <p class="muted">三项合计 100%；难度默认是 {{ derivedMix.go }} / {{ derivedMix.slow }} / {{ derivedMix.stop }}。不许碰占比超过 45% 时会允许「不许碰」连续出现。</p>
+          <button type="button" class="text-button" @click="restoreTune">恢复成难度的数值</button>
         </details>
+
+        <h5 class="field-label">结局</h5>
+        <div class="chips">
+          <button v-for="key in finaleOrder" :key="key" type="button" class="chip" :aria-pressed="settings.finale === key" @click="settings.finale = key">{{ finaleLabels[key] }}</button>
+        </div>
+        <p class="muted">{{ finaleHints[settings.finale] }}</p>
+        <label class="toggle"><input :checked="settings.allowRuin" type="checkbox" @change="settings.allowRuin = ($event.target as HTMLInputElement).checked" />落选时以「松手射精」结束</label>
+
+        <h5 class="field-label">允许射精的时间 / 忍住后等待</h5>
+        <div class="settings-grid">
+          <label>允许射精的时间（秒）<select :value="settings.rewardSeconds" @change="settings.rewardSeconds = Number(($event.target as HTMLSelectElement).value)">
+            <option v-for="value in rewardChoices" :key="value" :value="value">{{ value }} 秒</option>
+          </select></label>
+          <label>等待模式<select :value="settings.rest.mode" @change="settings.rest.mode = ($event.target as HTMLSelectElement).value as 'random'">
+            <option v-for="key in restModeOrder" :key="key" :value="key">{{ restModeLabels[key] }}</option>
+          </select></label>
+        </div>
+        <div v-if="settings.rest.mode === 'random'" class="settings-grid">
+          <label>等待区间<select :value="`${settings.rest.min}-${settings.rest.max}`" @change="setRestRange(restRangeChoices.find(item => `${item[0]}-${item[1]}` === ($event.target as HTMLSelectElement).value) ?? [8, 16])">
+            <option v-for="item in restRangeChoices" :key="item.join('-')" :value="`${item[0]}-${item[1]}`">{{ item[0] }}～{{ item[1] }} 秒</option>
+          </select></label>
+          <span class="hint-cell muted">选预设会同时改写下面两个数字，也可以直接改。</span>
+          <label>最短等待（秒）<input :value="settings.rest.min" type="number" min="3" max="120" @change="settings.rest.min = Number(($event.target as HTMLInputElement).value); syncRestMin()" /></label>
+          <label>最长等待（秒）<input :value="settings.rest.max" type="number" min="3" max="120" @change="settings.rest.max = Number(($event.target as HTMLInputElement).value); syncRestMax()" /></label>
+        </div>
+        <div v-else class="settings-grid">
+          <label>固定等待（秒）<select :value="settings.rest.seconds" @change="settings.rest.seconds = Number(($event.target as HTMLSelectElement).value); syncRestFixed()">
+            <option v-for="value in restFixedChoices" :key="value" :value="value">{{ value }} 秒</option>
+          </select></label>
+        </div>
+        <p class="muted">按下「忍住了」之后进入红色，等这段时长过去再回到循环。</p>
+
+        <label>指令时长<select :value="settings.instructionLength" @change="settings.instructionLength = ($event.target as HTMLSelectElement).value as 'standard'">
+          <option v-for="key in instructionLengthOrder" :key="key" :value="key">{{ instructionLengthLabels[key] }}</option>
+        </select></label>
+        <p class="muted">撸的指令会持续更久。红色（不许碰）、写明秒数的指令和整局结束时间不会改变。</p>
+
+        <ul class="play-legend">
+          <li><span class="legend-dot" style="background: #5ee3a1" />屏幕是绿色时可以撸。手跟着光和声音的节拍</li>
+          <li><span class="legend-dot" style="background: #f0c35a" />黄色是放慢、挑逗</li>
+          <li><span class="legend-dot" style="background: #ff6b7d" />变红就松手。结束前不许碰</li>
+          <li v-if="settings.nipple.on"><span class="legend-dot" style="background: #ff6b7d" />只玩乳头</li>
+          <li v-if="settings.glans.on"><span class="legend-dot" style="background: #f0c35a" />只玩龟头</li>
+        </ul>
+        <p class="play-rules">
+          时间到之前射了就输。忍住了就按「忍住了」（每次最后的许可率 +5%）。拿到许可后要在
+          {{ settings.rewardSeconds }} 秒内射出来。当前设置的许可率从
+          {{ Math.round(permitRate(settings.difficulty, 0, settings.tune.chance) * 100) }}% 起。
+        </p>
       </template>
 
       <template v-else-if="group.id === 'command'">
-        <h5 class="field-label">口吻（可多选）</h5>
+        <h5 class="field-label">指令类型（可多选）</h5>
         <div class="chips">
-          <button v-for="key in toneOptions" :key="key" type="button" class="chip" :aria-pressed="settings.tones.includes(key)" @click="toggleChoice(settings.tones, key)">{{ toneLabels[key] }}</button>
+          <button v-for="key in categoryOrder" :key="key" type="button" class="chip" :aria-pressed="settings.categories[key]" @click="toggleCategory(key)">{{ categoryLabels[key] }}</button>
         </div>
-        <p class="muted">只影响指令的叫法，不影响节奏。</p>
-
-        <h5 class="field-label">类型开关（只抽选中的类型）</h5>
-        <div class="chips">
-          <button v-for="key in commandTypeOptions" :key="key" type="button" class="chip" :aria-pressed="settings.commandTypes.includes(key)" @click="toggleChoice(settings.commandTypes, key)">{{ commandTypeLabels[key] }}</button>
-        </div>
+        <p class="muted">{{ categoryHints.edge }}；{{ categoryHints.tease }}；{{ categoryHints.pose }}；{{ categoryHints.pain }}。关掉的类型不会再被抽到。</p>
 
         <div class="settings-grid">
-          <label>惯用手<select v-model="settings.hand">
+          <label>惯用手<select :value="settings.hand" @change="settings.hand = ($event.target as HTMLSelectElement).value as 'right'">
             <option value="right">右手</option>
             <option value="left">左手</option>
           </select></label>
         </div>
+        <p class="muted">选左手时，指令里的左右手会自动对调。</p>
 
-        <h5 class="field-label">道具（可多选）</h5>
-        <div class="chips">
-          <button v-for="key in propOptions" :key="key" type="button" class="chip" :aria-pressed="settings.props.includes(key)" @click="toggleChoice(settings.props, key)">{{ propLabels[key] }}</button>
-        </div>
-        <p class="muted">不选则指令里不出现道具。</p>
-
-        <h5 class="field-label">自定义口令（{{ settings.customCommands.length }}/{{ commandLimit }}）</h5>
+        <h5 class="field-label">自定义口令（{{ settings.custom.length }}/{{ customCommandLimit }}）</h5>
         <div class="command-form">
-          <label>口令内容<input v-model="draftCommand" type="text" :maxlength="commandTextLimit" placeholder="例如：停三秒再继续" @keydown.enter.prevent="addCommand" /></label>
-          <label>类型<select v-model="draftType">
-            <option v-for="key in commandTypeOptions" :key="key" :value="key">{{ commandTypeLabels[key] }}</option>
+          <label>口令内容<input v-model="draftCommand" type="text" :maxlength="customCommandTextLimit" placeholder="例如：停三秒再继续" @keydown.enter.prevent="addCommand" /></label>
+          <label>类型<select v-model="draftMode">
+            <option v-for="key in modeOrder" :key="key" :value="key">{{ modeLabels[key] }}</option>
           </select></label>
           <button type="button" class="secondary" :disabled="!canAddCommand" @click="addCommand">添加</button>
         </div>
-        <p v-if="settings.customCommands.length >= commandLimit" class="muted">已到 30 条上限，删掉一条再添加。</p>
-        <p v-else class="muted">单条最多 60 字，写短句；要改就删掉重新添加。</p>
-        <ul v-if="settings.customCommands.length" class="command-list">
-          <li v-for="(item, index) in settings.customCommands" :key="`${item.text}-${index}`">
-            <small class="badge">{{ commandTypeLabels[item.type] }}</small>
+        <p v-if="settings.custom.length >= customCommandLimit" class="muted">已到 {{ customCommandLimit }} 条上限，删掉一条再添加。</p>
+        <p v-else class="muted">单条最多 {{ customCommandTextLimit }} 字；要改就删掉重新添加。</p>
+        <ul v-if="settings.custom.length" class="command-list">
+          <li v-for="(item, index) in settings.custom" :key="`${item.text}-${index}`">
+            <small class="badge">{{ modeLabels[item.mode] }}</small>
             <span>{{ item.text }}</span>
             <button type="button" class="text-button" @click="removeCommand(index)">删除</button>
           </li>
         </ul>
 
         <details class="fold">
-          <summary>逐条启停内置口令（已停用 {{ settings.disabledCommands.length }} 条）</summary>
+          <summary>逐条启停内置口令（已停用 {{ settings.disabled.length }} 条）</summary>
           <p class="muted">亮着表示启用，点一下停用；停用的口令不会再被抽到。</p>
-          <div v-for="commandGroup in commandGroups" :key="commandGroup.type" class="command-group">
-            <h6 class="command-group-title">{{ commandGroup.label }}</h6>
+          <div v-for="commandGroup in commandGroups" :key="commandGroup.mode" class="command-group">
+            <h6 class="command-group-title">{{ commandGroup.label }}（{{ commandGroup.items.length }} 条）</h6>
             <div class="chips">
-              <button v-for="command in commandGroup.items" :key="command.id" type="button" class="chip" :aria-pressed="!settings.disabledCommands.includes(command.id)" @click="toggleCommand(command.id)">{{ command.text }}</button>
+              <button v-for="item in commandGroup.items" :key="item.index" type="button" class="chip" :aria-pressed="!settings.disabled.includes(item.index)" @click="toggleCommand(item.index)">{{ item.command.text }}</button>
             </div>
           </div>
-          <button v-if="settings.disabledCommands.length" type="button" class="text-button" @click="enableAllCommands">全部启用</button>
+          <button v-if="settings.disabled.length" type="button" class="text-button" @click="enableAllCommands">全部启用</button>
         </details>
       </template>
 
-      <template v-else-if="group.id === 'content'">
-        <div class="settings-grid">
-          <label v-if="!runtime">内容类型<select v-model="settings.kind">
-            <option value="mixed">混合内容</option>
-            <option value="image">仅图片</option>
-            <option value="video">仅视频</option>
-          </select></label>
-          <label v-if="!runtime">播放顺序<select v-model="settings.order">
-            <option value="shuffle">随机</option>
-            <option value="sequential">文件名顺序</option>
-          </select></label>
-          <label v-if="!runtime && settings.kind !== 'video'">每轮图片数（0 为全部）<input v-model.number="settings.imageCount" type="number" min="0" max="100000" required /></label>
-          <label v-if="settings.kind === 'image'">图片切换<select v-model="settings.imageTiming">
-            <option value="time">按时间</option>
-            <option value="beat">按 BPM · 每拍一张</option>
-          </select></label>
-          <label v-if="settings.kind !== 'video' && (settings.kind !== 'image' || settings.imageTiming === 'time')">图片间隔（秒）<input v-model.number="settings.imageSeconds" type="number" min="1" max="300" required /></label>
-          <label>快速节拍（BPM）<input v-model.number="settings.bpm" type="number" min="30" max="180" required /></label>
-        </div>
-        <p v-if="beatsImages" class="muted">每拍发声并切一张，慢速为快速的 60%；休息时不发声、不自动切图。</p>
-        <label class="toggle"><input v-model="settings.loop" type="checkbox" />循环列表</label>
-        <label v-if="!runtime" class="toggle"><input v-model="settings.favoritesOnly" type="checkbox" />仅播放喜欢</label>
-        <p v-if="!runtime && settings.kind !== 'video'" class="muted">已展示图片不再入选；未展示的不足一轮时，所选图库中的图片重新参与。视频不计入图片数量。</p>
+      <template v-else-if="group.id === 'media'">
+        <template v-if="media">
+          <div class="settings-grid">
+            <label>内容类型<select v-model="media.kind">
+              <option value="mixed">混合内容</option>
+              <option value="image">仅图片</option>
+              <option value="video">仅视频</option>
+            </select></label>
+            <label>播放顺序<select v-model="media.order">
+              <option value="shuffle">随机</option>
+              <option value="sequential">文件名顺序</option>
+            </select></label>
+            <label v-if="media.kind !== 'video'">每轮图片数（0 为全部）<input v-model.number="media.imageCount" type="number" min="0" max="100000" required /></label>
+            <label v-if="media.kind === 'image'">图片切换<select v-model="media.imageTiming">
+              <option value="time">按时间</option>
+              <option value="beat">按 BPM · 每拍一张</option>
+            </select></label>
+            <label v-if="media.kind !== 'video' && (media.kind !== 'image' || media.imageTiming === 'time')">图片间隔（秒）<input v-model.number="media.imageSeconds" type="number" min="1" max="300" required /></label>
+            <label>节拍上限（BPM）<input v-model.number="media.bpm" type="number" min="20" max="300" required /></label>
+          </div>
+          <p v-if="beatsImages" class="muted">每拍发声并切一张；慢速为快速的 60%，红色时不发声、不自动切图。</p>
+          <label class="toggle"><input v-model="media.loop" type="checkbox" />循环列表</label>
+          <label class="toggle"><input v-model="media.favoritesOnly" type="checkbox" />仅播放喜欢</label>
+          <label class="toggle"><input :checked="settings.keepVideoOnStop" type="checkbox" @change="settings.keepVideoOnStop = ($event.target as HTMLInputElement).checked" />红色（不许碰）时也继续播放视频</label>
+          <p class="muted">开＝红色指令时视频不暂停、不变暗。关＝红色时暂停并变暗（和以前一样）。</p>
+          <label class="toggle"><input :checked="settings.switchVideoPerCommand" type="checkbox" @change="settings.switchVideoPerCommand = ($event.target as HTMLInputElement).checked" />每换一条指令就换一个视频</label>
+          <p class="muted">开＝每换一条指令就切到下一个视频。关＝一个视频播完再换（和以前一样）。</p>
+          <p class="muted">指令自带的手速（BPM）优先，这里只是上限与切图节拍。已展示图片不再入选。</p>
+        </template>
+        <p v-else class="muted">先选一个播放列表。</p>
       </template>
 
       <template v-else-if="group.id === 'sound'">
-        <p v-if="beatsImages" class="muted">BPM 切图自动启用节拍器，音量为 0 时仍按拍切图。</p>
-        <label v-else class="toggle"><input v-model="settings.metronome" type="checkbox" />节拍器</label>
+        <label class="toggle"><input :checked="settings.metronome" type="checkbox" @change="settings.metronome = ($event.target as HTMLInputElement).checked" />节拍声</label>
         <div class="settings-grid">
-          <label>节拍音量 · {{ settings.beatVolume }}%<input v-model.number="settings.beatVolume" type="range" min="0" max="100" /></label>
-          <label v-if="settings.kind !== 'image'">媒体音量 · {{ settings.mediaVolume }}%<input v-model.number="settings.mediaVolume" type="range" min="0" max="100" /></label>
+          <label>节拍音量 · {{ settings.beatVolume }}%<input :value="settings.beatVolume" type="range" min="0" :max="beatVolumeMax" step="5" @input="settings.beatVolume = Number(($event.target as HTMLInputElement).value)" /></label>
+          <label v-if="media?.kind !== 'image'">视频音量 · {{ settings.mediaVolume }}%<input :value="settings.mediaVolume" type="range" min="0" max="100" step="5" @input="settings.mediaVolume = Number(($event.target as HTMLInputElement).value)" /></label>
         </div>
-        <label class="toggle"><input v-model="settings.heartbeat" type="checkbox" />心跳声</label>
+        <p class="muted">节拍音量最高 {{ beatVolumeMax }}%，比默认响得多；觉得吵就往下拉。</p>
+        <label class="toggle"><input :checked="settings.heartbeat" type="checkbox" @change="settings.heartbeat = ($event.target as HTMLInputElement).checked" />心跳声</label>
         <div v-if="settings.heartbeat" class="settings-grid">
-          <label>心跳音量 · {{ settings.heartbeatVolume }}%<input v-model.number="settings.heartbeatVolume" type="range" min="0" max="100" /></label>
-        </div>
-        <label class="toggle"><input v-model="settings.speech" type="checkbox" />语音提示阶段名称</label>
-        <div v-if="settings.speech" class="settings-grid">
-          <label>语音音量 · {{ settings.speechVolume }}%<input v-model.number="settings.speechVolume" type="range" min="0" max="100" /></label>
-          <label>语速<select v-model.number="settings.speechRate"><option :value=".8">0.8×</option><option :value="1">1.0×</option><option :value="1.2">1.2×</option></select></label>
-          <label>音高<select v-model="settings.voicePitch">
-            <option v-for="key in pitchOptions" :key="key" :value="key">{{ voicePitchLabels[key] }}</option>
+          <label>心跳音量 · {{ settings.heartbeatVolume }}%<input :value="settings.heartbeatVolume" type="range" min="0" :max="beatVolumeMax" step="5" @input="settings.heartbeatVolume = Number(($event.target as HTMLInputElement).value)" /></label>
+          <label>红色时<select :value="settings.redBeat" @change="settings.redBeat = ($event.target as HTMLSelectElement).value as 'heartbeat'">
+            <option v-for="key in redBeatOrder" :key="key" :value="key">{{ redBeatLabels[key] }}</option>
           </select></label>
         </div>
-        <div class="settings-grid">
-          <label>振动<select v-model="settings.vibrate">
-            <option v-for="key in vibrateOptions" :key="key" :value="key">{{ vibrateLabels[key] }}</option>
-          </select></label>
-        </div>
+        <p class="muted">全部是浏览器实时合成的音，不加载任何音频文件。</p>
       </template>
 
       <template v-else>
-        <label class="toggle"><input v-model="settings.hideTime" type="checkbox" />隐藏时间与进度条</label>
-        <label>画面亮度 · {{ settings.brightness }}%<input v-model.number="settings.brightness" type="range" min="20" max="100" /></label>
-        <p class="muted">只影响播放器中的画面，不修改原文件，也不改变结束时间。</p>
+        <label class="toggle"><input :checked="settings.hideRemaining" type="checkbox" @change="settings.hideRemaining = ($event.target as HTMLInputElement).checked" />隐藏剩余时间与进度</label>
+        <label>视频变暗 · {{ settings.brightness }}%<input :value="settings.brightness" type="range" :min="brightnessMin" max="100" step="5" @input="settings.brightness = Number(($event.target as HTMLInputElement).value)" /></label>
+        <p class="muted">{{ brightnessMin }}% 最暗，100% ＝ 完全透明不变暗；只影响播放器画面，不改原文件。</p>
+        <label class="toggle"><input :checked="settings.mixAudio" type="checkbox" @change="settings.mixAudio = ($event.target as HTMLInputElement).checked" />边听音乐边玩</label>
+        <p class="muted">打开后播放器不会抢占系统的音频焦点。</p>
       </template>
     </section>
   </div>
@@ -375,12 +429,17 @@ input[type="range"] { padding: 0; min-height: 44px; accent-color: var(--color-pr
 .fold > summary { display: flex; align-items: center; min-height: 44px; font-size: 14px; color: var(--color-muted); cursor: pointer; }
 .fold > :last-child { margin-bottom: 14px; }
 .command-group + .command-group { margin-top: 12px; }
-.command-group-title { margin: 0 0 8px; font-size: 13px; font-weight: 400; color: var(--color-muted); }
+.command-group-title { margin: 8px 0; font-size: 13px; font-weight: 400; color: var(--color-muted); }
 .command-form { display: grid; grid-template-columns: minmax(0, 1fr) 140px auto; gap: 10px; align-items: end; margin-block: 4px 0; }
 .command-form button { margin-bottom: 2px; }
 .command-list { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
 .command-list li { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--color-hairline); border-radius: 10px; background: var(--color-pearl); font-size: 14px; }
 .command-list li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* 玩法页底部的三色图例与规则句，文案照抄参考站。 */
+.play-legend { display: grid; gap: 6px; margin: 20px 0 0; padding: 0; list-style: none; }
+.play-legend li { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 1.5; color: var(--color-muted); }
+.legend-dot { flex: none; width: 8px; height: 8px; border-radius: 999px; }
+.play-rules { margin-top: 12px; font-size: 13px; line-height: 1.7; color: var(--color-muted); }
 .hint-cell { align-self: end; padding-bottom: 12px; }
 @media (max-width: 600px) {
   .settings-grid { grid-template-columns: 1fr; gap: 16px; }

@@ -1,412 +1,226 @@
 <script setup lang="ts">
+// 中央区：模式胶囊 → 节拍点 → 指令文字 → 任务倒计时条 → 「忍住了」主按钮 → 「射了」。
+// 布局与参考实现一致：全部居中竖排，指令字最重（28px / 大屏 48px）。
 import { computed, ref, watch } from 'vue'
-import { phaseLabels, type PhaseKind } from './types'
+import { modeColors, modeLabels, type EdgeMode } from './engine.ts'
 
 const props = defineProps<{
-  phase: PhaseKind
-  bpm: number
-  paused: boolean
-  finished: boolean
-  loading: boolean
-  error: string
+  mode: EdgeMode
+  text: string
   hint: string
+  bpm: number
   progress: number
-  /** 是否允许按「忍住了」：播放中、未暂停、无错误且不在许可窗口内。 */
+  taskSeconds: number
+  taskKey: number
+  paused: boolean
+  cooling: boolean
   canHold: boolean
+  held: number
+  note: string
 }>()
 
-const emit = defineEmits<{
-  /** 忍住一次：累积许可率并切到休息相位。 */
-  hold: []
-  /** 没忍住：直接按失败结束。 */
-  edge: []
-  skip: []
-}>()
+const emit = defineEmits<{ hold: []; lost: [] }>()
 
-/** 阶段色调：慢速琥珀、快速青绿、休息玫红；暂停时统一换成青绿。 */
-const phaseTones: Record<PhaseKind, string> = { slow: '#e6b34a', fast: '#35d6a4', rest: '#f2637c' }
+/** 「射了」先弹确认条（对齐参考站的「记为中途结束的一局吗？」），避免误触。 */
+const asking = ref(false)
+watch(() => props.taskKey, () => { asking.value = false })
 
-/** 操作说明是否展开：只在暂停时可开，恢复播放自动收起。 */
-const helpOpen = ref(false)
-watch(
-  () => props.paused,
-  (paused) => {
-    if (!paused) helpOpen.value = false
-  },
-)
+const color = computed(() => modeColors[props.mode])
+const label = computed(() => (props.paused ? '已暂停' : modeLabels[props.mode]))
+const beatDuration = computed(() => (props.bpm > 0 ? `${(60 / props.bpm).toFixed(3)}s` : '0s'))
+const showBeat = computed(() => !props.paused && (props.mode === 'go' || props.mode === 'slow') && props.bpm > 0)
+const clampedProgress = computed(() => Math.min(1, Math.max(0, props.progress)))
 
-const tone = computed(() => (props.paused ? phaseTones.fast : phaseTones[props.phase]))
-const pillLabel = computed(() => (props.finished ? '已结束' : props.paused ? '已暂停' : phaseLabels[props.phase]))
-const showBpm = computed(() => props.bpm > 0 && !props.paused && !props.finished)
-const hasError = computed(() => !!props.error)
-const showProgress = computed(() => Number.isFinite(props.progress) && props.progress > 0)
-const progressValue = computed(() => (Number.isFinite(props.progress) ? Math.min(100, Math.max(0, props.progress)) : 0))
-/** 暂停、出错、加载中或当前不允许时主按钮不可点。 */
-const mainDisabled = computed(() => !props.canHold || props.paused || hasError.value || props.loading)
-const showHelp = computed(() => props.paused && !hasError.value)
-/** 主按钮下方常驻的操作说明：按下后要松手等它平息。 */
-const holdNote = '按在快忍不住的前一刻。按下后松手等它平息'
+/**
+ * 按句切分指令文字（对齐参考实现的 Sentences 组件）：
+ * 逐字累积，遇到「。！？」，或「.!?」后跟空格就断句；单句时原样返回。
+ * 多句时每句单独 inline-block，前一句不以中文句号结尾时补一个空格。
+ */
+const sentences = computed(() => {
+  const text = props.text ?? ''
+  const parts: string[] = []
+  let buffer = ''
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!
+    buffer += char
+    const cjk = char === '。' || char === '！' || char === '？'
+    const latin = (char === '.' || char === '!' || char === '?') && text[index + 1] === ' '
+    if (!cjk && !latin) continue
+    parts.push(buffer.trim())
+    buffer = ''
+  }
+  if (buffer.trim()) parts.push(buffer.trim())
+  return parts.filter(Boolean)
+})
 </script>
 
 <template>
-  <div class="playback-stage" :style="{ '--tone': tone }">
-    <!-- 媒体内容固定在最底层，不参与中央竖排的排版 -->
-    <div class="stage-media" :class="{ covered: hasError }">
-      <slot />
+  <div class="sd-center-stage" :style="{ '--sd-mode': color }">
+    <div class="sd-pill-row">
+      <span class="sd-pill" data-sundome-mode-label>{{ label }}</span>
+      <span v-if="bpm > 0" class="sd-bpm" data-sundome-bpm>
+        <span v-if="showBeat" class="sd-beat" :style="{ '--beat': beatDuration }" />
+        <span>{{ bpm }} BPM</span>
+      </span>
     </div>
-
-    <div class="stage-center">
-      <p v-if="!hasError" class="stage-pills" role="status">
-        <span class="phase-pill">{{ pillLabel }}</span>
-        <template v-if="showBpm">
-          <span class="pill-dot" aria-hidden="true"></span>
-          <span class="stage-bpm">{{ bpm }} BPM</span>
-        </template>
-      </p>
-
-      <p v-if="loading" class="stage-loading" role="status">正在加载…</p>
-      <p v-else-if="hasError" class="stage-error" role="alert">{{ error }}</p>
-      <p v-else class="stage-hint">{{ hint }}</p>
-
+    <p class="sd-command" data-sundome-command><span v-for="(line, index) in sentences" :key="index" class="sd-sentence">{{ line }}</span></p>
+    <p v-if="hint" class="sd-command-hint" data-sundome-hint>{{ hint }}</p>
+    <div class="sd-taskbar" data-sundome-task-bar role="progressbar" :aria-valuenow="Math.round(clampedProgress * 100)">
       <div
-        v-if="showProgress"
-        class="stage-progress"
-        role="progressbar"
-        aria-label="本次播放进度"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        :aria-valuenow="Math.round(progressValue)"
-      >
-        <span class="stage-progress-fill" :style="{ width: `${progressValue}%` }"></span>
-      </div>
-
-      <div v-if="hasError" class="stage-actions">
-        <slot name="actions" />
-      </div>
-      <template v-else>
-        <button
-          v-if="!loading"
-          class="stage-main"
-          type="button"
-          aria-label="忍住了"
-          :disabled="mainDisabled"
-          @click="emit('hold')"
-        >
-          忍住了
-        </button>
-        <p v-if="!loading" class="stage-hold-note">{{ holdNote }}</p>
-        <div class="stage-text-actions">
-          <button class="stage-edge" type="button" @click="emit('edge')">射了</button>
-          <button class="stage-skip" type="button" @click="emit('skip')">跳过</button>
-        </div>
-
-        <button
-          v-if="showHelp"
-          class="stage-help"
-          type="button"
-          :aria-expanded="helpOpen ? 'true' : 'false'"
-          @click="helpOpen = !helpOpen"
-        >
-          <svg class="help-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="9" />
-            <path d="M12 11.2v5.4" />
-            <path d="M12 7.6v.2" />
-          </svg>
-          查看操作说明
-        </button>
-        <div v-if="showHelp && helpOpen" class="stage-help-body">
-          <slot name="help" />
-        </div>
-      </template>
+        :key="taskKey"
+        class="sd-taskbar-fill"
+        :style="{ background: color, animationDuration: `${Math.max(0.05, taskSeconds)}s`, animationPlayState: paused ? 'paused' : 'running' }"
+      />
     </div>
+    <button class="sd-hold" type="button" :disabled="!canHold" data-sundome-edge @click="emit('hold')">
+      <template v-if="cooling">等它平息…</template>
+      <template v-else>忍住了</template>
+    </button>
+    <p class="sd-hint" data-sundome-edge-hint><span>在快射的前一刻停下来了就按。</span><span>{{ cooling ? '已记录。下一条指令前不许碰。' : '按下后切换成“等它平息”' }}</span></p>
+    <p v-if="note" class="sd-note">{{ note }}</p>
+    <div v-if="asking" class="sd-lost-ask" data-sundome-lost-ask>
+      <p>记为中途结束的一局吗？</p>
+      <div class="sd-lost-actions">
+        <button type="button" class="sd-lost-yes" data-sundome-lost-yes @click="emit('lost')">记录并结束</button>
+        <button type="button" class="sd-lost-no" data-sundome-lost-no @click="asking = false">继续</button>
+      </div>
+    </div>
+    <button v-else class="sd-lost" type="button" data-sundome-lost @click="asking = true">射了</button>
   </div>
 </template>
 
 <style scoped>
-.playback-stage {
-  position: absolute;
-  inset: 0;
-  color: #fff;
-  pointer-events: auto;
-  -webkit-tap-highlight-color: transparent;
-}
-.stage-media {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  display: grid;
-  place-items: center;
-}
-.stage-media.covered {
-  visibility: hidden;
-}
-/* 中央竖排：本层不拦截点击，只有按钮自己取回指针事件 */
-.stage-center {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 96px 20px calc(132px + env(safe-area-inset-bottom));
-  text-align: center;
-  pointer-events: none;
-}
-.stage-pills {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 100%;
-  margin: 0;
-}
-.phase-pill {
-  padding: 4px 14px;
-  border: 1px solid var(--tone, #35d6a4);
+.sd-center-stage { display: flex; flex-direction: column; align-items: center; width: 100%; }
+.sd-pill-row { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.sd-pill {
+  padding: 4px 12px;
+  border: 1px solid var(--sd-mode);
   border-radius: 999px;
-  color: var(--tone, #35d6a4);
-  font-size: 13px;
-  letter-spacing: .04em;
-  line-height: 1.5;
-  white-space: nowrap;
-  text-shadow: 0 1px 6px rgba(0, 0, 0, .5);
-}
-.pill-dot {
-  flex-shrink: 0;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, .5);
-}
-.stage-bpm {
-  color: rgba(255, 255, 255, .78);
+  color: var(--sd-mode);
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: .02em;
-  white-space: nowrap;
-}
-.stage-hint {
-  display: -webkit-box;
-  overflow: hidden;
-  max-width: 22ch;
-  margin: 4px 0 2px;
-  color: #fff;
-  font-size: clamp(22px, 6vw, 34px);
   font-weight: 700;
-  line-height: 1.35;
-  text-wrap: balance;
-  text-shadow: 0 2px 16px rgba(0, 0, 0, .6), 0 1px 3px rgba(0, 0, 0, .55);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  letter-spacing: .25em;
+  text-indent: .25em;
 }
-.stage-loading {
-  margin: 4px 0 2px;
-  color: rgba(255, 255, 255, .82);
-  font-size: 14px;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, .6);
+.sd-beat {
+  display: inline-block;
+  width: 12px; height: 12px; border-radius: 999px;
+  background: var(--sd-mode);
+  animation: sd-beat var(--beat, 1s) ease-in-out infinite;
 }
-.stage-error {
+.sd-bpm { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: .12em; color: rgba(255, 255, 255, .6); font-variant-numeric: tabular-nums; }
+.sd-command {
+  margin: 24px 0 0;
   max-width: 30ch;
-  margin: 4px 0 2px;
-  color: #fff;
-  font-size: 14px;
-  line-height: 1.6;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, .6);
-  overflow-wrap: anywhere;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -.025em;
+  text-shadow: 0 0 28px rgba(0, 0, 0, .35);
+  text-wrap: balance;
+  word-break: auto-phrase;
+  animation: sd-fade-in .35s ease both;
 }
-.stage-progress {
+/* 多句时逐句 inline-block：每句尽量整句换行（对齐参考站 Sentences）。 */
+.sd-sentence { display: inline-block; max-width: 100%; word-break: keep-all; overflow-wrap: anywhere; }
+.sd-taskbar {
   position: relative;
-  width: 62%;
-  height: 3px;
+  margin-top: 16px;
+  width: 160px; height: 4px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(255, 255, 255, .22);
+  background: rgba(255, 255, 255, .15);
 }
-.stage-progress-fill {
-  display: block;
-  height: 100%;
+.sd-taskbar-fill {
+  width: 100%; height: 100%;
+  transform-origin: left center;
   border-radius: 999px;
-  background: var(--tone, #35d6a4);
-  transition: width .25s linear;
+  animation-name: sd-shrink;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
 }
-.stage-main {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  width: clamp(96px, 30vw, 124px);
-  height: clamp(96px, 30vw, 124px);
-  margin-top: 4px;
-  padding: 0;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  color: #fff;
-  font-family: inherit;
-  font-size: 17px;
-  font-weight: 600;
-  line-height: 1.2;
-  text-shadow: 0 1px 10px rgba(0, 0, 0, .5);
+.sd-progress {
+  margin-top: 10px;
+  width: min(320px, 70%);
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .12);
+  overflow: hidden;
+}
+.sd-progress-fill { width: 100%; height: 100%; transform-origin: left center; transition: transform .2s linear; }
+.sd-hold {
+  margin-top: 32px;
+  min-width: 100px; padding: 12px 24px;
+  border: 2px solid rgba(255, 255, 255, .6);
+  border-radius: 999px;
   background: transparent;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
   cursor: pointer;
-  pointer-events: auto;
-  transition: opacity .15s ease, background-color .15s ease;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
 }
-.stage-main:hover:not(:disabled) {
-  background: rgba(255, 255, 255, .1);
-}
-.stage-main:disabled {
-  opacity: .45;
-  cursor: default;
-}
-.stage-main:focus-visible,
-.stage-edge:focus-visible,
-.stage-skip:focus-visible,
-.stage-help:focus-visible {
-  outline: 2px solid #fff;
-  outline-offset: 3px;
-}
-/* 主按钮下方常驻小字：写清按下去之后要松手等它平息 */
-.stage-hold-note {
-  max-width: 24ch;
-  margin: -6px 0 0;
-  color: rgba(255, 255, 255, .66);
+.sd-hold:hover:not(:disabled) { background: rgba(255, 255, 255, .1); }
+.sd-hold:disabled { border-color: rgba(255, 255, 255, .2); color: rgba(255, 255, 255, .3); cursor: default; }
+.sd-hint {
+  margin: 12px 0 0;
+  max-width: 28em;
   font-size: 12px;
-  line-height: 1.5;
-  text-wrap: balance;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, .55);
-}
-.stage-text-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: -4px;
-  pointer-events: auto;
-}
-/* 文字按钮：下划线细线，靠透明 padding 把命中区抬到 44px */
-.stage-edge,
-.stage-skip {
-  min-height: 44px;
-  padding: 0 12px;
-  border: 0;
-  color: rgba(255, 255, 255, .66);
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 1;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 4px;
-  background: transparent;
-  cursor: pointer;
-  pointer-events: auto;
-}
-.stage-edge {
-  color: rgba(255, 255, 255, .82);
-}
-.stage-edge:hover,
-.stage-skip:hover {
-  color: #fff;
-}
-.stage-help {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 12px;
-  border: 1px solid rgba(255, 255, 255, .32);
-  border-radius: 999px;
-  color: rgba(255, 255, 255, .72);
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 1.4;
-  white-space: nowrap;
-  background: transparent;
-  cursor: pointer;
-  pointer-events: auto;
-}
-/* 药丸视觉更小，但点击热区补到 44px 高 */
-.stage-help::after {
-  content: '';
-  position: absolute;
-  inset: -9px -6px;
-  border-radius: 999px;
-}
-.stage-help:hover {
-  color: #fff;
-  border-color: rgba(255, 255, 255, .55);
-}
-.help-icon {
-  flex-shrink: 0;
-}
-/* 说明正文由 help 插槽提供，展开时压在其他内容之上 */
-.stage-help-body {
-  max-width: min(340px, 86vw);
-  max-height: min(30vh, 240px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 12px 14px;
-  border-radius: 12px;
-  color: rgba(255, 255, 255, .74);
-  font-size: 12.5px;
   line-height: 1.6;
-  text-align: left;
-  background: rgba(0, 0, 0, .55);
-  pointer-events: auto;
+  color: rgba(255, 255, 255, .5);
 }
-/* 说明正文由父组件以列表形式传入，统一收紧缩进 */
-.stage-help-body :deep(ul),
-.stage-help-body :deep(ol) {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding-left: 16px;
+.sd-hint span { display: inline-block; max-width: 100%; }
+.sd-command-hint {
+  margin: 16px 0 0;
+  max-width: 30em;
+  font-size: 16px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, .7);
 }
-.stage-help-body :deep(p) {
-  margin: 0;
-}
-.stage-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 10px;
-  pointer-events: auto;
-}
-.stage-actions :deep(button) {
-  min-width: 44px;
-  min-height: 44px;
-  padding: 8px 18px;
-  border: 1px solid rgba(255, 255, 255, .32);
-  border-radius: 10px;
-  color: #fff;
-  font-family: inherit;
-  font-size: 14px;
-  background: rgba(0, 0, 0, .28);
+.sd-held { margin: 8px 0 0; font-size: 12px; color: rgba(255, 255, 255, .55); }
+.sd-note { margin: 8px 0 0; font-size: 12px; font-weight: 700; color: var(--sd-mode); }
+.sd-lost {
+  margin-top: 20px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, .55);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 4px;
   cursor: pointer;
 }
-.stage-actions :deep(button:hover:not(:disabled)) {
-  background: rgba(255, 255, 255, .14);
+.sd-lost:hover { color: rgba(255, 255, 255, .8); }
+/* 「射了」的二次确认条：参考站是半透明黑底圆角块 + 白底主按钮 + 描边次按钮。 */
+.sd-lost-ask {
+  margin-top: 20px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, .55);
+  text-align: center;
 }
-.stage-actions :deep(button:disabled) {
-  opacity: .45;
+.sd-lost-ask p { margin: 0; font-size: 14px; color: rgba(255, 255, 255, .85); }
+.sd-lost-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
+.sd-lost-yes, .sd-lost-no {
+  min-height: 0; padding: 8px 16px;
+  border-radius: 999px; font-size: 14px; cursor: pointer;
+  transition: background .15s ease;
 }
-.stage-actions :deep(button:focus-visible) {
-  outline: 2px solid #fff;
-  outline-offset: 2px;
+.sd-lost-yes { border: 0; background: #fff; color: #000; font-weight: 700; }
+.sd-lost-yes:hover { opacity: .9; }
+.sd-lost-no { border: 1px solid rgba(255, 255, 255, .4); background: transparent; color: #fff; font-weight: 500; }
+.sd-lost-no:hover { background: rgba(255, 255, 255, .1); }
+@media (min-width: 640px) { .sd-command { font-size: 48px; } }
+@media (max-width: 520px) {
+  .sd-command { font-size: 24px; margin-top: 18px; }
+  .sd-hold { margin-top: 24px; padding: 10px 20px; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .stage-main,
-  .stage-progress-fill {
-    transition: none;
-  }
-}
-/* 矮屏或横屏时收紧留白，避免竖排内容顶到上下栏 */
-@media (max-height: 700px) {
-  .stage-center {
-    gap: 10px;
-    padding-block: 72px calc(112px + env(safe-area-inset-bottom));
-  }
-  .stage-hint {
-    font-size: clamp(20px, 5vw, 28px);
-  }
+@keyframes sd-shrink { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@keyframes sd-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes sd-beat {
+  0% { opacity: .55; transform: scale(1); }
+  12% { opacity: 1; transform: scale(1.35); }
+  100% { opacity: .55; transform: scale(1); }
 }
 </style>

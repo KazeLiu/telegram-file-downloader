@@ -32,6 +32,13 @@ const paths: Record<string, string> = {
   cloud: 'M6 18h12a4 4 0 0 0 0-8 6 6 0 0 0-11-2 5 5 0 0 0-1 10',
   trash: 'M4 6h16 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',
   compare: 'M3 3h12v12H3z M9 15v6h12V9h-6 M3 12l4-4 5 5 M10 6h.01 M14 17l3-3 4 4',
+  expand: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
+  shrink: 'M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5',
+  pip: 'M3 5h18v14H3z M12 12h7v5h-7z',
+  volume: 'M4 9h3l4-3v12l-4-3H4z M16 8a5 5 0 0 1 0 8 M19 5a9 9 0 0 1 0 14',
+  rotate: 'M4 10a8 8 0 1 1 1 6 M4 4v6h6',
+  stop: 'M7 7h10v10H7z',
+  spark: 'M12 3l2.2 6.3L21 12l-6.8 2.7L12 21l-2.2-6.3L3 12l6.8-2.7z',
 }
 </script>
 <template><svg :width="size || 20" :height="size || 20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="paths[name] || paths.file" /></svg></template>

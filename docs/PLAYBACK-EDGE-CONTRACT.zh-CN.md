@@ -1,143 +1,300 @@
-# 寸止控制器实施契约（v3）
+# 寸止控制器实施契约（v4）
 
-基线：提交 `0713e83`（运行层已复刻为覆盖视口的沉浸层，存储 `schemaVersion = 2`）。
-本文是三路并行实现的唯一契约源，字段名与导出名一律以此为准，不得改动。
+基线：分支 `feat/playback-edge-parity`（播放器按 100adults 男生版一寸止复刻，无联机、无语音播报）。
+本文是当前实现的唯一契约源：字段名、导出名、数值一律以此为准。
 
 ## 定位
 
-本项目播放器是**寸止（edge play）控制器**：按绿／黄／红相位循环播放本机媒体与节拍，
+本项目播放器是**寸止（edge play）控制器**：按绿／黄／红三档模式循环播本机媒体与节拍，
 玩家在临界点按「忍住了」累积许可率，时间到后由结局设置判定是否给许可。
-不做：双人、远程指挥、摄像头、分享链接、成绩历史、广告弹窗。
 
-## 相位映射（复用既有 `PhaseKind`）
+不做：双人 / 远程指挥、摄像头、分享链接、排行榜、语音播报、音频文件加载。
 
-| 语义 | 颜色 | `PhaseKind` | 时长（随机） | 动作 |
+## 与 v3 的差异（迁移要点）
+
+| 项 | v3（旧） | v4（当前） |
+| --- | --- | --- |
+| 相位 | `PhaseKind = slow \| fast \| rest` | `EdgeMode = go \| slow \| stop`（语义同上，键名换） |
+| 玩法字段位置 | `Playlist` 里（`schemaVersion = 3`） | 独立 `EdgeSettings`（`shicun.edge.v1`），`Playlist` 只留媒体层 |
+| 播放列表存储 | `shicun.playback.v1` + `schemaVersion = 3` | `shicun.playback.v1` + `schemaVersion = 4`（旧 v1–v3 自动升级，玩法字段丢弃） |
+| 引擎模块 | `web/src/playback/edge.ts` | `web/src/playback/engine.ts`（已删除 edge.ts） |
+| 指令池 | `builtinCommands` 24 条短句 | `commands.ts` 里 88 条结构化口令 + 乳头／龟头各 5 条 |
+| 语音 | `voiceLines.ts` + `speechSynthesis` | 已删除，不再有任何语音 |
+| 节拍音量上限 | 100 | 300（`beatVolumeMax`） |
+| 一句话命令 | 24 条固定短句 | 88 条各带 `mode / category / bpm / seconds / hint` |
+
+旧 v3 契约里 `ratioFast / permitBase / ending / edgeWindow / waitMode / waitPreset / waitMin / waitMax /
+instructionPace / tones / commandTypes / props / customCommands / disabledCommands / voicePitch / vibrate`
+全部作废，等价概念见下。
+
+## 模式（`EdgeMode`）
+
+| 语义 | 颜色 | `mode` | 时长（随机，秒） | 动作 |
 | --- | --- | --- | --- | --- |
-| 可以撸 | 绿 | `fast` | 18–31 秒 × 指令时长倍率 | 跟进节拍 |
-| 慢慢来 | 黄 | `slow` | 18–31 秒 × 指令时长倍率 | 降速 |
-| 不许碰 | 红 | `rest` | 10–16 秒（**不乘倍率**） | 松手 |
+| 可以撸 | 绿 | `go` | 难度表 `seconds.go` | 手跟节拍 |
+| 慢慢来 | 黄 | `slow` | 难度表 `seconds.slow` | 降速、挑逗 |
+| 不许碰 | 红 | `stop` | 难度表 `seconds.stop` | 松手 |
 
-## 新增存储字段（`Playlist`，`schemaVersion` 升到 3）
+色值：`modeColors = { go: '#5ee3a1', slow: '#f0c35a', stop: '#ff6b7d' }`，
+亮一档 `modeColorsBright = { go: '#86e3bb', slow: '#f7d78a', stop: '#ff9aa6' }`。
+文案 `modeLabels = { go: '可以撸', slow: '慢慢来', stop: '不许碰' }`。
 
-全部为可选读入、缺省补默认；旧 v1/v2 数据必须无损迁移。
+## 难度表（`engine.ts` 的 `difficulties`）
+
+```ts
+interface DifficultyProfile {
+  chance: number                       // 最终获得许可的基础概率（0–1）
+  share: Record<EdgeMode, number>      // 相位时间占比（自己调 → 覆盖）
+  seconds: Record<EdgeMode, [number, number]>  // 单条指令秒数区间
+  stopAfterStop: boolean               // 是否允许「不许碰」连出
+}
+```
+
+| 难度 | 许可率 | go | slow | stop | go 秒 | slow 秒 | stop 秒 | stop 连出 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `easy` 简单 | 85% | 0.56 | 0.20 | 0.24 | 15–30 | 8–16 | 4–8 | 否 |
+| `normal` 普通 | 70% | 0.38 | 0.20 | 0.42 | 12–25 | 8–16 | 5–10 | 否 |
+| `hard` 困难 | 50% | 0.39 | 0.25 | 0.36 | 8–18 | 6–14 | 6–14 | 是 |
+| `hell` 地狱 | 30% | 0.35 | 0.22 | 0.43 | 6–14 | 6–12 | 8–18 | 是 |
+
+`instructionLength` 三档只放大 `go` / `slow`：`long` → 60–120 秒，`veryLong` → 120–300 秒；
+`stop` **永远不吃倍率**，指令自带 `seconds` 时以指令为准。
+
+## 存储：`web/src/playback/settings.ts`
+
+存 key `shicun.edge.v1`，`edgeSchemaVersion = 1`。全部字段可选读入、缺失补默认，越界一律夹取。
 
 | 字段 | 类型 | 默认 |
 | --- | --- | --- |
+| `seed` | `number`（0 = 每局随机） | 0 |
+| `minutes` | 1–180 整数 | 10 |
+| `durationRandom` | boolean（每局 5–20 分钟随机、并隐藏剩余时间） | `false` |
 | `difficulty` | `'easy' \| 'normal' \| 'hard' \| 'hell'` | `'normal'` |
-| `ratioFast` / `ratioSlow` / `ratioRest` | 0–100 整数，三者合计 100 | 60 / 20 / 20 |
-| `permitBase` | 30–95 整数 | 70 |
-| `ending` | `'draw' \| 'always' \| 'never' \| 'ruin' \| 'continuous' \| 'overtime'` | `'draw'` |
-| `edgeWindow` | 5–60 整数（秒） | 10 |
-| `waitMode` | `'random' \| 'fixed'` | `'random'` |
-| `waitPreset` | `'8-16' \| '10-40' \| '20-60'` | `'8-16'` |
-| `waitMin` / `waitMax` | 3–120 整数，`waitMin <= waitMax` | 8 / 16 |
-| `instructionPace` | `'standard' \| 'long' \| 'veryLong'` | `'standard'` |
-| `tones` | `Tone[]`（`'firm' \| 'tease' \| 'degrade' \| 'gentle'`） | `['firm']` |
-| `hand` | `'right' \| 'left'` | `'right'` |
-| `commandTypes` | `string[]`（见 `commandTypeLabels` 键） | 全部 |
-| `props` | `string[]`（`'cup' \| 'aneros'`） | `[]` |
-| `customCommands` | `{ text: string; type: CommandType }[]`，≤30 条，`text` ≤60 字 | `[]` |
-| `disabledCommands` | `string[]`（内置口令 id） | `[]` |
-| `heartbeat` | boolean | `true` |
-| `heartbeatVolume` | 0–100 整数 | 100 |
-| `vibrate` | `'off' \| 'switch' \| 'edge' \| 'ending'` | `'off'` |
-| `voicePitch` | `'auto' \| 'low' \| 'normal' \| 'high'` | `'auto'` |
+| `instructionLength` | `'standard' \| 'long' \| 'veryLong'` | `'standard'` |
+| `finale` | `'draw' \| 'always' \| 'never' \| 'ruin' \| 'continuous' \| 'overtime'` | `'draw'` |
+| `categories` | `{ edge, tease, pose, pain }: boolean` | edge/tease/pose `true`，pain `false` |
+| `tune` | `{ chance: 10–100 \| null, stop: 0–60 \| null, mix: {go,slow,stop} \| null }` | 全 `null` |
+| `allowRuin` | boolean（拿到许可也按松手射精收场） | `false` |
+| `overtimeRounds` | 0–9 整数 | 3 |
+| `rewardSeconds` | 5/10/20/30/45/60 | 10 |
+| `rest` | `{ mode: 'random' \| 'fixed', seconds, min, max }`，3–120 | `random / 12 / 8–16` |
+| `hand` | `'right' \| 'left'`（左手会把口令里的左右手对调） | `'right'` |
+| `custom` | `{ text, mode }[]`，≤30 条、每条 ≤60 字 | `[]` |
+| `disabled` | `number[]`（内置口令的**下标**） | `[]` |
+| `nipple` / `glans` | `{ on: boolean, times: 1–4 }` | `{ on: false, times: 1 }` |
+| `redBeat` | `'heartbeat' \| 'both' \| 'metronome'` | `'heartbeat'` |
+| `heartbeat` / `metronome` | boolean | `true` / `true` |
+| `heartbeatVolume` / `beatVolume` | 0–300 整数 | 100 / 100 |
+| `mediaVolume` | 0–100 整数 | 60 |
+| `brightness` | 20–100 整数（20 最暗，100 完全透明） | 55 |
+| `hideRemaining` | boolean | `false` |
+| `mixAudio` | boolean | `false` |
+| `keepVideoOnStop` | boolean（红色时也继续放视频、不变暗） | `false` |
+| `switchVideoPerCommand` | boolean（每换一条指令就切下一个视频） | `false` |
 
-已有字段保持不动：`minutes / loop / imageSeconds / imageTiming / bpm / imageCount / order / kind /
-favoritesOnly / metronome / speech / speechRate / mediaVolume / beatVolume / speechVolume / hideTime / brightness`。
+导出：`edgeStorageKey`、`edgeSchemaVersion`、`defaultEdgeSettings`、`normalizeEdgeSettings(raw)`、
+`readEdgeSettings(value: string | null)`、`writeEdgeSettings(settings): string`（返回错误串，空串＝成功）。
 
-**新增字段必须同步三处**：`addedDefaults`、`validPlaylist`、`normalizePreferences`（`web/src/playback.ts`）。
+## 引擎：`web/src/playback/engine.ts`
 
-## 纯逻辑模块 `web/src/playback/edge.ts`（A 负责）
-
-只导出常量与纯函数，不依赖 Vue、不碰 `localStorage`、不 import `../playback`（避免循环依赖）。
+纯常量与纯函数，不依赖 Vue、不碰 `localStorage`、不 import `../playback`。
 
 ```ts
 export type Difficulty = 'easy' | 'normal' | 'hard' | 'hell'
-export type Ending = 'draw' | 'always' | 'never' | 'ruin' | 'continuous' | 'overtime'
-export type Tone = 'firm' | 'tease' | 'degrade' | 'gentle'
-export type CommandType = 'fast' | 'slow' | 'rest' | 'tease' | 'nipple' | 'glans'
-export interface Command { id: string; type: CommandType; text: string }
+export type Finale = 'draw' | 'always' | 'never' | 'ruin' | 'continuous' | 'overtime'
+export type InstructionLength = 'standard' | 'long' | 'veryLong'
+export type RestMode = 'random' | 'fixed'
+export type Hand = 'right' | 'left'
+export type RedBeat = 'heartbeat' | 'both' | 'metronome'
+export type EdgeMode = 'go' | 'slow' | 'stop'
+export type CategoryKind = 'edge' | 'tease' | 'pose' | 'pain'
+export interface Mix { go: number; slow: number; stop: number }
+export interface Tune { chance: number | null; stop: number | null; mix: Mix | null }
+export type Random = () => number
 
-export const difficultyProfiles: Record<Difficulty, { label: string; fast: number; slow: number; rest: number; permit: number }>
-export const difficultyOrder: Difficulty[]
-export const endingOrder: Ending[]
-export const endingLabels: Record<Ending, string>       // 抽签/必定允许/必定禁止/松手射精/连续/加时赛
-export const endingHints: Record<Ending, string>
-export const toneLabels: Record<Tone, string>           // 强硬/挑逗/辱骂/温柔
-export const commandTypeLabels: Record<CommandType, string>  // 撸/慢/不许碰/挑逗/只玩乳头/只玩龟头
-export const propLabels: Record<string, string>         // cup: 飞机杯, aneros: 前列腺按摩器
-export const voicePitchLabels: Record<string, string>
-export const vibrateLabels: Record<string, string>
-export const waitPresets: { id: '8-16' | '10-40' | '20-60'; label: string; min: number; max: number }[]
-export const instructionPaceRatios: Record<'standard' | 'long' | 'veryLong', number>  // 1 / 1.5 / 2.5
-export const edgeWindowOptions: number[]                // [5,10,20,30,45,60]
-export const permitStep = 5
-export const permitMaxGain = 20
-export const overtimeStep = 15
-export const overtimeLimit = 5
-export const builtinCommands: Command[]                 // 见下
+export const difficulties: Record<Difficulty, DifficultyProfile>
+export const difficultyOrder: Difficulty[]              // ['easy','normal','hard','hell']
+export const difficultyLabels / difficultyHints: Record<Difficulty, string>
+export const modeOrder: EdgeMode[]                      // ['go','slow','stop']
+export const modeLabels / modeColors / modeColorsBright: Record<EdgeMode, string>
+export const finaleOrder: Finale[]                      // 六种结局
+export const finaleLabels / finaleHints: Record<Finale, string>
+export const categoryOrder / categoryLabels / categoryHints
+export const presets / presetOrder / presetLabels        // first / standard / long
+export const instructionLengthOrder / instructionLengthLabels
+export const restModeOrder / restModeLabels
+export const toneOrder / toneLabels / toneAfterOrder / toneAfterLabels
+export const redBeatOrder / redBeatLabels
+export const rewardChoices = [5,10,20,30,45,60]
+export const durationChoices = [3,5,10,15,20,30]
+export const durationMin = 1 / durationMax = 180
+export const restMin = 3 / restMax = 120
+export const restRangeChoices = [[8,16],[10,40],[20,60]] / restFixedChoices
+export const bpmRandomMin = 20 / bpmRandomMax = 300
+export const beatVolumeMax = 300 / videoVolumeMax = 100 / brightnessMin = 20
+export const textOpacityMin = 30 / textScaleMin = 60
+export const customCommandLimit = 30 / customCommandTextLimit = 60
+export const finalHoldMs = 5000 / permitStep = 0.05 / permitMaxGain = 0.2
+export const multiRounds = 4 / multiRoundSeconds = 25
 
-export function nextPermitRate(base: number, heldCount: number): number
-export function resolveEnding(ending: Ending, rate: number, random: () => number, overtimeCount?: number): 'allow' | 'deny' | 'ruin'
-export function pickPhaseKind(ratioFast: number, ratioSlow: number, ratioRest: number, previous: PhaseKind | null, random: () => number): PhaseKind
-export function phaseDurationMs(kind: PhaseKind, pace: 'standard' | 'long' | 'veryLong', random: () => number): number
-export function waitDurationMs(mode: 'random' | 'fixed', preset: '8-16' | '10-40' | '20-60', min: number, max: number, random: () => number): number
-export function commandPool(types: CommandType[], custom: { text: string; type: CommandType }[], disabled: string[]): Command[]
-export function pickCommand(pool: Command[], lastId: string, random: () => number): Command | null
+export function mulberry32(seed: number): Random
+export function randomSeed(): number
+export function shareOf(difficulty: Difficulty, tune: Tune | null): Record<EdgeMode, number>
+export function timeShareOf(difficulty: Difficulty, tune: Tune | null): Record<EdgeMode, number>
+export function mixOf(difficulty: Difficulty, tune: Tune | null): Mix
+export function adjustMix(mix: Mix, mode: EdgeMode, value: number): Mix
+export function taskSeconds(difficulty: Difficulty, mode: EdgeMode, random: Random, length: InstructionLength): number
+export function permitRate(difficulty: Difficulty, held: number, chance: number | null): number
+export function decideFinale(finale: Finale, difficulty: Difficulty, held: number, random: Random, chance: number | null, allowRuin: boolean): 'success' | 'fail' | 'ruin'
+export function restSeconds(rest: EdgeRest, random: Random): number
+export function randomBpm(range: { min: number; max: number }, mode: EdgeMode, random: Random): number
+export function planFocus(times: number, totalMs: number, random: Random, kind: 'nipple' | 'glans'): number[]
+export function pickIndex<T>(items: T[], random: Random): T | null
+export function pickMode(options: PickOptions): EdgeMode | null
+export function pickCommandAt(mode: EdgeMode, random: Random, previous: EdgeCommand | null, pool: EdgeCommand[]): EdgeCommand | null
+export function swapHands(text: string): string
+export function commandPool(disabled: number[], custom: CustomCommand[], hand: Hand, base?: EdgeCommand[]): EdgeCommand[]
+export function filterByCategories(pool: EdgeCommand[], categories: Categories): EdgeCommand[]
+export function buildTimeline(options: TimelineOptions): Task[]
+export function bindCommands(tasks: Task[], pool: EdgeCommand[], nipplePool?: EdgeCommand[], glansPool?: EdgeCommand[]): Task[]
+export function taskAt(tasks: Task[], at: number): Task | null
+export function formatClock(ms: number): string   // 'm:ss'
 ```
 
-`PickPhaseKind` 规则：按三比例抽签（合计不为 100 时按归一化处理），**抽到的相位等于 `previous` 时重抽一次**，仍相同则顺延到下一个非零相位。
-`phaseDurationMs`：`rest` 为 10–16 秒且**不乘** `instructionPaceRatios`；`fast`/`slow` 为 18–31 秒乘倍率。
-`resolveEnding`：`always` → `'allow'`；`never` → `'deny'`；`ruin` → `random() < 0.5 ? 'ruin' : 'deny'`；
-`continuous` / `overtime` / `draw` → `random() * 100 < rate ? 'allow' : 'deny'`（`overtime` 在 `overtimeCount >= overtimeLimit` 时直接 `'allow'`）。
+规则要点：
 
-**内置口令 `builtinCommands` 写法约束**：短句、命令式、每条 ≤18 字、不写露骨细节，
-六类各 4 条，`id` 形如 `fast-1` / `rest-2`。示例口径：
-`{ id: 'rest-1', type: 'rest', text: '停，手拿开' }`、`{ id: 'slow-2', type: 'slow', text: '慢下来，只用掌心' }`、
-`{ id: 'fast-1', type: 'fast', text: '跟着节拍，再快一点' }`、`{ id: 'tease-1', type: 'tease', text: '只用指尖' }`。
-玩家自己的内容走 `customCommands`，不在内置表里扩写。
+- `permitRate` = `min(1, 基础概率(或 tune.chance/100) + min(0.2, 0.05 × 忍住次数))`，即每次 +5%、累计最多 +20%、封顶 100%。
+- `decideFinale`：`always` / `continuous` → `success`；`never` → `fail`；`ruin` → `ruin`；
+  `draw` / `overtime` → `random() < permitRate(...)`；`allowRuin` 为真时 `success` 改判 `ruin`。
+- `pickMode`：**第一段强制 `go`**；默认不连续出 `stop`（`stopAfterStop` 的难度除外）；
+  自己调里 `stop` 占比 > 45% 时放开连出。
+- `buildTimeline`：整局时间线**一开始就全部预生成**，按 `shareOf` 加权抽模式；
+  末尾不足 `finalHoldMs` 的尾巴并进最后一段；乳头／龟头专属段按 `planFocus` 的计划时间插入，
+  **两段专属之间至少隔一条普通指令**（按 `previousFocus` 判断，不是一次性布尔量）。
+- `bindCommands`：指令自带 `seconds` 时改写该段时长并把后续 `at` 顺移。
+- 节拍 BPM 优先用**指令自带 `bpm`**，缺省回落到播放列表的 `bpm`。
 
-## 运行层接线（Lead 负责）
+## 指令池：`web/src/playback/commands.ts`
 
-`web/src/PlaybackPanel.vue`：
+```ts
+export interface EdgeCommand {
+  text: string
+  mode: EdgeMode
+  category: 'basic' | 'edge' | 'tease' | 'pose' | 'pain' | 'nipple' | 'glans' | 'custom'
+  bpm?: number         // 该条的手速节拍（可选）
+  seconds?: number     // 该条的固定时长（可选，覆盖难度秒数）
+  edge?: boolean       // 「冲到极限再停下」型寸止指令
+  hint?: string        // 该条专属提示
+}
+```
 
-- `player` 新增 `held: number`（忍住次数）、`permit: number`（当前许可率）、`phaseEndsAt`、`allowed: boolean`、`windowLeft: number`、`overtimeCount: number`。
-- 主操作按钮文案改回 **「忍住了」**，按下：`held++`、`permit = nextPermitRate(permitBase, held)`、切到 `rest` 相位并进入等待时长；按钮下方常驻小字 `按在快忍不住的前一刻。按下后松手等它平息`。
-- 次级按钮 `射了` → `finish('edge')`（记为失败结束）。
-- 顶栏计数由「喜欢 N」改为 **「忍住 N」**（`PlaybackTopBar` 的 `likes` prop 改名 `held`）。
-- 时间到 → 若结局判定 `allow`：进入许可窗口（`edgeWindow` 秒，`PlaybackBottom` 进度条换成白色倒计时条，中央提示「现在可以了」）；
-  窗口结束或 `ruin` → `finish('duration')`。判定 `deny` → `finish('deny')`。
-- 结局运行中可再次延长：`overtime` 结局在 `deny` 后加时（每次 +15%，第 5 次必定允许），中央显示「加时 N」。
-- `finish(reason)` 的 `FinishReason` 扩展为 `'duration' | 'queue' | 'manual' | 'edge' | 'deny' | 'allow'`，
-  对应完成卡文案：`edge` → 「这次没忍住」、`deny` → 「一直忍到结束，没给许可」、`allow` → 「许可已给出」。
+- `maleCommands`：88 条（男生版主池，照官方中文文案），`basic` / `edge` / `tease` / `pose` / `pain` 混合。
+- `nippleCommands`：5 条，全部 `stop` + `category: 'nipple'`。
+- `glansCommands`：5 条，全部 `slow` + `category: 'glans'`。
+- `filterByCategories` 里 `basic` 与 `custom` **恒定允许**，其余看 `categories` 开关。
 
-## 设置页五组（B 负责）
+## 局内状态机：`web/src/playback/session.ts`
 
-`web/src/PlaybackSettings.vue` 分组按参考站语义重排为 **玩法 / 指令 / 内容 / 声音 / 其他**，
-`runtime` 模式下只显示 声音 / 内容以外的播放相关项按既有规则隐藏（保持现有 `runtime` 分支语义，不新增入口）。
+```ts
+export type SessionPhase = 'run' | 'allow' | 'done'
+export type SessionOutcome = 'allow' | 'deny' | 'ruin' | 'lost' | 'manual'
+export interface SessionFrame {
+  phase, round, elapsed, totalMs, task, mode, text, hint,
+  taskProgress, taskSeconds, cooling, held, permit, windowLeft, note
+}
+export class EdgeSession {
+  constructor(settings: EdgeSettings, options?: { nipple?: EdgeCommand[]; glans?: EdgeCommand[] })
+  readonly settings
+  readonly ruined: boolean
+  readonly outcome: SessionOutcome | null
+  get finished / permit / remainingMs / task / cooling
+  frame(): SessionFrame
+  tick(deltaMs: number): boolean   // 返回是否仍在进行
+  hold(): boolean                  // 忍住了：次数 +1 并立刻切「等它平息」
+  lose(): void                     // 射了：直接判负（outcome = 'lost'）
+  stop(): void                     // 手动结束（allow 阶段记 'allow'，否则 'manual'）
+}
+export const cooldownText = '松手。等它平息。'
+export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
+```
+
+- `hold()` 之后进入冷却段（时长取 `restSeconds(rest)`），冷却期间 `frame().mode` 恒为 `stop`、
+  文案换成 `cooldownText`、`taskProgress` 走冷却进度。
+- 时间到 → `settle()`：`success` 与 `ruin` **都进 `allow` 阶段**（奖励屏），后者 `ruined = true`；
+  `overtime` 结局未中奖且 `round <= overtimeRounds` 时加时（`totalMs += max(60s, totalMs/4)`、
+  重建时间线、`note = '加时 N'`）；否则 `finish('deny')`。
+- 许可窗口走完 `closeWindow()`：`continuous` 结局开下一轮（`round++`、`elapsed = 0`、重建时间线、
+  `note = '第 N 轮'`），否则 `finish('allow')`；若 `ruined` 则 outcome 记为 `'ruin'`。
+
+## 音效：`web/src/playback/sound.ts`
+
+`class SoundEngine`，全部用 WebAudio 振荡器实时合成，**不加载任何音频文件**：
+
+- `beat(mode, options)`：峰值 `0.5 × beatVolume/100 × duck`；`go` 880 Hz、`slow` 520 Hz；
+  5 ms 升、60 ms 指数降、`stop(now + 0.07)`。
+- `cue(options)`：660 / 990 Hz 双音，峰值 `0.4 × beatVolume/100 × duck`，间隔 0.14 秒。
+- `heartbeat(options)`：58 → 38 Hz 两次 thump（0.9 / 0.55），间隔 0.17 秒。
+- 另有空 buffer keepAlive（22050 Hz）用于保持 AudioContext。
+- 上限 `beatVolumeMax = 300`（v3 只有 100，是「声音过小」的根因之一）。
+
+## 运行层接线（`web/src/PlaybackPanel.vue`）
+
+- 两套存储分开：媒体层走 `playback.ts`（`shicun.playback.v1`，`schemaVersion = 4`），
+  玩法层走 `settings.ts`（`shicun.edge.v1`）。
+- `tick()` 固定 `100 ms` 一拍，只做三件事：`session.tick(delta)`、`frame = session.frame()`、同步 `held`；
+  `session.phase === 'done'` 时 `finish(outcome)`。
+- `hold()` → `session.hold()` + `sound.cue()`；「射了」→ `session.lose()`；
+  `PlaybackStage` 的「射了」先弹二次确认（`记为中途结束的一局吗？` / `记录并结束` / `继续`）。
+- `pulse(now)`：模式变化时重置节拍；`stop` 阶段按 `redBeat` 决定心跳 / 节拍 / 两者，固定 60 BPM。
+- `frame.phase === 'allow'` 时渲染整屏奖励屏 `PlaybackReward`（ruin 橙 / 允许粉两套 radial-gradient、
+  白色倒计时条、`剩余 N 秒`）。
+- 音量弹层 `PlaybackVolumePopover` 四行：视频音量 / 节拍声（0–300）/ 指令文字不透明度（30–100）/
+  指令文字大小（60–140）。
+- `settings.keepVideoOnStop`：红色且未进许可窗口时暂停视频并把 `brightness × 0.55`；
+  `settings.switchVideoPerCommand`：`taskKey` 前进时切下一个媒体。
+- `FinishReason = 'duration' | 'queue' | 'manual' | 'lost' | 'allow' | 'deny' | 'ruin'`，
+  `PlaybackFinished` 按 outcome 出 Finised / Ruined / Denied / Lost 四套文案与三格统计（时间 / 指令 / 忍住）。
+
+## 设置页五组（`web/src/PlaybackSettings.vue`）
+
+分组：**玩法 / 指令 / 视频·图片 / 声音 / 其他**（`runtime` 模式下隐藏「视频·图片」）。
 
 | 组 | 字段 |
 | --- | --- |
-| 玩法 | 总时长 `minutes`、难度 `difficulty`、自己调三比例 `ratioFast/ratioSlow/ratioRest` + `permitBase`（折叠）、结局 `ending`、许可窗口 `edgeWindow`、忍住后等待 `waitMode/waitPreset/waitMin/waitMax`、指令时长 `instructionPace` |
-| 指令 | 口吻 `tones`（多选）、类型开关 `commandTypes`、惯用手 `hand`、道具 `props`、自定义口令 `customCommands`（增删，≤30）、逐条启停 `disabledCommands`（折叠列出 `builtinCommands`，按类型分组） |
-| 内容 | 内容类型 `kind`、播放顺序 `order`、每轮图片数 `imageCount`、图片间隔 `imageSeconds`、切图节奏 `imageTiming`、快速节拍 `bpm`、循环 `loop`、仅播放喜欢 `favoritesOnly` |
-| 声音 | 节拍器 `metronome` + `beatVolume`、心跳 `heartbeat` + `heartbeatVolume`、语音 `speech` + `speechVolume` + `speechRate` + `voicePitch`、媒体音量 `mediaVolume`、振动 `vibrate` |
-| 其他 | 隐藏时间 `hideTime`、画面亮度 `brightness` |
+| 玩法 | 推荐预设 `presets`、只玩乳头 / 龟头 `nipple` `glans`、时长 `minutes` + `durationRandom`、难度 `difficulty`、自己调 `tune`（许可概率 / 三相位 mix）、结局 `finale` + `allowRuin`、`rewardSeconds`、`rest`、`instructionLength`、图例与规则句 |
+| 指令 | 分类 `categories`、惯用手 `hand`、自定义口令 `custom`（≤30 条 / 60 字）、逐条启停 `disabled`（按 `modeOrder` 分组列 `maleCommands`） |
+| 视频·图片 | 直接绑 `Playlist`：`kind / order / imageCount / imageTiming / imageSeconds / bpm(20–300) / loop / favoritesOnly` + `keepVideoOnStop` + `switchVideoPerCommand` |
+| 声音 | `metronome` + `beatVolume(0–300)`、`mediaVolume(0–100)`、`heartbeat` + `heartbeatVolume(0–300)` + `redBeat` |
+| 其他 | `hideRemaining`、`brightness(20–100)`、`mixAudio` |
 
-摘要行 `web/src/playback/summary.ts` 的 `playbackSummary` 追加：难度、结局、许可率，例如
-`10分钟 · 普通 · 抽签 · 许可率 70%· 口令 88 条` 的空段省略规则不变。
+摘要行 `web/src/playback/summary.ts` 的 `settingsSummary(settings)` 输出形如
+`10 分钟 · 普通 · 抽签 · 指令 88 种 · 许可率 70% · 不许碰 5–10 秒 · 节拍声开`，
+另有 `enabledCommandCount(settings)` 供别处复用。
 
 ## 验收
 
-- `cd web && pnpm exec vue-tsc -b`、`pnpm run build` 均 exit 0。
-- `node web\checks\playback.ts`、`node web\checks\playback-loader.ts` 保持 exit 0。
-- 新增 `node web\checks\edge.ts`：覆盖 `nextPermitRate` 上限、`pickPhaseKind` 不连续同相位、`phaseDurationMs` 的 rest 不乘倍率、`resolveEnding` 六种结局分支、`waitDurationMs` 随机档落在区间内、`pickCommand` 不重复上一条。
+```bash
+cd web
+npx nuxt typecheck                                  # 必须 exit 0
+for f in checks/*.ts; do node --experimental-strip-types "$f"; done
+npm run build                                       # nuxt typecheck && nuxt generate
+```
 
-## 实现偏差（以本节为准）
+`web/checks/engine.ts` 覆盖：难度表、`mulberry32` 首值、`shareOf/timeShareOf/mixOf/adjustMix`、
+`taskSeconds`（stop 不吃长档）、`permitRate` 封顶、`decideFinale` 六路 + `allowRuin`、
+`restSeconds/randomBpm/planFocus/pickIndex`、`pickMode`（首段必 go、不连出 stop、mix>45% 放开）、
+`pickCommandAt` 不重复上条、`swapHands`、指令池 88 条与字段范围、`buildTimeline`（首段 go、
+`at` 递增、末段铺到结尾且 ≥5 秒、同种子复现）、`bindCommands` 顺移、`taskAt`、`formatClock`、
+`defaultEdgeSettings`、`normalizeEdgeSettings` 全字段夹取、`writeEdgeSettings/readEdgeSettings`、
+`EdgeSession`（开局 go、hold 进冷却、permit 递增、lose / never / always / ruin 四路收场）。
 
-契约落笔后按实现修正了三处，后续改动请以这里为准：
+`web/checks/playback.ts` 覆盖 v4 媒体层：`playbackSchemaVersion === 4`、`newPlaylist()` 默认值、
+**25 个旧玩法字段不得出现在 `Playlist` 上**、`validPlaylist` 逐字段边界、v3 存档升级到 4、
+`mediaUrl/mediaKey/clockTime/nextBeatTime/orderedMedia/playbackCycle`、
+`exportConfiguration/importConfiguration`。
 
-1. **结束原因扩到 7 值**：`FinishReason` 为 `duration | queue | manual | allow | deny | ruin | edge`。许可窗口走完记 `allow`（「许可已给出」）、忍到结束没给许可记 `deny`（「一直忍到结束，没给许可」）、松手射精记 `ruin`、手点「射了」记 `edge`（「这次没忍住」）。本文前面提到的「窗口结束与 ruin 记 duration、deny 记 deny」作废。
-2. **不加 `player.phaseEndsAt`**：运行层继续用 `phaseElapsed / phaseDuration`。暂停时 `phaseElapsed` 冻结，时间戳方案会在恢复后漂移。
-3. **`allow` 中央提示走台词表**：优先 `pickVoiceLine('ending-allow')`，取不到才回退「现在可以了」。
+## 已知不做
+
+- 联机 / 远程操控 / 双人链接 / 角色音（`sundome_remote`、`/api/rgate/*`、`/rws/lobby` 一律不接）。
+- 语音播报（`speechSynthesis`、`voiceLines.ts` 已删除）。
+- 道具模式（飞机杯 / AV 棒 / 前列腺按摩器）、连续打卡、分享到 X、惩罚一局。

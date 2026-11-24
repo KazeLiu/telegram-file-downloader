@@ -1,232 +1,65 @@
 <script setup lang="ts">
+// 底栏：整局进度条 + 计时 + 三色图例 + 「换个视频」。
 import { computed } from 'vue'
-import type { LegendItem } from './types'
+import Icon from '../Icon.vue'
+import { modeColors, modeLabels, modeOrder } from './engine.ts'
 
 const props = defineProps<{
-  title: string
   elapsed: string
   total: string
   progress: number
-  hideTime: boolean
-  legend: LegendItem[]
-  nextLabel: string
-  canNext: boolean
-  /** 是否处于许可窗口：此时进度条换成白色倒计时。 */
   allowed: boolean
-  /** 许可窗口剩余秒数。 */
   windowLeft: number
-  /** 许可窗口总秒数。 */
-  windowTotal: number
+  hideTime: boolean
 }>()
 
-defineEmits<{
-  next: []
-}>()
+const emit = defineEmits<{ skip: [] }>()
 
-/** 图例圆点颜色：与中央阶段药丸保持同一套色。 */
-const legendTones: Record<LegendItem['tone'], string> = { slow: '#e6b34a', fast: '#35d6a4', rest: '#f2637c' }
-
-/** 许可窗口里即使不限时也要显示倒计时行。 */
-const showProgressRow = computed(() => props.allowed || (!props.hideTime && props.total !== ''))
-const progressValue = computed(() => {
-  if (props.allowed) {
-    if (!Number.isFinite(props.windowTotal) || props.windowTotal <= 0) return 0
-    return Math.min(100, Math.max(0, props.windowLeft / props.windowTotal * 100))
-  }
-  return Number.isFinite(props.progress) ? Math.min(100, Math.max(0, props.progress)) : 0
-})
-/** 许可窗口里显示剩余秒数，平时显示「已播 / 总时长」。 */
-const progressText = computed(() => (props.allowed ? `许可 ${Math.ceil(Math.max(0, props.windowLeft))} 秒` : `${props.elapsed} / ${props.total}`))
+const percent = computed(() => Math.min(1, Math.max(0, props.progress)))
+const legend = computed(() => modeOrder.map(mode => ({ mode, label: modeLabels[mode], color: modeColors[mode] })))
 </script>
 
 <template>
-  <footer class="playback-bottom">
-    <p class="bottom-title" :title="title">{{ title }}</p>
-
-    <div v-if="showProgressRow" class="bottom-progress">
-      <div
-        class="progress-track"
-        :class="{ allowed }"
-        role="progressbar"
-        :aria-label="allowed ? '许可窗口倒计时' : '本次播放进度'"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        :aria-valuenow="Math.round(progressValue)"
-      >
-        <span class="progress-fill" :class="{ allowed }" :style="{ width: `${progressValue}%` }"></span>
+  <div class="sd-bottombar">
+    <div class="sd-progress-row">
+      <div class="sd-track">
+        <div class="sd-fill" :class="{ window: allowed }" :style="{ transform: `scaleX(${allowed ? Math.min(1, Math.max(0, percent)) : percent})`, background: allowed ? '#fff' : undefined }" />
       </div>
-      <span class="progress-time">{{ progressText }}</span>
+      <span class="sd-time">{{ allowed ? `许可 ${windowLeft} 秒` : `${elapsed} / ${total}` }}</span>
     </div>
-
-    <div class="bottom-row">
-      <ul class="legend" aria-label="阶段颜色说明">
-        <li v-for="item in legend" :key="`${item.tone}-${item.label}`">
-          <span class="dot" :style="{ background: legendTones[item.tone] }" aria-hidden="true"></span>{{ item.label }}
+    <div class="sd-legend-row">
+      <ul class="sd-legend">
+        <li v-for="item in legend" :key="item.mode">
+          <span class="sd-dot" :style="{ background: item.color }" />{{ item.label }}
         </li>
+        <li v-if="!hideTime" class="sd-keys">Space 暂停 · E 忍住 · Esc 退出</li>
       </ul>
-      <div class="row-end">
-        <button class="next-button" type="button" :disabled="!canNext" @click="$emit('next')">{{ nextLabel }}</button>
-        <div class="controls">
-          <slot name="controls" />
-        </div>
-      </div>
+      <button class="sd-skip" type="button" @click="emit('skip')">
+        <Icon name="refresh" :size="12" />换个视频
+      </button>
     </div>
-  </footer>
+  </div>
 </template>
 
 <style scoped>
-.playback-bottom {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 10px max(14px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
-  color: #fff;
-  pointer-events: auto;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, .55));
-  -webkit-tap-highlight-color: transparent;
+.sd-bottombar { padding: 0 16px 16px; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+.sd-progress-row { display: flex; align-items: center; gap: 12px; }
+.sd-track { flex: 1 1 auto; height: 8px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, .15); }
+.sd-fill { width: 100%; height: 100%; border-radius: 999px; transform-origin: left center; background: #5ee3a1; transition: transform .25s linear, background .3s ease; }
+.sd-fill.window { box-shadow: 0 0 12px rgba(255, 255, 255, .8); }
+.sd-time { flex: none; font-size: 11px; color: rgba(255, 255, 255, .6); font-variant-numeric: tabular-nums; }
+.sd-legend-row { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sd-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; padding: 0; list-style: none; font-size: 11px; color: rgba(255, 255, 255, .6); }
+.sd-legend li { display: inline-flex; align-items: center; gap: 4px; }
+.sd-dot { display: inline-block; width: 10px; height: 10px; flex: none; border-radius: 999px; }
+.sd-keys { display: none; }
+.sd-skip {
+  display: inline-flex; flex: none; align-items: center; gap: 6px;
+  min-height: 0; padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, .3); border-radius: 999px;
+  background: rgba(255, 255, 255, .1); color: rgba(255, 255, 255, .85);
+  font-size: 11px; font-weight: 500; cursor: pointer;
 }
-.bottom-title {
-  margin: 0;
-  overflow: hidden;
-  color: rgba(255, 255, 255, .7);
-  font-size: 13px;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.bottom-progress {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.progress-track {
-  position: relative;
-  flex: 1;
-  height: 4px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, .22);
-}
-.progress-fill {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, .82);
-  transition: width .25s linear;
-}
-/* 许可窗口：整条换成纯白倒计时，和平时偏灰的进度条区分开 */
-.progress-track.allowed {
-  background: rgba(255, 255, 255, .34);
-}
-.progress-fill.allowed {
-  background: #fff;
-  box-shadow: 0 0 10px rgba(255, 255, 255, .55);
-}
-.progress-time {
-  flex-shrink: 0;
-  color: rgba(255, 255, 255, .7);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-/* 第三行：左图例、右药丸按钮与控件槽，窄屏自动换行 */
-.bottom-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
-  font-size: 12px;
-}
-.legend {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 14px;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  color: rgba(255, 255, 255, .62);
-  font-size: 11px;
-  line-height: 1.5;
-  list-style: none;
-}
-.legend li {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-.dot {
-  flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-.row-end {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px 10px;
-  min-width: 0;
-  margin-left: auto;
-}
-.next-button {
-  position: relative;
-  padding: 4px 12px;
-  border: 1px solid rgba(255, 255, 255, .3);
-  border-radius: 999px;
-  color: rgba(255, 255, 255, .8);
-  font-family: inherit;
-  font-size: 11px;
-  line-height: 1.4;
-  white-space: nowrap;
-  background: rgba(255, 255, 255, .06);
-  cursor: pointer;
-  transition: background-color .15s ease, opacity .15s ease;
-}
-/* 药丸视觉偏小，命中区补到 44px 高 */
-.next-button::after {
-  content: '';
-  position: absolute;
-  inset: -10px -4px;
-  border-radius: 999px;
-}
-.next-button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, .16);
-}
-.next-button:disabled {
-  opacity: .45;
-  cursor: default;
-}
-.next-button:focus-visible {
-  outline: 2px solid #fff;
-  outline-offset: 2px;
-}
-.controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  font-size: 12px;
-}
-.controls :deep(*) {
-  font-size: 12px;
-}
-@media (max-width: 400px) {
-  .playback-bottom {
-    padding-inline: max(10px, env(safe-area-inset-left)) max(10px, env(safe-area-inset-right));
-  }
-  .legend {
-    gap: 2px 10px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .progress-fill,
-  .next-button {
-    transition: none;
-  }
-}
+.sd-skip:hover { background: rgba(255, 255, 255, .2); }
+@media (min-width: 640px) { .sd-keys { display: inline-flex; } .sd-legend { gap: 4px 16px; } }
 </style>

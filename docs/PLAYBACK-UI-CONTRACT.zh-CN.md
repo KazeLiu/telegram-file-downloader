@@ -1,142 +1,205 @@
-# 播放器改造组件契约（2026-11-13）
+# 播放器运行层组件契约（v4，2026-11-25）
 
-本文件是并行实现的接口约定。三份子任务按此实现，`PlaybackPanel.vue` 的集成方按此接线；**任何一方不得擅自改签名**，需要改先在本文件登记。
+本文件登记 `web/src/playback/` 下运行层组件的接口。**任何一方不得擅自改签名**，需要改先在本文件登记。
+权威玩法口径见 [寸止控制器实施契约](PLAYBACK-EDGE-CONTRACT.zh-CN.md)。
 
-共享类型与文案常量在 `web/src/playback/types.ts`（已存在，只读）：
+共享类型在 `web/src/playback/types.ts`：
 
-- `PhaseKind = 'slow' | 'fast' | 'rest'`
-- `phaseLabels` / `phaseHints` / `phaseRatios` / `phaseLegend` / `keyHints` / `finishLabels`
-- `GuideStep { title: string; body: string }`
-- `PlaybackPosition { index: number; total: number; cycle: number }`
-- `FinishReason = 'duration' | 'queue' | 'manual'`
+- `PhaseKind = EdgeMode`（`'go' | 'slow' | 'stop'`，别名保留给旧调用方）
+- `FinishReason = 'duration' | 'queue' | 'manual' | 'lost' | 'allow' | 'deny' | 'ruin'`
+- `finishLabels` / `finishTitles`：每档结束原因的中文短句与标题
+- `GuideStep { title: string; body: string }`、`PlaybackPosition { index, total, cycle }`、`LegendItem { label, tone }`
 
-## 一、运行层组件（`web/src/playback/`）
+模式文案与色值不在这里，在 `engine.ts` 的 `modeLabels` / `modeColors` / `modeColorsBright`。
 
-全部是纯展示组件：只在自身内部持有 UI 局部状态，**不改业务状态、不读 localStorage、不发请求**。样式用 `scoped`，颜色走现有变量（`--color-primary`、`--color-primary-on-dark`、`--color-hairline`、`--color-muted`），暗色底用 `#000` / `#272729` / `#dccbd3`。
+全部运行层组件都是纯展示组件：只在自身内部持有 UI 局部状态，**不改业务状态、不读 localStorage、不发请求**。
+样式 scoped，深色底与白色文字，尺寸对齐参考站（100adults 男生版）。
 
-### PlaybackOverlay.vue
+## PlaybackOverlay.vue
 
-运行层外壳：铺满视口、四角分层、背景随阶段变色。
+运行层外壳：铺满视口，媒体在下，三层分区在上。
 
 ```ts
 defineProps<{
-  phase: PhaseKind
-  paused: boolean
-  beatIntervalMs: number   // 0 表示当前阶段没有节拍
-  dim: number              // 20–100，画面暗度
+  mode: EdgeMode        // 决定光晕颜色
+  dim: number           // 变暗比例 20–100（100 = 完全透明）
+  opacity: number       // 指令文字不透明度 30–100
+  scale: number         // 指令文字大小 60–140
 }>()
 ```
 
-- 根节点 `position: fixed; inset: 0; z-index: 60; background: #000;`，class 带 `playback-overlay`，并输出 `data-phase` 与 `data-paused`。
-- 三层渐变叠在媒体之下，`[data-phase="slow"|"fast"|"rest"]` 只切 `opacity`，**不要动 background 做过渡**。
-- 节拍光晕：`--beat-interval: calc(60s / var(--bpm))` 由 prop 写进 `el.style.setProperty`；`beatIntervalMs` 为 0 时不渲染光晕。`paused` 时 `animation-play-state: paused`。
-- 插槽：`top`、`stage`、`bottom`，分别固定在顶部、中央、底部三个区域；`stage` 之外的区域不遮挡媒体点击。
-- 支持 `prefers-reduced-motion`：关掉动画只保留颜色。
+- 根 `.sd-stage`：`position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; color: #fff; background: #0a0708`。
+- `.sd-glow`：四层 `radial-gradient`（`110% 60% at 50% 0` α.7 / `110% 55% at 50% 100` α.55 / `70% 50% at 0% 50` α.24 / `70% 50% at 100% 50` α.24），色取 `modeColors[mode]`，`transition: background-image .8s ease; opacity .92`。
+- `.sd-mask`：`opacity = (100 - dim) / 100`，盖在媒体上方。
+- 插槽：`media`（媒体本体，z-index 1）、`top`、默认插槽（中央）、`bottom`。
+- `.sd-center` 挂 `radial-gradient(70% 55% at 50% 50%, rgba(0,0,0,.6), transparent)` 与文字投影，让白字在视频上也清晰；`.sd-center-inner` 用 CSS 变量 `--sd-text-opacity` / `--sd-text-scale`。
 
-### PlaybackTopBar.vue
+## PlaybackTopBar.vue
 
 ```ts
 defineProps<{
   name: string
   position: PlaybackPosition
-  remaining: string        // 已格式化，如 '08:12'；不限时传 ''
+  remaining: string        // 已格式化，如 '9:15'；随机时长或不限时传 ''
   hideTime: boolean
   paused: boolean
+  playing: boolean
+  held: number             // 忍住次数
+  noCrop: boolean
+  pipAvailable: boolean
+  landscapeAvailable: boolean
+  volumeOpen: boolean
   fullscreen: boolean
-  settingsOpen: boolean
-  playing: boolean         // false 时暂停/退出按钮禁用
+  note: string             // 加时 / 第 N 轮，非空时替代「第 N 条指令」
 }>()
 defineEmits<{
-  back: []
-  settings: []
-  fullscreen: []
-  togglePause: []
-  exit: []
+  'toggle-crop': []
+  'pip': []
+  'volume': []
+  'landscape': []
+  'fullscreen': []
+  'toggle-pause': []
+  'exit': []
 }>()
 ```
 
-- 左：返回按钮（aria-label「返回播放列表」）+ 名称（省略号）+ `第 {{ position.cycle }} 轮 · {{ position.index + 1 }} / {{ position.total }}`。
-- 右：剩余时间（`hideTime` 为真时不渲染）+ 设置 + 全屏 + 暂停／继续（按 `paused` 换图标与 aria-label）+ 退出。
-- 所有按钮 `min-height/min-width: 44px`，`:focus-visible` 用 `--color-primary-on-dark`。
-- 图标复用 `../Icon.vue`（`chevron`/`settings`/`fullscreen`/`pause`/`play`/`close`），图标名必须存在于 `Icon.vue`，缺的先用文字。
+- 左：`.sd-count`（16px/800 斜体，`第 N 条指令` 或 `note`）+ `.sd-held`（`忍住 N`）；中：`.sd-clock`（18px/700 tabular-nums）；右：4 个 28×28 圆钮（`expand`/`shrink` 切换裁切、`pip`、`volume`、`rotate`）与 3 个 30px 高药丸（全屏／暂停·继续／退出）。
+- 所有按钮必须 `min-height: 0`——`web/app/assets/main.css` 有全局 `button { @apply min-h-11 }`，不覆盖会被撑到 44px。
+- 图标名必须存在于 `Icon.vue`（已补 `expand`/`shrink`/`pip`/`volume`/`rotate`/`stop`/`spark`）。
 
-### PlaybackStage.vue
+## PlaybackStage.vue
 
 ```ts
 defineProps<{
-  phase: PhaseKind
-  bpm: number              // 0 表示无节拍
+  mode: EdgeMode
+  text: string            // 当前指令（可为多句）
+  hint: string            // 该条指令专属的小字提示
+  bpm: number             // 0 表示不显示节拍
+  progress: number        // 0–1，当前这一条的进度
+  taskSeconds: number     // 这一条总秒数，驱动倒计时条动画
+  taskKey: number         // 换条时变化，用来重启动画与重置二次确认
   paused: boolean
-  finished: boolean
-  loading: boolean
-  error: string
+  cooling: boolean        // 正在「等它平息」
+  canHold: boolean
+  held: number
+  note: string
 }>()
+defineEmits<{ hold: []; lost: [] }>()
 ```
 
-- 中央：阶段大字（`phaseLabels[phase]`）+ `{{ bpm }} BPM`（`bpm` 为 0 或 `paused` 时不显示）+ 提示（`phaseHints[phase]`）。
-- `paused` 时中央换成「已暂停」并显示「点下方继续，或按空格」；此时**不显示 BPM**。
-- `finished` 时中央换成「已结束」。
-- 插槽：`default`（媒体本体）、`actions`（错误时的按钮组）。`loading` 时显示「正在加载…」，`error` 非空时用 `role="alert"` 展示错误并只保留 `actions` 插槽可点。
-- 媒体插槽容器 `position: absolute; inset: 0`，中央信息层 `pointer-events: none`（按钮区除外）。
+- 结构：模式胶囊（`data-sundome-mode-label`，`letter-spacing .25em`）＋ `N BPM` 与跳动圆点 → 指令（`data-sundome-command`，`font-size: 28px`，≥640px `48px`，`font-weight: 700`，`letter-spacing: -.025em`，`text-shadow: 0 0 28px rgba(0,0,0,.35)`）→ 指令小字（`data-sundome-hint`，16px，70% 白）→ 倒计时条（`data-sundome-task-bar`，160×4px，`animation: sd-shrink linear forwards`，时长 = `taskSeconds`）→ 「忍住了」主按钮（`data-sundome-edge`，`min-width: 100px`、`padding: 12px 24px`、2px 白边、圆角 999）→ 提示「在快射的前一刻停下来了就按。按下后切换成“等它平息”」→ 「已忍住 N 次」→ `note` → 「射了」（`data-sundome-lost`，13px，55% 白，下划线）。
+- 指令**按「。！？」逐句渲染**（参考站的 `Sentences`）：每句 `<span class="sd-sentence">`（`display: inline-block; max-width: 100%; word-break: keep-all; overflow-wrap: anywhere`），句子之间不切断词。
+- 「射了」先弹二次确认 `data-sundome-lost-ask`（`记为中途结束的一局吗？` ＋ 白底「记录并结束」`data-sundome-lost-yes` / 描边「继续」`data-sundome-lost-no`），换条（`taskKey` 变化）时自动收起。
+- `cooling` 时主按钮文案变「等它平息…」并禁用。
 
-### PlaybackBottom.vue
+## PlaybackBottom.vue
 
 ```ts
 defineProps<{
   elapsed: string
-  total: string            // 不限时传 ''
-  progress: number         // 0–100
+  total: string
+  progress: number         // 0–1
+  allowed: boolean         // 许可窗口期间整条变白发光
+  windowLeft: number
   hideTime: boolean
 }>()
+defineEmits<{ skip: [] }>()
 ```
 
-- 上部：进度条（`hideTime` 或 `total` 为空时不渲染）+ `{{ elapsed }} / {{ total }}`。
-- 中部：`phaseLegend` 图例（小圆点 + 文字，`hideTime` 不影响）。
-- 底部：插槽 `controls`（主控制按钮），右侧小字 `keyHints` 键盘提示（窄屏隐藏）。
-- 全局只读常量直接 `import`，**不要在组件里重复写文案**。
+- 整场进度条 8px 圆角（`transform: scaleX(progress)`），右侧 `已用 / 总时长`（11px，60% 白）；`allowed` 时进度条变纯白并显示 `许可 N 秒`。
+- 图例：`modeOrder` 三色点（10px）＋ `modeLabels`；≥640px 追加 `Space 暂停 · E 忍住 · Esc 退出`。
+- 右侧「换个视频」药丸（`data-sundome-video-skip`，11px/500，`border 1px rgba(255,255,255,.3)`，圆角 999，`min-height: 0`）。
 
-### PlaybackFinished.vue
+## PlaybackReward.vue
+
+拿到许可时盖的整屏奖励屏（参考站的 reward 屏）。
 
 ```ts
 defineProps<{
-  reason: string           // 直接用 finishLabels 的结果
-  elapsed: string
-  position: PlaybackPosition
+  ruined: boolean          // 松手射精（橙）还是普通许可（粉）
+  windowLeft: number       // 剩余秒
+  windowTotal: number
 }>()
-defineEmits<{ restart: []; close: [] }>()
 ```
 
-- 独立结束卡（不是运行层的一部分）：居中卡片，标题「本次播放结束」，正文 `reason`、`本次播放 {{ elapsed }}`、`完成第 {{ position.cycle }} 轮 · {{ position.index + 1 }} / {{ position.total }} 项`。
-- 按钮：「再来一次」（primary）、「返回播放列表」。
-- `role="status"` + `aria-live="polite"`，卡片可聚焦。
+- 根 `data-sundome="reward"`，`:data-result="ruined ? 'ruin' : 'allow'"`，`position: fixed; inset: 0; z-index: 95`。
+- 背景：`ruined` → `radial-gradient(ellipse at 50% 30%, #c86a2a 0%, #6b2f0f 55%, #2a1206 100%)`，否则 `radial-gradient(ellipse at 50% 30%, #ff4d6d 0%, #a4123a 55%, #3a0612 100%)`。
+- 内容：眉标（`Ruined` / `Permission`，12px/600，`letter-spacing .35em`，70% 白）→ 标题「可以射」/「可以射了」（`clamp(44px,13vw,96px)` 斜体 800）→ 正文「但射出的瞬间要松手。不碰，让它自己流」/「在进度条消失前射出来」→ 倒计时条（`height: 12px; max-width: 28rem`，白色内条）→ `剩余 N 秒`。
 
-### PlaybackGuide.vue
+## PlaybackFinished.vue
+
+结算屏（独立于运行层）。
+
+```ts
+defineProps<{
+  outcome: FinishReason
+  elapsed: string          // '7:12'
+  durationMinutes: number
+  percent: number          // 完成百分比
+  held: number
+  commands: number
+  rounds: number
+}>()
+defineEmits<{ again: []; exit: [] }>()
+```
+
+- 根 `data-sundome="done"` 带 `:data-result="copy.ruin ? 'ruin' : 'success'"`，背景同 `PlaybackReward` 的橙／粉两套。
+- 文案六路：`allow|duration` → Finished／坚持到底了／撑满了时间，拿到了许可。；`ruin` → Ruined／松手收场／如果在射出的瞬间松手了，就算成功。…；`lost` → Lost／没忍住，射了／坚持了 {elapsed}，完成了设定的 {minutes} 分钟中的 {percent}%。；`manual` → Finished／就到这儿；`queue` → Finished／素材放完了；其余 → Denied／今天被禁止了／没有拿到许可。…
+- 三格统计（`data-sundome-done-stat`）：时间 / 指令（`N次`）/ 忍住（`N次`）；动作区 `data-sundome-done-actions` 内「再来一次」（`data-sundome-again`）与「返回播放列表」。
+- 按钮均需 `min-height: 0`（同上，覆盖全局 44px）。
+
+## PlaybackVolumePopover.vue
+
+```ts
+defineProps<{
+  mediaVolume: number
+  beatVolume: number
+  beatVolumeMax: number    // 300
+  textOpacity: number
+  textScale: number
+  textOpacityMin: number   // 30
+  textScaleMin: number     // 60
+}>()
+defineEmits<{ update: [payload: { key: 'mediaVolume' | 'beatVolume' | 'textOpacity' | 'textScale'; value: number }] }>()
+```
+
+- 右上卡片：`width: min(288px, calc(100vw - 24px))`、`border: 1px solid rgba(255,255,255,.15)`、`background: rgba(0,0,0,.95)`、圆角 12px。
+- 四行滑杆：视频音量 0–100 / 节拍声 0–`beatVolumeMax` / 指令文字不透明度 / 指令文字大小，每行下方一行 10.5px 说明（照抄参考站文案）。
+- **不含**心跳音量与视频变暗——这两项在设置面板的「声音」「其他」组。
+
+## PlaybackGuide.vue
 
 ```ts
 defineProps<{ steps: GuideStep[]; open: boolean }>()
 defineEmits<{ close: [skipped: boolean] }>()
 ```
 
-- 遮罩 + 居中卡片，顶部 `{{ current + 1 }} / {{ steps.length }}`，标题 `steps[current].title`，正文 `steps[current].body`。
-- 按钮：「跳过」（`close(true)`）、「上一步」（首步禁用或隐藏）、末步「开始」（`close(false)`）、其余「下一步」。
-- 键盘：`Esc` = 跳过，`←`/`→` 翻页；焦点进入卡片，`role="dialog"` `aria-modal="true"`。
-- **步数由 `steps` 数组决定，不要写死 5。**
+- 遮罩 + 居中卡片，顶部 `{{ current + 1 }} / {{ steps.length }}`。
+- 按钮：「跳过」（`close(true)`）、「上一步」、末步「开始」（`close(false)`）、其余「下一步」。
+- 键盘：`Esc` = 跳过，`←`/`→` 翻页；`role="dialog"` `aria-modal="true"`。
+- 步数由 `steps` 决定，**不要写死**。
 
-### guideSteps.ts
+## guideSteps.ts
 
-导出 `guideSteps: GuideStep[]`（本项目 5 步：怎么切图、三档颜色各是什么、怎么暂停与继续、键盘与手势、怎么结束）与 `readGuideSeen(): boolean` / `markGuideSeen(): void`（localStorage 键 `shicun.playback.guide.v1`，读失败一律当没看过）。
+导出 `guideSteps: GuideStep[]`（9 步：绿黄红三色含义、忍住了 +5%、射了就输、时间到抽签、键盘、音量可调 300%、准备好就离开）与
+`readGuideSeen()` / `markGuideSeen()`（localStorage 键 `shicun.edge.guide.v1`，读写失败一律当没看过）。
 
-## 二、本机存储（`web/src/playback.ts`）
+## sound.ts
 
-- 加 `schemaVersion`，当前值 `2`；`readPreferences` 遇到旧版本按字段补默认值后升级，**升级不丢数据**。
-- 新增字段必须同时出现在 `Playlist` 接口、`addedDefaults`、`validPlaylist` 三处（这是已知的连带修改点）。
-- 校验失败仍抛出可读错误，但错误文案要说明「哪些字段」并且**不再把「重置」当唯一出路**：能补默认值的字段补齐，只有结构性损坏才抛错。
-- `shownImages` 加容量上限（例如 20000 条或按字符数），超出时按最早记录淘汰。
-- 导出/导入的 `format` 版本同步升级，旧文件仍能导入。
+`class SoundEngine`：`ensure()` / `suspend()` / `resume()` / `close()` + `beat(mode, options)` / `cue(options)` / `heartbeat(options)`。
+全部用 WebAudio 振荡器实时合成，**没有音频文件、没有语音播报**。详见实施契约。
+
+## 二、本机存储（`web/src/playback.ts` 与 `web/src/playback/settings.ts`）
+
+- 媒体层：`shicun.playback.v1`，`schemaVersion = 4`，`format = shicun.playback.config.v4`；`Playlist` **只剩媒体字段**，旧 v1–v3 存档升级时丢弃已作废的玩法字段。
+- 玩法层：`shicun.edge.v1`，`edgeSchemaVersion = 1`，`EdgeSettings` 见实施契约。
+- `readPreferences` 遇到旧版本按字段补默认值后升级；结构性损坏才抛错，其余补齐并返回 `issues`。
+- 新增字段必须同时出现在接口、默认值、`validPlaylist` / `normalizeEdgeSettings` 三处。
+- `shownImages` 上限 20000 条，超出按最早记录淘汰。
 
 ## 三、设置页（`PlaybackSettings.vue`）
 
-- 保持 `defineModel<Playlist>({ required: true })` 与 `runtime?: boolean` 两个入口不变，**调用方不改**。
-- 改成单卡片：卡片头（标题 + 实时摘要行）+ 搜索框 + 分组标签 + 分组内容，摘要行随编辑实时变化。
-- 摘要行由 `web/src/playback/summary.ts` 的 `playbackSummary(item: Playlist): string` 生成，格式形如 `10 分钟 · 仅图片 · 每张 8 秒 · 全部未展示图片 · 节拍器关`。
-- 分组仍为「播放／媒体（runtime 时隐藏）／声音／显示」，保持现有搜索关键字能力。
+- 入口不变：`defineModel<EdgeSettings>({ required: true })` + `defineProps<{ runtime?: boolean; media?: Playlist }>()`。
+- 单卡片：卡片头（标题 + 实时摘要行）+ 搜索框 + 分组标签 + 分组内容；摘要行由 `summary.ts` 的 `settingsSummary(settings)` 生成。
+- 五组：玩法 / 指令 / 视频·图片 / 声音 / 其他，`runtime` 时隐藏「视频·图片」。每组都有「恢复本组」二次确认。
+- 摘要行格式形如 `10 分钟 · 普通 · 抽签 · 指令 88 种 · 许可率 70% · 不许碰 5–10 秒 · 节拍声开`。

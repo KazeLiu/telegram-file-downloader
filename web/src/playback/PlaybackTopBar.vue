@@ -1,213 +1,103 @@
 <script setup lang="ts">
-import type { PlaybackPosition } from './types'
+// 顶栏：左边第几条指令 + 忍住次数，中间剩余时间，右边一排圆形/胶囊按钮。
+import Icon from '../Icon.vue'
+import type { PlaybackPosition } from './types.ts'
 
-defineProps<{
+const props = defineProps<{
   name: string
   position: PlaybackPosition
   remaining: string
   hideTime: boolean
   paused: boolean
   playing: boolean
-  /** 忍住次数（寸止玩法的主计数），替代原来的喜欢计数。 */
   held: number
   noCrop: boolean
   pipAvailable: boolean
   landscapeAvailable: boolean
   volumeOpen: boolean
   fullscreen: boolean
+  note: string
 }>()
 
-defineEmits<{
-  toggleCrop: []
-  pip: []
-  volume: []
-  landscape: []
-  fullscreen: []
-  togglePause: []
-  exit: []
+const emit = defineEmits<{
+  'toggle-crop': []
+  'pip': []
+  'volume': []
+  'landscape': []
+  'fullscreen': []
+  'toggle-pause': []
+  'exit': []
 }>()
 </script>
 
 <template>
-  <header class="playback-top" :title="name">
-    <div class="top-left">
-      <span class="item-count">第 {{ position.index + 1 }} / {{ position.total }} 项</span>
-      <time v-if="!hideTime && remaining" class="remaining" aria-label="剩余时间">{{ remaining }}</time>
-      <span class="held-count" aria-label="忍住次数">忍住 {{ held }}</span>
+  <div class="sd-topbar">
+    <div class="sd-left">
+      <span class="sd-count">{{ note || (position.index + 1 ? `第 ${position.index + 1} 条指令` : '准备中') }}</span>
+      <span v-if="held" class="sd-held">忍住 {{ held }}</span>
     </div>
-
-    <div class="top-right">
-      <button
-        class="icon-button"
-        type="button"
-        :aria-label="noCrop ? '铺满屏幕（会裁切）' : '显示完整画面（不裁切）'"
-        :aria-pressed="noCrop"
-        :class="{ active: noCrop }"
-        @click="$emit('toggleCrop')"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M9 4H4v5M15 4h5v5M15 20h5v-5M9 20H4v-5" />
-        </svg>
+    <span v-if="!hideTime && remaining" class="sd-clock">{{ remaining }}</span>
+    <div class="sd-buttons">
+      <button class="sd-icon" type="button" :title="noCrop ? '铺满屏幕' : '完整显示'" :aria-label="noCrop ? '铺满屏幕' : '完整显示'" @click="emit('toggle-crop')">
+        <Icon :name="noCrop ? 'expand' : 'shrink'" :size="14" />
       </button>
-      <button
-        class="icon-button"
-        type="button"
-        aria-label="悬浮窗（边浏览其他网页边玩）"
-        :disabled="!pipAvailable"
-        @click="$emit('pip')"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="3" y="5" width="18" height="14" rx="2" />
-          <rect x="12" y="12" width="7" height="5" rx="1" />
-        </svg>
+      <button v-if="pipAvailable" class="sd-icon" type="button" title="悬浮窗" aria-label="悬浮窗" @click="emit('pip')">
+        <Icon name="pip" :size="14" />
       </button>
-      <button
-        class="icon-button"
-        type="button"
-        aria-label="音量"
-        :aria-expanded="volumeOpen"
-        :class="{ active: volumeOpen }"
-        @click="$emit('volume')"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 10v4h3l4 3V7L7 10H4Z" />
-          <path d="M15 9.5a3.5 3.5 0 0 1 0 5M17.5 7a7 7 0 0 1 0 10" />
-        </svg>
+      <button class="sd-icon" :class="{ on: volumeOpen }" type="button" title="声音" aria-label="声音" @click="emit('volume')">
+        <Icon name="volume" :size="14" />
       </button>
-      <button
-        v-if="landscapeAvailable"
-        class="icon-button"
-        type="button"
-        aria-label="横屏"
-        @click="$emit('landscape')"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M5 9a8 8 0 0 1 13-3.5M19 15a8 8 0 0 1-13 3.5" />
-          <path d="M18 3v4h-4M6 21v-4h4" />
-        </svg>
+      <button v-if="landscapeAvailable" class="sd-icon sd-wide" type="button" title="横屏" aria-label="横屏" @click="emit('landscape')">
+        <Icon name="rotate" :size="14" />
       </button>
-      <button
-        v-if="fullscreen"
-        class="icon-button desktop-only"
-        type="button"
-        aria-label="全屏"
-        @click="$emit('fullscreen')"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 9V4h5M20 9V4h-5M20 15v5h-5M4 15v5h5" />
-        </svg>
-      </button>
-
-      <button
-        class="pill-button"
-        type="button"
-        :disabled="!playing"
-        :aria-label="paused ? '继续' : '暂停'"
-        @click="$emit('togglePause')"
-      >{{ paused ? '继续' : '暂停' }}</button>
-      <button class="pill-button" type="button" aria-label="退出" @click="$emit('exit')">退出</button>
+      <button class="sd-pill" type="button" @click="emit('fullscreen')">{{ fullscreen ? '退出全屏' : '全屏' }}</button>
+      <button class="sd-pill" type="button" :disabled="!playing" @click="emit('toggle-pause')">{{ paused ? '继续' : '暂停' }}</button>
+      <button class="sd-pill" type="button" @click="emit('exit')">退出</button>
     </div>
-  </header>
+  </div>
 </template>
 
 <style scoped>
-.playback-top {
+.sd-topbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 48px;
-  padding: 6px max(10px, env(safe-area-inset-right)) 6px max(10px, env(safe-area-inset-left));
-  color: #fff;
-  pointer-events: auto;
-  background: linear-gradient(180deg, rgba(0, 0, 0, .72), rgba(0, 0, 0, 0));
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 12px 0;
+  padding-top: max(12px, env(safe-area-inset-top));
+  font-size: 14px;
 }
-.top-left {
-  display: flex;
-  flex: 1;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
+.sd-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
+.sd-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 800; font-style: italic; color: rgba(255, 255, 255, .7); }
+.sd-held { flex: none; font-style: normal; color: rgba(255, 255, 255, .5); }
+.sd-clock { flex: none; font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sd-buttons { display: flex; flex: none; align-items: center; gap: 6px; }
+.sd-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; min-height: 0; padding: 0;
+  border: 1px solid rgba(255, 255, 255, .25); border-radius: 999px;
+  background: transparent; color: rgba(255, 255, 255, .8); cursor: pointer;
+  transition: background .15s ease, color .15s ease;
 }
-.item-count {
-  overflow: hidden;
-  max-width: 40%;
-  color: rgba(255, 255, 255, .72);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.sd-icon:hover { background: rgba(255, 255, 255, .1); }
+.sd-icon.on { background: rgba(255, 255, 255, .2); color: #fff; }
+.sd-wide { width: auto; padding: 0 8px; }
+.sd-pill {
+  min-height: 0; height: 30px; padding: 0 12px;
+  display: inline-flex; align-items: center;
+  border: 1px solid rgba(255, 255, 255, .25); border-radius: 999px;
+  background: transparent; color: rgba(255, 255, 255, .8);
+  font-size: 12px; font-weight: 500; cursor: pointer;
+  transition: background .15s ease;
 }
-.remaining {
-  color: #fff;
-  font-size: 22px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-  white-space: nowrap;
+.sd-pill:hover { background: rgba(255, 255, 255, .1); }
+.sd-pill:disabled { opacity: .4; cursor: default; }
+@media (max-width: 520px) {
+  .sd-topbar { padding: 8px 8px 0; gap: 6px; }
+  .sd-count { font-size: 14px; }
+  .sd-clock { font-size: 16px; }
+  .sd-icon { width: 24px; height: 24px; }
+  .sd-pill { height: 26px; padding: 0 8px; font-size: 11px; }
 }
-.held-count {
-  color: rgba(255, 255, 255, .72);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.top-right {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 6px;
-}
-.icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  color: #fff;
-  background: rgba(255, 255, 255, .12);
-}
-.icon-button:hover:not(:disabled) { background: rgba(255, 255, 255, .24); }
-.icon-button:disabled { opacity: .35; }
-.icon-button.active { background: rgba(53, 214, 164, .28); color: #8ff0cd; }
-.icon-button svg {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
-}
-.pill-button {
-  min-width: 46px;
-  min-height: 30px;
-  padding: 0 12px;
-  border-radius: 999px;
-  color: #fff;
-  font-size: 13px;
-  background: rgba(0, 0, 0, .72);
-  transition: background .15s;
-}
-.pill-button:hover:not(:disabled) { background: #272729; }
-.pill-button:disabled { opacity: .4; }
-.icon-button:focus-visible,
-.pill-button:focus-visible {
-  outline: 2px solid var(--color-primary-on-dark);
-  outline-offset: 2px;
-}
-@media (max-width: 560px) {
-  .playback-top { gap: 6px; }
-  .top-left { gap: 8px; }
-  .top-right { gap: 4px; }
-  .icon-button { width: 30px; height: 30px; }
-  .remaining { font-size: 18px; }
-  .item-count { max-width: 30%; }
-}
-@media (max-width: 400px) {
-  .held-count { display: none; }
-  .item-count { max-width: 34%; }
-}
-@media (min-width: 900px) {
-  .desktop-only { display: inline-flex; }
-}
+@media (max-width: 400px) { .sd-held { display: none; } }
 </style>

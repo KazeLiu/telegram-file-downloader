@@ -1,47 +1,61 @@
-// 首次进入播放时的引导文案与本机「已看过」标记。纯数据，不涉及 Vue。
-import type { GuideStep } from './types'
+// 玩法引导：第一次进入播放器时按步演示，Esc 跳过。
+import type { GuideStep } from './types.ts'
 
-/** 「已看过引导」的本机存储键。 */
-export const guideSeenKey = 'shicun.playback.guide.v1'
+export const guideSeenKey = 'shicun.edge.guide.v1'
 
-/** 五步引导：切图、颜色含义、暂停与继续、键鼠手势、怎么结束。 */
 export const guideSteps: GuideStep[] = [
   {
-    title: '怎么切图',
-    body: '左右方向键、点一下画面或左右滑动都能换一张。按时间播放会按间隔自动切；按 BPM 播放时每响一拍切一张。',
+    title: '屏幕是绿色时可以撸',
+    body: '手跟着光和声音的节拍。一拍一下，别抢也别慢。画面下方的进度条走完，这条指令就结束了。',
   },
   {
-    title: '三档颜色',
-    body: '慢速是放慢的节奏，快速要跟上节拍，休息时松手别碰。画面颜色跟着当前阶段变化，底部图例写着三段各做什么。',
+    title: '黄色是放慢、挑逗',
+    body: '这时候不用急，慢慢来。节拍会变低，跟着低音一下一下地动。',
   },
   {
-    title: '怎么暂停与继续',
-    body: '空格或下方中间按钮暂停，再按一次继续。暂停时节拍、自动切图和计时都会停下，画面留在当前这一张。',
+    title: '变红就松手',
+    body: '屏幕变红、掉到闷红时，立刻松手。结束前不许碰。等它平息了才轮到下一条。',
   },
   {
-    title: '键盘与手势',
-    body: '← → 上一项与下一项，F 切换全屏，Esc 退出播放。手机上左右滑动换图，双指放大后可以拖动查看细节。',
+    title: '忍住了就按「忍住了」',
+    body: '在快忍不住的前一刻停下来就按。每按一次，最后拿到许可的概率 +5%，最多累计 +20%。',
   },
   {
-    title: '怎么结束',
-    body: '点右上角退出，或点下方结束，会停在结束卡上。时间到会按许可率结算：忍住得越多越容易拿到许可，没忍住可以点「射了」直接结束。返回播放列表不会删除任何文件。',
+    title: '射了就输',
+    body: '时间到之前射了，这一局就结束。按下「射了」会记录你撑了多久。',
+  },
+  {
+    title: '时间到之后要抽签',
+    body: '按难度对应的概率决定「允许」还是「禁止」。允许了就要在倒计时内射出来。',
+  },
+  {
+    title: '键盘也能操作',
+    body: '空格 暂停 / 继续 · E 记一次忍住 · F 全屏 · Esc 退出。手机上直接点按钮。',
+  },
+  {
+    title: '声音可以自己调',
+    body: '右上角的喇叭图标里可以调视频音量、节拍声（最高 300%）和画面变暗程度。',
+  },
+  {
+    title: '准备好就离开',
+    body: '把手放好，别急。你也可以随时点「退出」回到列表换一套设置。',
   },
 ]
 
-/** 读取是否看过引导；存储不可用或值异常都当作没看过。 */
-export function readGuideSeen(): boolean {
+export function readGuideSeen() {
+  if (typeof localStorage === 'undefined') return true
   try {
     return localStorage.getItem(guideSeenKey) === '1'
   } catch {
-    return false
+    return true
   }
 }
 
-/** 记下已看过引导；写不进去时静默忽略，下次再显示一次。 */
-export function markGuideSeen(): void {
+export function markGuideSeen() {
+  if (typeof localStorage === 'undefined') return
   try {
     localStorage.setItem(guideSeenKey, '1')
   } catch {
-    // 隐私模式或存储已满时不影响播放，只是下次会再提示一次。
+    // 忽略配额失败：引导只是提示，不该阻断播放。
   }
 }
