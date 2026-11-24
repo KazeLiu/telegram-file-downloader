@@ -33,7 +33,7 @@ const virtualizer = useWindowVirtualizer(computed(() => {
   return {
     count: data.length, overscan: props.groups && height > 0 ? Math.max(1, Math.ceil(viewportHeight.value / height / 2)) : 4, scrollMargin: margin.value,
     getItemKey: (index: number) => data[index]!.key,
-    estimateSize: (index: number) => data[index]!.kind === 'day' ? 44 : height,
+    estimateSize: (index: number) => rowHeight(data[index]!),
     rangeExtractor: (range: Parameters<typeof defaultRangeExtractor>[0]) => {
       const indexes = defaultRangeExtractor(range)
       // Keep keyboard focus and its neighbouring rows mounted when scrolling with the mouse.
@@ -50,6 +50,15 @@ const totalHeight = computed(() => virtualizer.value.getTotalSize())
 const totalCount = computed(() => groups.value.reduce((sum, group) => sum + (group.count ?? group.items.length), 0))
 function startsRelated(row: PhotoRow<T>, index = 0) {
   return row.group.dividerAt !== undefined && row.start + index - groupStarts.value.get(row.group.key)! === row.group.dividerAt
+}
+function rowHeight(row: PhotoRow<T>) {
+  return row.kind === 'day' ? 44 : photoHeight.value + (startsRelated(row) ? 20 : 0)
+}
+function rowColumns(row: PhotoRow<T>) {
+  const split = row.group.dividerAt === undefined ? 0 : row.group.dividerAt + groupStarts.value.get(row.group.key)! - row.start
+  return row.kind === 'photos' && split > 0 && split < row.count
+    ? `repeat(${split}, minmax(0, 1fr)) 28px repeat(${columns.value - split}, minmax(0, 1fr))`
+    : `repeat(${columns.value}, minmax(0, 1fr))`
 }
 watch(visibleRows, (visible) => {
   if (width.value <= 0 || photoHeight.value <= 0) return
@@ -86,8 +95,8 @@ function measure() {
   if (anchor) {
     let top = margin.value
     for (const row of rows.value) {
-      if (photo ? row.items.some(item => item.id === photo.id) : row.kind === 'photos' && row.start <= anchorStart && row.start + row.count > anchorStart) { top += fraction * photoHeight.value; break }
-      top += row.kind === 'day' ? 44 : photoHeight.value
+      if (photo ? row.items.some(item => item.id === photo.id) : row.kind === 'photos' && row.start <= anchorStart && row.start + row.count > anchorStart) { top += fraction * rowHeight(row); break }
+      top += rowHeight(row)
     }
     const revision = ++layoutRevision
     // Apply the anchor after the spacer grows, otherwise the browser clamps the new scroll offset.
@@ -103,7 +112,7 @@ function blur(event: FocusEvent) {
 function jump(day: string) {
   const index = rows.value.findIndex(row => row.kind === 'day' && row.group.key === day)
   if (index >= 0) {
-    const top = rows.value.slice(0, index).reduce((top, row) => top + (row.kind === 'day' ? 44 : photoHeight.value), margin.value)
+    const top = rows.value.slice(0, index).reduce((top, row) => top + rowHeight(row), margin.value)
     window.scrollTo({ top: top - (props.topInset ?? 0), behavior: 'instant' })
   }
 }
@@ -122,7 +131,7 @@ onUnmounted(() => { observer.disconnect(); window.removeEventListener('resize', 
   <div ref="wall" class="virtual-photo-wall" :style="{ '--wall-column-gap': `${gap}px` }" role="list" @focusin="focus" @focusout="blur">
     <div class="virtual-photo-space" role="presentation" :style="{ height: `${totalHeight}px` }">
       <div v-for="{ virtual, row } in visibleRows" :key="row.key" class="virtual-photo-row" :class="{ 'related-row-start': row.kind === 'photos' && startsRelated(row) }" :data-wall-row="row.key" role="presentation"
-        :style="{ height: `${virtual.size}px`, transform: `translateY(${virtual.start - margin}px)`, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, columnGap: `${gap}px` }">
+        :style="{ height: `${virtual.size}px`, transform: `translateY(${virtual.start - margin}px)`, gridTemplateColumns: rowColumns(row), columnGap: `${gap}px` }">
         <div v-if="row.kind === 'day' && $slots.heading" class="wall-day"><slot name="heading" :group="row.group" /></div>
         <h3 v-else-if="row.kind === 'day'" class="wall-day">
           <button type="button" role="checkbox" class="day-select" :aria-checked="dayStates.get(row.group.key)" :disabled="disabled || !row.group.items.length"
@@ -132,9 +141,12 @@ onUnmounted(() => { observer.disconnect(); window.removeEventListener('resize', 
             <span>{{ row.group.label ?? row.group.key }}</span><span class="text-xs text-muted">{{ row.group.count ?? row.group.items.length }} 项</span>
           </button>
         </h3>
-        <div v-for="(item, index) in row.items" :key="item.id" class="virtual-photo-cell" :class="{ 'related-cell-start': index > 0 && startsRelated(row, index) }" role="listitem" :aria-posinset="row.start + index + 1" :aria-setsize="totalCount">
-          <span v-if="startsRelated(row, index)" class="sr-only">{{ row.group.dividerLabel }}</span><slot :item="item" />
-        </div>
+        <template v-for="(item, index) in row.items" :key="item.id">
+          <span v-if="index > 0 && startsRelated(row, index)" class="related-divider" role="separator" aria-orientation="vertical" :aria-label="row.group.dividerLabel" />
+          <div class="virtual-photo-cell" role="listitem" :aria-posinset="row.start + index + 1" :aria-setsize="totalCount">
+            <span v-if="index === 0 && startsRelated(row)" class="sr-only">{{ row.group.dividerLabel }}</span><slot :item="item" />
+          </div>
+        </template>
         <div v-for="index in row.count - row.items.length" :key="`pending:${index}`" class="virtual-photo-cell"><slot name="pending" :day="row.group.key"><div class="aspect-square rounded-lg bg-soft" /></slot></div>
       </div>
     </div>
@@ -147,10 +159,10 @@ onUnmounted(() => { observer.disconnect(); window.removeEventListener('resize', 
 .virtual-photo-space { @apply relative col-span-full min-w-0; }
 .virtual-photo-row { @apply absolute top-0 left-0 grid w-full items-start; }
 .virtual-photo-cell { @apply min-w-0; }
-.related-cell-start { @apply relative; }
-.related-cell-start::before, .related-row-start::before { content: ''; @apply pointer-events-none absolute bg-hairline; }
-.related-cell-start::before { left: calc(var(--wall-column-gap) / -2 - 1px); top: 0; bottom: var(--wall-column-gap); width: 2px; }
-.related-row-start::before { left: 0; right: 0; top: calc(var(--wall-column-gap) / -2 - 1px); height: 2px; }
+.related-divider { @apply pointer-events-none flex self-stretch justify-center; height: calc(100% - var(--wall-column-gap)); }
+.related-divider::before { content: ''; @apply w-1 rounded-full bg-hairline; }
+.related-row-start { padding-top: 20px; }
+.related-row-start::before { content: ''; @apply pointer-events-none absolute right-0 left-0 h-1 rounded-full bg-hairline; top: 6px; }
 .wall-day { @apply col-span-full m-0 min-w-0 text-sm font-semibold; }
 .day-select { @apply flex min-h-[44px] max-w-full items-center gap-2 p-0 text-left; }
 .day-check { @apply grid size-[18px] shrink-0 place-items-center rounded-sm border border-solid border-hairline bg-canvas; }

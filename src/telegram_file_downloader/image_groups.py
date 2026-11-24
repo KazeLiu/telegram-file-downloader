@@ -20,7 +20,7 @@ SERIAL = re.compile(r"^(.+?)[-_ ]\s*[0-9]+$")
 PHASH_DISTANCE = 16
 MIN_SSIM = .75
 MAX_CANDIDATES = 12
-PROFILE = f"local-groups-v1:{ALGORITHM}:{PHASH_DISTANCE}:{MIN_SSIM}:{MAX_CANDIDATES}"
+PROFILE = f"local-groups-v2:{ALGORITHM}:{PHASH_DISTANCE}:{MIN_SSIM}:{MAX_CANDIDATES}"
 
 
 def filename_series(name):
@@ -42,6 +42,25 @@ def partition_groups(items, keys, mode):
     return groups, [item for item in items if item["id"] not in assigned]
 
 
+def attach_related(groups, remaining, keys, mode):
+    owners = {}
+    # Only original primary members define associations; existing groups never merge or form chains.
+    for group in groups:
+        for item in group["items"]:
+            key = keys[item["id"]][mode]
+            if key:
+                owners.setdefault(key, group)
+    unassigned = []
+    for item in remaining:
+        owner = owners.get(keys[item["id"]][mode])
+        if owner is None:
+            unassigned.append(item)
+        else:
+            owner["items"].append(item)
+            owner["related_by"] = mode
+    return unassigned
+
+
 class ImageGroups:
     def __init__(self, library, dedup, store, busy):
         self.library, self.dedup = library, dedup
@@ -52,11 +71,15 @@ class ImageGroups:
         self.wake = asyncio.Event()
         self.library.db.execute("""CREATE TABLE IF NOT EXISTS similarity_groups (
             image_id INTEGER PRIMARY KEY, version TEXT NOT NULL, group_id INTEGER NOT NULL, profile TEXT NOT NULL)""")
+        columns = {column["name"] for column in self.library.db.execute("PRAGMA table_info(similarity_groups)")}
+        for name in ("remaining_group", "unlinked_group"):
+            if name not in columns:
+                self.library.db.execute(f"ALTER TABLE similarity_groups ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
         self.library.db.commit()
-        self.members = {row["image_id"]: (row["version"], row["group_id"]) for row in
+        self.members = {row["image_id"]: (row["version"], row["group_id"], row["remaining_group"], row["unlinked_group"]) for row in
                         self.library.db.execute("SELECT * FROM similarity_groups WHERE profile=?", (PROFILE,))}
         self.processing = {}
-        self.state = dict(phase="waiting", done=0, total=0, skipped=0, error="", last_check=None)
+        self.state = dict(phase="waiting", stage="", done=0, total=0, skipped=0, error="", last_check=None)
 
     def request(self):
         if not self.closing:
@@ -121,7 +144,7 @@ class ImageGroups:
                 retry = any((row["error"] and self.members.get(row["id"], ("", 0))[1]) or
                             (not row["error"] and not self.members.get(row["id"], ("", 0))[1]) for row in records)
                 if cached and not retry:
-                    self.state.update(phase="ready", done=len(records), total=len(records), error="",
+                    self.state.update(phase="ready", stage="", done=len(records), total=len(records), error="",
                         skipped=sum(not member[1] for member in self.members.values()),
                         last_check=self.state["last_check"] or time.time())
                 else:
@@ -149,22 +172,11 @@ class ImageGroups:
         secondary = "similarity" if mode == "filename" else "filename"
         groups, remaining = partition_groups(items, keys, mode)
         if related:
-            owners = {}
-            # Only original primary members define associations; existing groups never merge or form chains.
-            for group in groups:
-                for item in group["items"]:
-                    key = keys[item["id"]][secondary]
-                    if key:
-                        owners.setdefault(key, group)
-            unassigned = []
+            remaining = attach_related(groups, remaining, keys, secondary)
+        if mode == "filename":
             for item in remaining:
-                owner = owners.get(keys[item["id"]][secondary])
-                if owner is None:
-                    unassigned.append(item)
-                else:
-                    owner["items"].append(item)
-                    owner["related_by"] = secondary
-            remaining = unassigned
+                member = self.members.get(item["id"])
+                keys[item["id"]]["similarity"] = member[3 if related else 2] if member and member[0] == item["version"] and not item["error"] else 0
         secondary_groups, singles = partition_groups(remaining, keys, secondary)
         needle = search.casefold()
         result = [group for group in groups + secondary_groups
@@ -175,15 +187,55 @@ class ImageGroups:
         return dict(groups=result, grouping=self.state)
 
     async def compute(self, records):
+        self.state["skipped"] = 0
+        all_members = await self.compute_pass(records, "all")
+        if all_members is None:
+            return False
+        keys = {row["id"]: dict(filename=filename_series(row["name"]), similarity=all_members[row["id"]][1]) for row in records}
+        groups, remaining = partition_groups(records, keys, "filename")
+        unlinked = attach_related(groups, remaining, keys, "similarity")
+        remaining_members = await self.compute_pass(remaining, "remaining")
+        if remaining_members is None:
+            return False
+        if len(remaining) == len(unlinked):
+            unlinked_members = remaining_members
+        else:
+            unlinked_members = await self.compute_pass(unlinked, "unlinked")
+            if unlinked_members is None:
+                return False
+        members = {}
+        for image_id, (version, group) in all_members.items():
+            remaining_group = remaining_members.get(image_id, (version, 0))[1]
+            unlinked_group = unlinked_members.get(image_id, (version, 0))[1]
+            if (image_id in remaining_members and not remaining_group) or (image_id in unlinked_members and not unlinked_group):
+                group = 0
+            members[image_id] = (version, group, remaining_group, unlinked_group)
+        if self.closing or self.wake.is_set() or self.library.state["running"]:
+            return False
+        with self.library.db:
+            self.library.db.execute("DELETE FROM similarity_groups")
+            self.library.db.executemany("""INSERT INTO similarity_groups
+                (image_id,version,group_id,remaining_group,unlinked_group,profile) VALUES (?,?,?,?,?,?)""",
+                ((image_id, *member, PROFILE) for image_id, member in members.items()))
+        self.members = members
+        self.state.update(phase="ready", stage="", done=len(records), total=len(records),
+                          skipped=sum(not member[1] for member in members.values()), last_check=time.time())
+        LOGGER.info("local image grouping complete count=%s remaining=%s unlinked=%s skipped=%s",
+                    len(records), len(remaining), len(unlinked), self.state["skipped"])
+        return True
+
+    async def compute_pass(self, records, stage):
         index, anchors, exact, members = PerceptualIndex(), {}, {}, {}
-        self.processing = members
+        self.state.update(stage=stage, done=0, total=len(records))
+        if stage == "all":
+            self.processing = members
         # Assign against fixed representatives so a chain of near matches cannot merge unrelated ends.
         ordered = sorted(records, key=lambda row: (-(row["width"] or 0) * (row["height"] or 0), -row["size"], row["id"]))
         for row in ordered:
             while self.busy() and not self.closing:
                 await asyncio.sleep(1)
             if self.closing or self.wake.is_set():
-                return False
+                return None
             group = 0
             try:
                 if row["error"]:
@@ -208,7 +260,7 @@ class ImageGroups:
                     # shortcut: bound SSIM work per image; widen the shortlist if real series are missed.
                     for anchor, anchor_file, reference, _, _ in candidates[:MAX_CANDIDATES]:
                         if self.closing or self.wake.is_set():
-                            return False
+                            return None
                         try:
                             score = await self.dedup.pair_score(anchor_file, reference, file, feature)
                         except IMAGE_ERRORS as exc:
@@ -234,15 +286,8 @@ class ImageGroups:
                 self.update_tasks()
             await asyncio.sleep(0)
         if self.closing or self.wake.is_set() or self.library.state["running"]:
-            return False
-        with self.library.db:
-            self.library.db.execute("DELETE FROM similarity_groups")
-            self.library.db.executemany("INSERT INTO similarity_groups VALUES (?,?,?,?)",
-                ((image_id, *member, PROFILE) for image_id, member in members.items()))
-        self.members = members
-        self.state.update(phase="ready", last_check=time.time())
-        LOGGER.info("local image grouping complete count=%s skipped=%s", len(records), self.state["skipped"])
-        return True
+            return None
+        return members
 
     async def close(self):
         self.closing = True

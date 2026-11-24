@@ -14,7 +14,7 @@ interface Recycled { id: string; original: string; size: number; created: number
 type View = 'all' | 'candidates' | 'compressed' | 'recycle'
 type GroupMode = 'filename' | 'similarity'
 type PictureGroup = PhotoGroup<Picture> & { mode?: GroupMode; primary_count: number; related_by?: GroupMode }
-type Grouping = { phase: 'waiting' | 'running' | 'ready' | 'error'; done: number; total: number; skipped: number; error: string; last_check: number | null }
+type Grouping = { phase: 'waiting' | 'running' | 'ready' | 'error'; stage: '' | 'all' | 'remaining' | 'unlinked'; done: number; total: number; skipped: number; error: string; last_check: number | null }
 type Comparison = { running: boolean; phase: string; done: number; total: number; baselines: number; errors: number; error: string; current: string; last_check: number | null }
 const route = useRoute()
 const router = useRouter()
@@ -29,6 +29,8 @@ const groupMode = ref<GroupMode | ''>('')
 const includeRelated = ref(false)
 const groups = ref<PictureGroup[]>([])
 const grouping = ref<Grouping | null>(null)
+const groupingStage = computed(() => grouping.value?.stage === 'remaining' ? '文件名归组后的剩余图片'
+  : grouping.value?.stage === 'unlinked' ? '关联补入后的剩余图片' : '全图库')
 const groupsByKey = computed(() => new Map(groups.value.map(group => [group.key, group])))
 const wallGroups = computed(() => groups.value.map(group => ({ ...group,
   dividerAt: group.primary_count > 0 && group.primary_count < group.items.length ? group.primary_count : undefined,
@@ -69,8 +71,8 @@ let loadRevision = 0
 let polling = false
 let press: { pointerId: number; x: number; y: number; currentX: number; currentY: number; mouse: boolean; item: Picture;
   button: HTMLButtonElement; timer: ReturnType<typeof setTimeout>; range?: { anchor: number; end: number; base: Map<number, Picture> } } | undefined
-let hoverTimer: ReturnType<typeof setTimeout> | undefined
 const hoverPreview = ref<{ item: Picture; left: number; top: number; width: number; height: number }>()
+const hoverCard = ref<HTMLElement>()
 let ignorePointerClick = false
 let loadedScope = ''
 let activeReview: number | null = null
@@ -274,30 +276,39 @@ function selectDay(day: string, items: Picture[]) {
   }
 }
 function hideHoverPreview() {
-  clearTimeout(hoverTimer)
   hoverPreview.value = undefined
 }
 function showHoverPreview(event: PointerEvent, item: Picture) {
-  const { width: imageWidth, height: imageHeight } = item
-  if (event.pointerType !== 'mouse' || press || !imageModel.organizing || blocked.value || !imageWidth || !imageHeight || item.error || imageModel.broken[item.id]) return
-  hideHoverPreview()
-  const anchor = event.currentTarget as HTMLButtonElement
-  hoverTimer = setTimeout(() => {
-    if (!anchor.isConnected || !anchor.matches(':hover') || anchor.disabled) return
-    const rect = anchor.getBoundingClientRect()
-    const gap = 12
-    const viewportWidth = document.documentElement.clientWidth
-    const viewportHeight = window.innerHeight
-    const scale = Math.min(480 / Math.max(imageWidth, imageHeight), (viewportWidth - 2 * gap) / imageWidth, viewportHeight * .65 / imageHeight)
-    const width = imageWidth * scale
-    const height = imageHeight * scale
-    const right = rect.right + gap
-    const left = right + width <= viewportWidth - gap ? right : Math.max(gap, rect.left - gap - width)
-    const top = Math.max(gap, Math.min(rect.top + (rect.height - height) / 2, viewportHeight - height - gap))
-    hoverPreview.value = { item, left, top, width, height }
-  }, 160)
+  if (event.pointerType === 'mouse') openHoverPreview(event.currentTarget as HTMLButtonElement, item)
 }
-watch([() => imageModel.organizing, blocked, () => route.fullPath], hideHoverPreview)
+function openHoverPreview(anchor: HTMLButtonElement, item: Picture) {
+  const { width: imageWidth, height: imageHeight } = item
+  if (press || blocked.value || activeReview !== null || !imageWidth || !imageHeight || item.error || imageModel.broken[item.id]) return
+  const rect = anchor.getBoundingClientRect()
+  const gap = 12
+  const viewportWidth = document.documentElement.clientWidth
+  const viewportHeight = window.innerHeight
+  const scale = Math.min(480 / Math.max(imageWidth, imageHeight), (viewportWidth - 2 * gap) / imageWidth, viewportHeight * .65 / imageHeight)
+  const width = Math.max(Math.min(220, viewportWidth - 2 * gap), imageWidth * scale)
+  const height = imageHeight * scale
+  const right = rect.right + gap
+  const left = right + width <= viewportWidth - gap ? right : Math.max(gap, rect.left - gap - width)
+  const top = Math.max(gap, Math.min(rect.top + (rect.height - height - 40) / 2, viewportHeight - height - 40 - gap))
+  hoverPreview.value = { item, left, top, width, height }
+  void nextTick(() => {
+    if (hoverPreview.value?.item.id !== item.id || !hoverCard.value) return
+    const cardHeight = hoverCard.value.getBoundingClientRect().height
+    hoverPreview.value.top = Math.max(gap, Math.min(rect.top + (rect.height - cardHeight) / 2, viewportHeight - cardHeight - gap))
+  })
+}
+function restoreHoverPreview(x: number, y: number) {
+  if (disposed) return
+  const anchor = document.elementFromPoint(x, y)?.closest<HTMLButtonElement>('button[data-library-picture]')
+  if (!anchor) return
+  const index = picturePositions.value.get(Number(anchor.dataset.libraryPicture))
+  if (index !== undefined) openHoverPreview(anchor, imageModel.items[index]!)
+}
+watch([blocked, () => route.fullPath], hideHoverPreview)
 function dismissPreview(event: KeyboardEvent) {
   if (event.key === 'Escape') hideHoverPreview()
 }
@@ -310,6 +321,7 @@ function stopPress(event?: PointerEvent) {
   rangeSelecting.value = false
   if (current.range) ignorePointerClick = true
   if (current.button.hasPointerCapture(current.pointerId)) current.button.releasePointerCapture(current.pointerId)
+  if (current.mouse && event?.type === 'pointerup') void nextTick(() => restoreHoverPreview(event.clientX, event.clientY))
 }
 function resetPointerClick() { ignorePointerClick = false }
 function preventPointerClick(event: MouseEvent) {
@@ -613,7 +625,7 @@ onBeforeUnmount(() => {
         <button v-if="imageModel.organizing && !groupMode" class="text-button" :disabled="blocked || !imageModel.items.length" @click="selectLoaded">{{ allSelected ? '取消已加载选择' : '全选已加载' }}</button>
       </div>
       <p v-if="grouping?.phase === 'waiting'" class="image-scan" role="status">相似分组已在后台排队，可继续浏览已有结果。</p>
-      <div v-else-if="grouping?.phase === 'running'" class="image-scan" role="status"><span><Icon name="loader" class="loading-icon" :size="16" />后台相似分组 · {{ grouping.done }} / {{ grouping.total }} 张，可继续浏览</span><progress v-if="grouping.total" :value="grouping.done" :max="grouping.total" aria-label="相似分组进度" /></div>
+      <div v-else-if="grouping?.phase === 'running'" class="image-scan" role="status"><span><Icon name="loader" class="loading-icon" :size="16" />后台相似分组 · {{ groupingStage }} · {{ grouping.done }} / {{ grouping.total }} 张，可继续浏览</span><progress v-if="grouping.total" :value="grouping.done" :max="grouping.total" aria-label="相似分组进度" /></div>
       <p v-else-if="grouping?.phase === 'error'" class="notice error" role="alert">相似分组失败：{{ grouping.error }}。请刷新图片后更新列表。</p>
       <p v-else-if="grouping?.skipped" class="notice">{{ grouping.skipped }} 张图片未能参与相似分组，可在「未分组」查看。</p>
       <VirtualPhotoWall :class="imageModel.view === 'compressed' ? 'compressed-wall' : 'image-grid'" :items="imageModel.items" :groups="groupMode ? wallGroups : undefined" :disabled="blocked" :is-selected="isSelected" :aria-busy="imageModel.loading || imageModel.loadingMore" @toggle-day="selectDay">
@@ -686,9 +698,11 @@ onBeforeUnmount(() => {
     <div v-if="imageModel.view === 'recycle'" class="pagination"><span>第 {{ imageModel.page }} / {{ Math.max(1, Math.ceil(imageModel.total / imageModel.pageSize)) }} 页</span><button class="secondary" :disabled="blocked || imageModel.page === 1" @click="page(-1)">上一页</button><button class="secondary" :disabled="blocked || imageModel.page * imageModel.pageSize >= imageModel.total" @click="page(1)">下一页</button></div>
     <ImageReviewDialog ref="reviewDialog" :load-page="listImages" :is-selected="isSelected" @change="reviewChanged" @finish="finishReview" />
     <Teleport to="body">
-      <img v-if="hoverPreview" :key="hoverPreview.item.id" class="image-hover-preview" :src="thumbnail(hoverPreview.item)" alt="" aria-hidden="true"
-        :style="{ left: `${hoverPreview.left}px`, top: `${hoverPreview.top}px`, width: `${hoverPreview.width}px`, height: `${hoverPreview.height}px` }"
-        decoding="async" @error="hideHoverPreview" />
+      <figure v-if="hoverPreview" ref="hoverCard" class="image-hover-preview" aria-hidden="true"
+        :style="{ left: `${hoverPreview.left}px`, top: `${hoverPreview.top}px`, width: `${hoverPreview.width}px` }">
+        <img :key="hoverPreview.item.id" :src="thumbnail(hoverPreview.item)" :style="{ height: `${hoverPreview.height}px` }" alt="" decoding="async" @error="hideHoverPreview" />
+        <figcaption>{{ hoverPreview.item.name }}</figcaption>
+      </figure>
     </Teleport>
     <dialog ref="restoreDialog" class="task-dialog" aria-labelledby="restore-title" @cancel="imageModel.busy && $event.preventDefault()">
       <h2 id="restore-title">还原 {{ restoreModel.targets.length }} 项文件？</h2><p class="my-3">还原到各自的原路径，不覆盖已有同名文件。未成功的项目继续保留在回收站。</p>
@@ -725,7 +739,9 @@ onBeforeUnmount(() => {
 .compressed-pair img { @apply h-0 min-h-0 w-full flex-1 object-contain; }
 .compressed-pair small { @apply truncate text-xs text-muted; }
 .image-preview[aria-pressed=true] .compressed-pair { @apply ring-2 ring-primary ring-inset; }
-.image-hover-preview { @apply pointer-events-none fixed z-[14] rounded-lg border border-solid border-hairline bg-media object-contain shadow-xl; }
+.image-hover-preview { @apply pointer-events-none fixed z-[14] m-0 flex max-h-[calc(100dvh-24px)] flex-col overflow-hidden rounded-lg border border-solid border-hairline bg-media shadow-xl; }
+.image-hover-preview img { @apply block min-h-0 w-full shrink object-contain; }
+.image-hover-preview figcaption { @apply shrink-0 bg-canvas px-3 py-2 text-sm leading-normal text-ink; overflow-wrap: anywhere; }
 .image-group-controls { @apply flex max-w-full flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap; }
 .image-group-controls label { @apply inline-flex min-h-11 flex-row items-center gap-2 text-sm; }
 .image-group-controls select { @apply w-auto; }
