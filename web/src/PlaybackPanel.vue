@@ -15,7 +15,7 @@ import PlaybackTopBar from './playback/PlaybackTopBar.vue'
 import PlaybackVolumePopover from './playback/PlaybackVolumePopover.vue'
 import { guideSteps, markGuideSeen, readGuideSeen } from './playback/guideSteps'
 import type { FinishReason } from './playback/types'
-import { beatVolumeMax, brightnessMin, formatClock, modeColors, modeLabels, textOpacityMin, textScaleMin } from './playback/engine'
+import { beatVolumeMax, brightnessMin, formatClock, modeColors, modeColorsDark, modeLabels, textOpacityMin, textScaleMin } from './playback/engine'
 // brightnessMin 仍用于设置面板的变暗下限；播放层音量面板已改用文字浓度/大小（与参考站一致）。
 import { glansCommands, nippleCommands } from './playback/commands'
 import { EdgeSession, type SessionFrame } from './playback/session'
@@ -243,7 +243,7 @@ const mirrorVisible = computed(() => settings.value.mirror.on && screen.value ==
 const mirrorDim = computed(() => {
   const level = Math.min(100, Math.max(0, dimLevel.value))
   const alpha = Math.min(0.45, (0.45 * (100 - level)) / 80)
-  return rgbaOf(modeColors[mode.value], alpha)
+  return rgbaOf(modeColorsDark[mode.value], alpha)
 })
 
 function rgbaOf(hex: string, alpha: number) {

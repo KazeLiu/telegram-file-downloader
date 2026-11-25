@@ -64,6 +64,13 @@ export const modeColorsBright: Record<EdgeMode, string> = {
   stop: '#ff9aa6'
 }
 
+/** 镜子的「铺满背景」要叠一层模式色的暗色变体（参考站的 ao 表），不是亮色。 */
+export const modeColorsDark: Record<EdgeMode, string> = {
+  go: '#0c3f2c',
+  slow: '#4d3400',
+  stop: '#5c0d16'
+}
+
 export const finaleOrder: Finale[] = ['draw', 'always', 'never', 'ruin', 'continuous', 'overtime']
 
 export const finaleLabels: Record<Finale, string> = {

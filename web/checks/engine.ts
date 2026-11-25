@@ -9,7 +9,7 @@ import {
   adjustMix, beatVolumeMax, bindCommands, buildTimeline, categoryOrder, commandPool, customCommandLimit,
   customCommandTextLimit, decideFinale, difficulties, difficultyOrder, durationChoices, durationMax, durationMin,
   extendChance, extendLengthOrder, extendLineSeconds, extendLines, extendMs,
-  filterByCategories, finaleOrder, finalHoldMs, formatClock, instructionLengthOrder, mixOf, modeColors, modeLabels,
+  filterByCategories, finaleOrder, finalHoldMs, formatClock, instructionLengthOrder, mixOf, modeColors, modeColorsDark, modeLabels,
   modeOrder, mulberry32, permitMaxGain, permitRate, permitStep, pickCommandAt, pickIndex, pickMode, planFocus,
   presets, presetOrder, randomBpm, randomSeed, redBeatOrder, restFixedChoices, restMax, restMin, restRangeChoices,
   restSeconds, rewardChoices, shareOf, swapHands, taskAt, taskSeconds, textOpacityMin, textScaleMin, timeShareOf, toneAfterOrder,
@@ -29,6 +29,8 @@ assert.deepEqual(difficultyOrder, ['easy', 'normal', 'hard', 'hell'])
 assert.deepEqual(modeOrder, ['go', 'slow', 'stop'])
 assert.deepEqual(modeLabels, { go: '可以撸', slow: '慢慢来', stop: '不许碰' })
 assert.deepEqual(modeColors, { go: '#5ee3a1', slow: '#f0c35a', stop: '#ff6b7d' })
+// 镜子铺满背景叠的是模式色的暗色变体，不是亮色。
+assert.deepEqual(modeColorsDark, { go: '#0c3f2c', slow: '#4d3400', stop: '#5c0d16' })
 assert.deepEqual(finaleOrder, ['draw', 'always', 'never', 'ruin', 'continuous', 'overtime'])
 assert.deepEqual(durationChoices, [3, 5, 10, 15, 20, 30])
 assert.equal(durationMin, 1)
