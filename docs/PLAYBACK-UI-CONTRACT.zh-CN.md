@@ -233,6 +233,8 @@ defineEmits<{ close: [skipped: boolean] }>()
 - 入口不变：`defineModel<EdgeSettings>({ required: true })` + `defineProps<{ runtime?: boolean; media?: Playlist }>()`。
 - 单卡片：卡片头（标题 + 实时摘要行）+ 搜索框 + 分组标签 + 分组内容；摘要行由 `summary.ts` 的 `settingsSummary(settings)` 生成。
 - 五组：玩法 / 指令 / 视频·图片 / 声音 / 其他，`runtime` 时隐藏「视频·图片」。每组都有「恢复本组」二次确认。
+- 卡片头右侧对齐参考站：`data-sundome-changed` 显示「与默认不同的项目：N」（忽略 `custom` 与 `seed`），旁边是「恢复默认设置」
+  二次确认按钮——恢复全部默认但保留自己加的口令，与参考站 `resetSettings` 同义。
 - 摘要行格式形如 `10 分钟 · 普通 · 抽签 · 指令 88 种 · 许可率 70% · 不许碰 5–10 秒 · 节拍声开`。
 - 「其他」组含镜子（前置摄像头）：开关先弹同意卡（`mirrorText.consentTitle/consentBody`），点「允许使用摄像头」才 `getUserMedia`；
   失败按 `classifyMirrorError` 出中文提示并保持关闭；开启后可选位置（`铺满背景（调暗）` / `右下角小窗`）。
