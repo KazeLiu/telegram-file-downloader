@@ -184,8 +184,8 @@ defineEmits<{ close: [skipped: boolean] }>()
 
 ## guideSteps.ts
 
-导出 `guideSteps: GuideStep[]`（9 步：绿黄红三色含义、忍住了 +5%、射了就输、时间到抽签、键盘、音量可调 300%、准备好就离开）与
-`readGuideSeen()` / `markGuideSeen()`（localStorage 键 `shicun.edge.guide.v1`，读写失败一律当没看过）。
+导出 `guideSteps: GuideStep[]`（10 步，文案对齐参考站：照着指示做（绿黄红三色）、忍住了、射了、视频快进／快退 10 秒、换个视频、视频大小、悬浮小窗、音量、横屏、暂停・退出）与
+`readGuideSeen()` / `markGuideSeen()`（localStorage 键 `shicun.edge.guide.v2`，读写失败一律当没看过）。
 
 ## sound.ts
 
