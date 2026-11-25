@@ -15,7 +15,7 @@ import PlaybackTopBar from './playback/PlaybackTopBar.vue'
 import PlaybackVolumePopover from './playback/PlaybackVolumePopover.vue'
 import { guideSteps, markGuideSeen, readGuideSeen } from './playback/guideSteps'
 import type { FinishReason } from './playback/types'
-import { beatVolumeMax, formatClock, modeColors, modeColorsDark, modeLabels, textOpacityMin, textScaleMin } from './playback/engine'
+import { beatVolumeMax, dimMin, formatClock, modeColors, modeColorsDark, modeLabels, textOpacityMin, textScaleMax, textScaleMin } from './playback/engine'
 import { glansCommands, nippleCommands } from './playback/commands'
 import { EdgeSession, type SessionFrame } from './playback/session'
 import { edgeStorageKey, readEdgeSettings, writeEdgeSettings, type EdgeSettings } from './playback/settings'
@@ -994,11 +994,12 @@ async function landscape() {
   const orientation = window.screen.orientation as (ScreenOrientation & { lock?: (value: string) => Promise<void> }) | undefined
   try { await orientation?.lock?.('landscape') } catch { note.value = '当前浏览器不支持锁定横屏，可手动旋转设备。' }
 }
-function updateVolume(payload: { key: 'mediaVolume' | 'beatVolume' | 'textOpacity' | 'textScale'; value: number }) {
+function updateVolume(payload: { key: 'mediaVolume' | 'beatVolume' | 'textOpacity' | 'textScale' | 'dim'; value: number }) {
   const value = Math.round(payload.value)
   if (!Number.isFinite(value)) return
   if (payload.key === 'textOpacity') settings.value.textOpacity = Math.min(100, Math.max(textOpacityMin, value))
-  else if (payload.key === 'textScale') settings.value.textScale = Math.min(140, Math.max(textScaleMin, value))
+  else if (payload.key === 'textScale') settings.value.textScale = Math.min(textScaleMax, Math.max(textScaleMin, value))
+  else if (payload.key === 'dim') settings.value.dim = Math.min(100, Math.max(dimMin, value))
   else if (payload.key === 'mediaVolume') {
     settings.value.mediaVolume = Math.min(100, Math.max(0, value))
     if (video.value) video.value.volume = settings.value.mediaVolume / 100
@@ -1071,7 +1072,7 @@ function adjustTextOpacity(delta: number) {
   settings.value.textOpacity = Math.min(100, Math.max(textOpacityMin, textOpacity.value + delta))
 }
 function adjustTextScale(delta: number) {
-  settings.value.textScale = Math.min(140, Math.max(textScaleMin, textScale.value + delta))
+  settings.value.textScale = Math.min(textScaleMax, Math.max(textScaleMin, textScale.value + delta))
 }
 
 watch(current, () => { void loadCurrentImage() })
@@ -1377,6 +1378,8 @@ onBeforeUnmount(() => {
         :text-scale="textScale"
         :text-opacity-min="textOpacityMin"
         :text-scale-min="textScaleMin"
+        :text-scale-max="textScaleMax"
+        :dim="dimLevel"
         @update="updateVolume"
       />
 

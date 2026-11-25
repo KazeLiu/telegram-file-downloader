@@ -24,7 +24,7 @@ defineProps<{
   mode: EdgeMode        // 决定光晕颜色
   dim: number           // 变暗程度 0–100（0 = 完全透明，100 = 0.45 遮罩；对齐参考站）
   opacity: number       // 指令文字不透明度 30–100
-  scale: number         // 指令文字大小 60–140
+  scale: number         // 指令文字大小 60–100（只有缩小）
 }>()
 ```
 
@@ -193,7 +193,7 @@ defineEmits<{ update: [payload: { key: 'mediaVolume' | 'beatVolume' | 'textOpaci
 ```
 
 - 右上卡片：`width: min(288px, calc(100vw - 24px))`、`border: 1px solid rgba(255,255,255,.15)`、`background: rgba(0,0,0,.95)`、圆角 12px。
-- 四行滑杆：视频音量 0–100 / 节拍声 0–`beatVolumeMax` / 指令文字不透明度 / 指令文字大小，每行下方一行 10.5px 说明（照抄参考站文案）。
+- 五行滑杆：视频音量 0–100 / 节拍声 0–`beatVolumeMax` / 指令文字不透明度 / 指令文字大小 60–100 / 视频变暗程度 0–100，每行结构照参考站 `ah`（标题 + 右侧百分比 + 下方 range + 灰色说明 12px/60%）。
 - **不含**心跳音量与视频变暗——这两项在设置面板的「声音」「其他」组。
 
 ## PlaybackGuide.vue

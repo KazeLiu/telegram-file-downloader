@@ -109,6 +109,8 @@ export const dimMin = 0
 /** 指令文字的不透明度与字号下限（与参考站一致：文字最低 30%、字号最低 60%）。 */
 export const textOpacityMin = 30
 export const textScaleMin = 60
+/** 指令文字字号上限（参考站 `max:100`，只有缩小没有放大）。 */
+export const textScaleMax = 100
 export const customCommandLimit = 30
 export const customCommandTextLimit = 60
 export const finalHoldMs = 5000

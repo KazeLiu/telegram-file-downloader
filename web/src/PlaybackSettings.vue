@@ -5,7 +5,7 @@ import type { Playlist } from './playback'
 import { commandPoolNotice, settingsSummary } from './playback/summary'
 import {
   adjustMix, beatVolumeMax, bpmRandomMax, bpmRandomMin, categoryHints, categoryLabels, categoryOrder,
-  textOpacityMin, textScaleMin, formatClock,
+  textOpacityMin, textScaleMax, textScaleMin, formatClock,
   customCommandLimit, customCommandTextLimit, difficultyHints, difficultyLabels, difficultyOrder,
   durationMax, durationMin, extendLengthLabels, extendLengthOrder, finaleHints, finaleLabels, finaleOrder, instructionLengthLabels,
   instructionLengthOrder, mixOf, modeLabels, modeOrder, presetLabels, presetNone, presetNotes, presets, presetOrder,
@@ -635,8 +635,8 @@ void secondsLabel
           </div>
           <label>指令文字不透明度 · {{ settings.textOpacity }}%<input :value="settings.textOpacity" type="range" :min="textOpacityMin" max="100" step="5" @input="settings.textOpacity = Number(($event.target as HTMLInputElement).value)" /></label>
           <p class="muted">视频上方的文字和周围暗色光晕的浓度。调低后能透过文字看到视频（{{ textOpacityMin }}～100%）。</p>
-          <label>指令文字大小 · {{ settings.textScale }}%<input :value="settings.textScale" type="range" :min="textScaleMin" max="140" step="5" @input="settings.textScale = Number(($event.target as HTMLInputElement).value)" /></label>
-          <p class="muted">把视频上方的指令、口白和补充一起缩小（{{ textScaleMin }}～140%）。</p>
+          <label>指令文字大小 · {{ settings.textScale }}%<input :value="settings.textScale" type="range" :min="textScaleMin" :max="textScaleMax" step="5" @input="settings.textScale = Number(($event.target as HTMLInputElement).value)" /></label>
+          <p class="muted">把视频上方的指令、口白和补充一起缩小（{{ textScaleMin }}～{{ textScaleMax }}%）。</p>
           <div class="field">
             <span class="field-label">视频声音</span>
             <div class="chips">

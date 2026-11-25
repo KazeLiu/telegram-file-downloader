@@ -2,7 +2,7 @@
 // 与播放列表分离：列表负责「放哪些媒体」，设置负责「怎么玩」。
 import {
   bpmRandomMax, bpmRandomMin, dimMin, customCommandLimit, customCommandTextLimit, extendLengthOrder, restMax, restMin,
-  textOpacityMin, textScaleMin, videoVolumeMax,
+  textOpacityMin, textScaleMax, textScaleMin, videoVolumeMax,
   type Categories, type CustomCommand, type Difficulty, type ExtendLength, type Finale, type Hand, type InstructionLength,
   toneAfterOrder, toneOrder, type Mix, type RedBeat, type RestMode, type ToneAfter, type ToneKind, type Tune
 } from './engine.ts'
@@ -75,7 +75,7 @@ export interface EdgeSettings {
   pos: 'top' | 'center' | 'bottom'
   /** 指令文字不透明度（30–100） */
   textOpacity: number
-  /** 指令文字大小（60–100） */
+  /** 指令文字大小（60–100，参考站只有缩小没有放大） */
   textScale: number
   /** 按“忍住了”之后的等待时间也继续播放视频 */
   keepVideoWhileCooling: boolean
@@ -330,7 +330,7 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     fit: pickValue(raw.fit, fits, defaultEdgeSettings.fit),
     pos: pickValue(raw.pos, positions, defaultEdgeSettings.pos),
     textOpacity: clampNumber(raw.textOpacity, textOpacityMin, 100, defaultEdgeSettings.textOpacity),
-    textScale: clampNumber(raw.textScale, textScaleMin, 140, defaultEdgeSettings.textScale),
+    textScale: clampNumber(raw.textScale, textScaleMin, textScaleMax, defaultEdgeSettings.textScale),
     videoSound: pickValue(raw.videoSound, videoSounds, defaultEdgeSettings.videoSound),
     skipIntro: boolOr(raw.skipIntro, defaultEdgeSettings.skipIntro),
     tones: readTones(raw.tones),

@@ -103,7 +103,7 @@ interface DifficultyProfile {
 | `fit` | `'cover' \\| 'contain'`（铺满 / 显示完整画面） | `'cover'` |
 | `pos` | `'top' \\| 'center' \\| 'bottom'`（仅 `contain` 生效） | `'center'` |
 | `textOpacity` | 30–100 整数（指令文字不透明度） | 100 |
-| `textScale` | 60–140 整数（指令文字大小） | 100 |
+| `textScale` | 60–100 整数（指令文字大小，只有缩小没有放大） | 100 |
 | `keepVideoWhileCooling` | boolean（按“忍住了”之后的等待时间也继续放视频） | `true` |
 | `videoSound` | `'off' \\| 'end' \\| 'always'`（视频声音） | `'end'` |
 | `skipIntro` | boolean（视频从中间开始播放） | `false` |
@@ -149,7 +149,7 @@ export const restMin = 3 / restMax = 120
 export const restRangeChoices = [[8,16],[10,40],[20,60]] / restFixedChoices
 export const bpmRandomMin = 20 / bpmRandomMax = 300
 export const beatVolumeMax = 300 / videoVolumeMax = 100 / dimMin = 0
-export const textOpacityMin = 30 / textScaleMin = 60
+export const textOpacityMin = 30 / textScaleMin = 60 / textScaleMax = 100
 export const customCommandLimit = 30 / customCommandTextLimit = 60
 export const finalHoldMs = 5000 / permitStep = 0.05 / permitMaxGain = 0.2
 export const multiRounds = 4 / multiRoundSeconds = 25
@@ -329,8 +329,8 @@ export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
 - `pulse(now)`：模式变化时重置节拍；`stop` 阶段按 `redBeat` 决定心跳 / 节拍 / 两者，固定 60 BPM。
 - `frame.phase === 'allow'` 时渲染整屏奖励屏 `PlaybackReward`（ruin 橙 / 允许粉两套 radial-gradient、
   白色倒计时条、`剩余 N 秒`）。
-- 音量弹层 `PlaybackVolumePopover` 四行：视频音量 / 节拍声（0–300）/ 指令文字不透明度（30–100）/
-  指令文字大小（60–140）。
+- 音量弹层 `PlaybackVolumePopover` 五行：视频音量（0–100）/ 节拍声（0–300）/ 指令文字不透明度（30–100）/
+  指令文字大小（60–100）/ 视频变暗程度（0–100）。
 - `settings.keepVideoOnStop`：红色且未进许可窗口时暂停视频；遮罩浓度不变，视频本体透明度按 `1 - 0.2 * dim` 降低（对齐参考站）；
   `settings.switchVideoPerCommand`：`taskKey` 前进时切下一个媒体。
 - `FinishReason = 'duration' | 'queue' | 'manual' | 'lost' | 'allow' | 'deny' | 'ruin'`，
