@@ -59,6 +59,8 @@ export interface EdgeSettings {
   pipSite: string
   /** 每次变换节奏：绿黄指令的 BPM 在范围内每次重新随机 */
   bpmRandom: { on: boolean; min: number; max: number }
+  /** 逐条 BPM 覆盖：键是口令下标，0 表示这条不打节拍（对齐参考站的 `data-sundome-bpm-input`）。 */
+  bpm: Record<string, number>
   /** 心跳跟随 BPM：关掉后红色带 BPM 时心跳仍保持固定节奏 */
   heartbeatSync: boolean
   /** 切换时振动：仅限手机 */
@@ -128,6 +130,7 @@ export const defaultEdgeSettings: EdgeSettings = {
   pipOffer: true,
   pipSite: '',
   bpmRandom: { on: false, min: 60, max: 160 },
+  bpm: {},
   heartbeatSync: true,
   vibrate: true,
   vibrateOn: { command: true, edge: true, finish: true },
@@ -273,6 +276,19 @@ function readBpmRandom(value: unknown): EdgeSettings['bpmRandom'] {
   return { on: boolOr(value.on, base.on), min: Math.min(min, max), max: Math.max(min, max) }
 }
 
+/** 逐条 BPM 覆盖：键必须是非负整数口令下标，值 0–300（0 表示这条不打节拍）。 */
+function readBpmMap(value: unknown): Record<string, number> {
+  if (!isRecord(value)) return {}
+  const result: Record<string, number> = {}
+  for (const [key, raw] of Object.entries(value)) {
+    if (!/^\d+$/.test(key)) continue
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) continue
+    const rate = Math.min(300, Math.max(0, Math.round(raw)))
+    if (rate > 0) result[key] = rate
+  }
+  return result
+}
+
 /** 容错读入：任何字段坏了都退回默认值，绝不抛错。 */
 /** 常看的网站：只留 http(s)，最多 200 字。 */
 function readPipSite(value: unknown): string {
@@ -321,6 +337,7 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     pipOffer: boolOr(raw.pipOffer, defaultEdgeSettings.pipOffer),
     pipSite: readPipSite(raw.pipSite),
     bpmRandom: readBpmRandom(raw.bpmRandom),
+    bpm: readBpmMap(raw.bpm),
     heartbeatSync: boolOr(raw.heartbeatSync, defaultEdgeSettings.heartbeatSync),
     vibrate: boolOr(raw.vibrate, defaultEdgeSettings.vibrate),
     vibrateOn: readVibrateOn(raw.vibrateOn),

@@ -477,9 +477,19 @@ export interface PoolTools {
 
 export function commandPool(
   disabled: number[], custom: CustomCommand[], hand: Hand,
-  base: EdgeCommand[] = maleCommands, tools: PoolTools = {},
+  base: EdgeCommand[] = maleCommands, tools: PoolTools = {}, bpm: Record<string, number> = {},
 ) {
   const blocked = new Set(disabled)
+  /** 逐条 BPM 覆盖：0 表示这条不打节拍，正数替换原 BPM（对齐参考站的 `data-sundome-bpm-input`）。 */
+  const override = (index: number, item: EdgeCommand): EdgeCommand => {
+    const raw = bpm[String(index)]
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) return item
+    if (raw <= 0) {
+      const { bpm: _removed, ...rest } = item
+      return rest
+    }
+    return { ...item, bpm: Math.min(300, Math.round(raw)) }
+  }
   const dress = (item: EdgeCommand) => (hand === 'left' ? { ...item, text: swapHands(item.text) } : { ...item })
   const indexed = (list: EdgeCommand[], offset: number) =>
     list.map((item, index) => ({ index: offset + index, item })).filter(entry => !blocked.has(entry.index))
@@ -495,7 +505,7 @@ export function commandPool(
   const extra: EdgeCommand[] = custom
     .map(item => ({ text: item.text.trim(), mode: item.mode, category: 'custom' as const, ...(item.bpm ? { bpm: item.bpm } : {}) }))
     .filter(item => item.text.length > 0)
-  return [...entries.map(entry => dress(entry.item)), ...extra]
+  return [...entries.map(entry => dress(override(entry.index, entry.item))), ...extra]
 }
 
 /** 指令自带秒数超过 30×分钟数时整条剔除（对齐参考实现），免得极长指令吃掉整局；全被剔除时原样返回。 */

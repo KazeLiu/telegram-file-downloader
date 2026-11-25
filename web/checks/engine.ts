@@ -787,6 +787,14 @@ assert.ok(mirrorText.consentYes.includes('允许'), '同意文案要说明会打
   assert.equal(normalizeEdgeSettings({ pipSite: 'javascript:alert(1)' }).pipSite, '')
   assert.equal(normalizeEdgeSettings({ pipSite: 42 }).pipSite, '')
   assert.equal(normalizeEdgeSettings({ pipSite: `https://a.test/${'x'.repeat(300)}` }).pipSite.length, 200)
+  // 逐条 BPM 覆盖（对齐参考站的 data-sundome-bpm-input）
+  assert.deepEqual(defaults.bpm, {})
+  assert.deepEqual(normalizeEdgeSettings({ bpm: { 3: 120, 5: 0, bad: 80, 7: -5, 9: 999 } }).bpm, { 3: 120, 9: 300 })
+  assert.deepEqual(normalizeEdgeSettings({ bpm: null }).bpm, {})
+  const plainPool = commandPool([], [], 'right')
+  assert.equal(plainPool[3]!.bpm, maleCommands[3]!.bpm, '没有覆盖时保持原 BPM')
+  assert.equal(commandPool([], [], 'right', maleCommands, {}, { 0: 200 })[0]!.bpm, 200, '覆盖 BPM')
+  assert.equal(commandPool([], [], 'right', maleCommands, {}, { 0: 0 })[0]!.bpm, undefined, '0 表示不打节拍')
   assert.equal(recordsText.title, '历史成绩')
   assert.equal(recordsText.empty, '还没有详细记录。从下一局开始保存。')
   // 存取往返

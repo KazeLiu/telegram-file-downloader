@@ -140,7 +140,7 @@ export class EdgeSession {
       ? [...focusPool]
       : dropOverlongCommands(
         filterByCategories(
-          commandPool(settings.disabled, settings.custom, settings.hand, undefined, { toy: settings.toy, aneros: settings.aneros }),
+          commandPool(settings.disabled, settings.custom, settings.hand, undefined, { toy: settings.toy, aneros: settings.aneros }, settings.bpm),
           settings.categories
         ),
         minutes

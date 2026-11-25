@@ -8,9 +8,9 @@ import {
   textOpacityMin, textScaleMax, textScaleMin, formatClock,
   customCommandLimit, customCommandTextLimit, difficultyHints, difficultyLabels, difficultyOrder,
   durationMax, durationMin, extendLengthLabels, extendLengthOrder, finaleHints, finaleLabels, finaleOrder, instructionLengthLabels,
-  instructionLengthOrder, mixOf, modeLabels, modeOrder, presetLabels, presetNone, presetNotes, presets, presetOrder,
+  instructionLengthOrder, mixOf, modeColors, modeLabels, modeOrder, presetLabels, presetNone, presetNotes, presets, presetOrder,
   randomTimeNote,
-  redBeatLabels, redBeatOrder, restFixedChoices, restModeLabels, restModeOrder, restRangeChoices,
+  redBeatLabels, redBeatOrder, restMax, restMin, restModeLabels, restModeOrder, restRangeChoices,
   rewardChoices, toneAfterLabels, toneAfterOrder, difficulties, permitRate,
   toneLabels, toneOrder,
   type Difficulty, type EdgeMode,
@@ -102,13 +102,19 @@ const changedCount = computed(() => {
   }).length
 })
 const allArmed = ref(false)
-watch(settings, () => { allArmed.value = false }, { deep: true })
+const resetDone = ref(false)
+watch(settings, () => { allArmed.value = false; resetDone.value = false }, { deep: true, flush: 'sync' })
+/** 参考站是先弹出确认条再执行，所以按钮本身只负责展开确认条。 */
+function askResetAll() {
+  resetDone.value = false
+  allArmed.value = true
+}
 /** 恢复全部默认：保留自己的指令（与参考站的恢复默认一致）。 */
 function resetAll() {
-  if (!allArmed.value) { allArmed.value = true; return }
   allArmed.value = false
   const keep = settings.value.custom.map(item => ({ ...item }))
   Object.assign(settings.value, { ...defaultEdgeSettings, custom: keep, seed: settings.value.seed, tune: { chance: null, stop: null, mix: null } })
+  resetDone.value = true
 }
 
 // 「恢复本组」要求再点一次确认，避免误触清掉还没记住的设置。
@@ -146,6 +152,7 @@ function resetGroup() {
     item.disabled.splice(0, item.disabled.length)
     item.tones = { ...base.tones }
     item.toneLine = { ...base.toneLine }
+    item.bpm = {}
   } else if (selected.value === 'media') {
     const defaults = newPlaylist()
     const media = props.media
@@ -289,6 +296,15 @@ function toggleCommand(index: number) {
   else settings.value.disabled.push(index)
 }
 function enableAllCommands() { settings.value.disabled.splice(0) }
+/** 逐条 BPM：0 表示这条不打节拍，写回原值时从覆盖表里删掉。 */
+function setCommandBpm(index: number, raw: string, fallback: number) {
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return
+  const value = Math.min(300, Math.max(0, Math.round(parsed)))
+  if (value === fallback) delete settings.value.bpm[String(index)]
+  else settings.value.bpm[String(index)] = value
+  if (!Object.keys(settings.value.bpm).length) settings.value.bpm = {}
+}
 
 // 视频·图片组只在不播放时出现：播放中改图库/顺序需要重新取队列，必须回列表。
 const media = computed(() => props.media)
@@ -399,11 +415,17 @@ void secondsLabel
           {{ recordsText.open }}<span class="card-history-count">{{ historyCount }}</span>
         </button>
         <p v-if="changedCount" class="card-changed" data-sundome-changed :data-sundome-changed-count="changedCount">与默认不同的项目：{{ changedCount }}</p>
-        <button type="button" class="text-button card-reset-all" data-sundome-reset-open-head :title="allArmed ? '再点一次把全部设置恢复为默认值' : '恢复全部默认设置，保留自己的指令'" @click="resetAll">{{ allArmed ? '确认恢复？' : '恢复默认设置' }}</button>
+        <button type="button" class="text-button card-reset-all" data-sundome-reset-open-head title="恢复全部默认设置，保留自己的指令" @click="askResetAll">恢复默认设置</button>
+        <span v-if="resetDone" class="card-reset-done" data-sundome-reset-done>已恢复默认设置</span>
         <button v-if="canReset" type="button" class="text-button card-reset" :title="resetArmed ? '再点一次把本组恢复为默认值' : '只把本组恢复为默认值，其他分组不变'" @click="resetGroup">{{ resetLabel }}</button>
       </div>
     </header>
-    <label class="settings-search">查找设置<input v-model="search" type="search" placeholder="例如：乳头、左手、速度、视频" /></label>
+    <div v-if="allArmed" class="card-reset-confirm" data-sundome-reset="confirm">
+      <p>要把设置恢复成默认吗？</p>
+      <button type="button" class="secondary" data-sundome-reset-yes @click="resetAll">恢复</button>
+      <button type="button" class="text-button" data-sundome-reset-no @click="allArmed = false">取消</button>
+    </div>
+    <label class="settings-search">查找设置<input v-model="search" type="search" data-sundome-settings-search placeholder="例如：乳头、左手、速度、视频" /></label>
     <div class="settings-tabs" role="group" aria-label="设置分类" data-sundome-tabs :data-sundome-hits="hitCount < 0 ? visible.length : hitCount">
       <button v-for="group in groups" :key="group.id" type="button" :aria-pressed="!search && selected === group.id" @click="selectGroup(group.id)">{{ group.label }}</button>
     </div>
@@ -496,13 +518,11 @@ void secondsLabel
             <option v-for="item in restRangeChoices" :key="item.join('-')" :value="`${item[0]}-${item[1]}`">{{ item[0] }}～{{ item[1] }} 秒</option>
           </select></label>
           <span class="hint-cell muted">选预设会同时改写下面两个数字，也可以直接改。</span>
-          <label>最短等待（秒）<input :value="settings.rest.min" type="number" min="3" max="120" @change="settings.rest.min = Number(($event.target as HTMLInputElement).value); syncRestMin()" /></label>
-          <label>最长等待（秒）<input :value="settings.rest.max" type="number" min="3" max="120" @change="settings.rest.max = Number(($event.target as HTMLInputElement).value); syncRestMax()" /></label>
+          <label>最短等待（秒）<input :value="settings.rest.min" type="number" inputmode="numeric" :min="restMin" :max="restMax" @change="settings.rest.min = Number(($event.target as HTMLInputElement).value); syncRestMin()" /></label>
+          <label>最长等待（秒）<input :value="settings.rest.max" type="number" inputmode="numeric" :min="restMin" :max="restMax" @change="settings.rest.max = Number(($event.target as HTMLInputElement).value); syncRestMax()" /></label>
         </div>
         <div v-else class="settings-grid">
-          <label>固定等待（秒）<select :value="settings.rest.seconds" @change="settings.rest.seconds = Number(($event.target as HTMLSelectElement).value); syncRestFixed()">
-            <option v-for="value in restFixedChoices" :key="value" :value="value">{{ value }} 秒</option>
-          </select></label>
+          <label>固定等待（秒）<input :value="settings.rest.seconds" type="number" inputmode="numeric" :min="restMin" :max="restMax" data-sundome-rest-seconds @change="settings.rest.seconds = Number(($event.target as HTMLInputElement).value); syncRestFixed()" /></label>
         </div>
         <p class="muted">按下「忍住了」之后进入红色，等这段时长过去再回到循环。</p>
 
@@ -560,11 +580,11 @@ void secondsLabel
 
         <h5 class="field-label">自定义口令（{{ settings.custom.length }}/{{ customCommandLimit }}）</h5>
         <div class="command-form">
-          <label>口令内容<input v-model="draftCommand" type="text" :maxlength="customCommandTextLimit" placeholder="例如：停三秒再继续" @keydown.enter.prevent="addCommand" /></label>
+          <label>口令内容<input v-model="draftCommand" type="text" :maxlength="customCommandTextLimit" placeholder="例如：停三秒再继续" data-sundome-custom-input @keydown.enter.prevent="addCommand" /></label>
           <label>类型<select v-model="draftMode">
             <option v-for="key in modeOrder" :key="key" :value="key">{{ modeLabels[key] }}</option>
           </select></label>
-          <button type="button" class="secondary" :disabled="!canAddCommand" @click="addCommand">添加</button>
+          <button type="button" class="secondary" :disabled="!canAddCommand" data-sundome-custom-add="add" @click="addCommand">添加</button>
         </div>
         <p v-if="settings.custom.length >= customCommandLimit" class="muted">已到 {{ customCommandLimit }} 条上限，删掉一条再添加。</p>
         <p v-else class="muted">单条最多 {{ customCommandTextLimit }} 字；要改就删掉重新添加。</p>
@@ -580,10 +600,33 @@ void secondsLabel
           <summary>逐条启停内置口令（已停用 {{ settings.disabled.length }} 条）</summary>
           <p class="muted">亮着表示启用，点一下停用；停用的口令不会再被抽到。</p>
           <div v-for="commandGroup in commandGroups" :key="commandGroup.mode" class="command-group">
-            <h6 class="command-group-title">{{ commandGroup.label }}（{{ commandGroup.items.length }} 条）</h6>
-            <div class="chips">
-              <button v-for="item in commandGroup.items" :key="item.index" type="button" class="chip" :aria-pressed="!settings.disabled.includes(item.index)" @click="toggleCommand(item.index)">{{ item.command.text }}</button>
-            </div>
+            <h6 class="command-group-title"><span class="legend-dot" :style="{ background: modeColors[commandGroup.mode] }" />{{ commandGroup.label }}（{{ commandGroup.items.length }} 条）</h6>
+            <ul class="command-rows">
+              <li v-for="item in commandGroup.items" :key="item.index">
+                <span class="command-text">{{ item.command.text }}<small v-if="item.command.category !== 'basic'" class="command-cat">{{ categoryLabels[item.command.category as 'edge'] }}</small></span>
+                <input
+                  class="command-bpm"
+                  type="number"
+                  inputmode="numeric"
+                  min="0"
+                  max="300"
+                  :value="settings.bpm[String(item.index)] ?? item.command.bpm ?? 0"
+                  :title="`BPM（0=无节拍）`"
+                  :aria-label="`${item.command.text} BPM（0=无节拍）`"
+                  :data-sundome-bpm-input="item.index"
+                  @change="setCommandBpm(item.index, ($event.target as HTMLInputElement).value, item.command.bpm ?? 0)"
+                />
+                <button
+                  type="button"
+                  role="switch"
+                  class="command-switch"
+                  :aria-checked="!settings.disabled.includes(item.index)"
+                  :aria-label="item.command.text"
+                  :data-sundome-cmd="item.index"
+                  @click="toggleCommand(item.index)"
+                ><span /></button>
+              </li>
+            </ul>
           </div>
           <button v-if="settings.disabled.length" type="button" class="text-button" @click="enableAllCommands">全部启用</button>
         </details>
@@ -770,6 +813,10 @@ void secondsLabel
 .card-history:hover { border-color: var(--color-primary); }
 .card-history-count { color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .card-changed { margin: 0; font-size: 12px; color: var(--color-muted); }
+.card-reset-done { font-size: 12px; font-weight: 600; color: var(--color-primary); }
+.card-reset-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--color-hairline); border-radius: 14px; background: var(--color-parchment); }
+.card-reset-confirm p { margin: 0 auto 0 0; font-size: 13px; font-weight: 600; color: var(--color-ink); }
+.card-reset-confirm button { min-height: 0; }
 .card-days { margin: 2px 0 0; display: grid; gap: 2px; }
 .card-days p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--color-muted); }
 .card-days p.card-days-strong { font-size: 13px; font-weight: 600; color: var(--color-ink); }
@@ -805,6 +852,16 @@ input[type="range"] { padding: 0; min-height: 44px; accent-color: var(--color-pr
 .command-list { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
 .command-list li { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--color-hairline); border-radius: 10px; background: var(--color-pearl); font-size: 14px; }
 .command-list li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.command-rows { display: grid; margin: 4px 0 0; padding: 0; list-style: none; }
+.command-rows li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--color-hairline); }
+.command-rows li:first-child { border-top: 0; }
+.command-text { min-width: 0; flex: 1; font-size: 14px; line-height: 1.5; color: var(--color-ink); overflow-wrap: anywhere; }
+.command-cat { margin-left: 6px; font-size: 10px; color: var(--color-muted); }
+.command-bpm { width: 64px; flex: 0 0 auto; min-height: 0; padding: 4px 8px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+.command-switch { position: relative; width: 40px; height: 24px; flex: 0 0 auto; min-height: 0; padding: 0; border: 0; border-radius: 999px; background: var(--color-soft); cursor: pointer; transition: background-color .15s ease; }
+.command-switch span { position: absolute; top: 4px; left: 4px; width: 16px; height: 16px; border-radius: 999px; background: #fff; transition: transform .15s ease; }
+.command-switch[aria-checked="true"] { background: var(--color-primary); }
+.command-switch[aria-checked="true"] span { transform: translateX(16px); }
 /* 玩法页底部的三色图例与规则句，文案照抄参考站。 */
 .play-legend { display: grid; gap: 6px; margin: 20px 0 0; padding: 0; list-style: none; }
 .play-legend li { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 1.5; color: var(--color-muted); }
