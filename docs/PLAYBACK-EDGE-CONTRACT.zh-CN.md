@@ -93,6 +93,20 @@ interface DifficultyProfile {
 | `switchVideoPerCommand` | boolean（每换一条指令就切下一个视频） | `false` |
 | `bpmRandom` | `{ on: boolean, min: 20–300, max: 20–300 }`（开启后每条绿黄指令的 BPM 在范围内重随机，红色固定 60 不参与） | `{ on: false, min: 60, max: 160 }` |
 | `heartbeatSync` | boolean（心跳跟随 BPM；关掉后红色带 BPM 时心跳仍固定 60） | `true` |
+| `vibrate` | boolean（仅手机有效） | `true` |
+| `vibrateOn` | `{ command, edge, finish }: boolean` | 全 `true` |
+| `toy` | boolean（飞机杯道具模式：并入 20 条道具口令，并剔除 `bareHand` / `shaft` 的手部口令） | `false` |
+| `aneros` | boolean（前列腺按摩器：红色段并入 6 条夹紧口令） | `false` |
+| `tones` | `Record<ToneKind, boolean>`（强势/挑逗/羞辱/温柔/足控，多选时按条轮流） | 全 `false` |
+| `toneLine` | `{ show: boolean, before: boolean, after: 'never' \\| 'half' \\| 'always' }` | `{ true, true, 'half' }` |
+| `fit` | `'cover' \\| 'contain'`（铺满 / 显示完整画面） | `'cover'` |
+| `pos` | `'top' \\| 'center' \\| 'bottom'`（仅 `contain` 生效） | `'center'` |
+| `textOpacity` | 30–100 整数（指令文字不透明度） | 100 |
+| `textScale` | 60–140 整数（指令文字大小） | 100 |
+| `keepVideoWhileCooling` | boolean（按“忍住了”之后的等待时间也继续放视频） | `true` |
+| `videoSound` | `'off' \\| 'end' \\| 'always'`（视频声音） | `'end'` |
+| `skipIntro` | boolean（视频从中间开始播放） | `false` |
+| `mirror` | `{ on: boolean, place: 'bg' \\| 'corner' }`（前置摄像头，仅在播放中开启） | `{ false, 'corner' }` |
 
 导出：`edgeStorageKey`、`edgeSchemaVersion`、`defaultEdgeSettings`、`normalizeEdgeSettings(raw)`、
 `readEdgeSettings(value: string | null)`、`writeEdgeSettings(settings): string`（返回错误串，空串＝成功）。
@@ -315,11 +329,31 @@ export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
 
 | 组 | 字段 |
 | --- | --- |
-| 玩法 | 推荐预设 `presets`、只玩乳头 / 龟头 `nipple` `glans`、时长 `minutes` + `durationRandom`、难度 `difficulty`、自己调 `tune`（许可概率 / 三相位 mix）、结局 `finale` + `allowRuin`、`rewardSeconds`、`rest`、`instructionLength`、图例与规则句 |
-| 指令 | 分类 `categories`、惯用手 `hand`、自定义口令 `custom`（≤30 条 / 60 字）、逐条启停 `disabled`（按 `modeOrder` 分组列 `maleCommands`） |
-| 视频·图片 | 直接绑 `Playlist`：`kind / order / imageCount / imageTiming / imageSeconds / bpm(20–300) / loop / favoritesOnly` + `keepVideoOnStop` + `switchVideoPerCommand` |
-| 声音 | `metronome` + `beatVolume(0–300)`、`mediaVolume(0–100)`、`heartbeat` + `heartbeatVolume(0–300)` + `redBeat` + `heartbeatSync`、`bpmRandom(on/min/max)` |
-| 其他 | `hideRemaining`、`brightness(20–100)`、`mixAudio` |
+| 玩法 | 推荐预设 `presets`、只玩乳头 / 龟头 `nipple` `glans`、道具模式 `toy` `aneros`、时长 `minutes` + `durationRandom`、难度 `difficulty`、自己调 `tune`（许可概率 / 三相位 mix）、结局 `finale` + `allowRuin`、`rewardSeconds`、`rest`、`instructionLength`、图例与规则句 |
+| 指令 | 分类 `categories`、惯用手 `hand`、口吻 `tones` + `toneLine(show/before/after)`、自定义口令 `custom`（≤30 条 / 60 字）、逐条启停 `disabled`（按 `modeOrder` 分组列 `maleCommands`） |
+| 视频·图片 | 直接绑 `Playlist`：`kind / order / imageCount / imageTiming / imageSeconds / bpm(20–300) / loop / favoritesOnly` + `keepVideoOnStop` + `switchVideoPerCommand` + `keepVideoWhileCooling` + `videoSound` + `skipIntro` + `fit` / `pos` + `textOpacity` / `textScale` |
+| 声音 | `metronome` + `beatVolume(0–300)`、`mediaVolume(0–100)`、`heartbeat` + `heartbeatVolume(0–300)` + `redBeat` + `heartbeatSync`、`bpmRandom(on/min/max)`、`vibrate` + `vibrateOn(command/edge/finish)` |
+| 其他 | `hideRemaining`、`brightness(20–100)`、`mixAudio`、`mirror(on/place)` + 前置摄像头同意卡、本机成绩行（`shicun.edge.stats.v1`） |
+
+### 镜子（`web/src/playback/mirror.ts`）
+
+沿用参考站语义：`mirror.on` 且**只在播放中**打开前置摄像头，画面 `scaleX(-1)` 左右翻转。
+`place = 'bg'` 铺满背景并叠一层模式色暗化（alpha `0.45 × dim/100`）；`place = 'corner'` 是右下角 80px（≥640px 为 128px）圆角小窗。
+`mirrorPlaceFor(place, playingVideo)` 在播放视频时强制 `'corner'`。
+
+```ts
+export const mirrorPlaces = ['bg', 'corner'] as const
+export const MIRROR_CONSTRAINTS: MediaStreamConstraints   // { video: { facingMode: 'user' }, audio: false }
+export const mirrorPlaceLabels / mirrorErrorLabels / mirrorText
+export function mirrorSupport(): MirrorError | null        // 非安全上下文或缺 mediaDevices → 'unsupported'
+export function classifyMirrorError(error: unknown): MirrorError   // denied / none / unsupported / busy
+export function stopStream(stream: MediaStream | null): void
+export function mirrorPlaceFor(place: MirrorPlace, playingVideo: boolean): MirrorPlace
+```
+
+设置页点开关先弹同意卡（`mirrorText.consentTitle / consentBody`），点「允许使用摄像头」才真正 `getUserMedia`；
+失败按 `classifyMirrorError` 出中文提示并保持关闭。播放结束、返回列表、重开一局、组件卸载都会 `stopStream`。
+
 
 摘要行 `web/src/playback/summary.ts` 的 `settingsSummary(settings)` 输出形如
 `10 分钟 · 普通 · 抽签 · 指令 88 种 · 许可率 70% · 不许碰 5–10 秒 · 节拍声开`，

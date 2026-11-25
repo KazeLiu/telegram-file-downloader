@@ -1,4 +1,4 @@
-// 寸止玩法的全局设置：对齐参考实现的 settings 结构（去掉联机、语音播报与道具模式）。
+// 寸止玩法的全局设置：对齐参考实现的 settings 结构（去掉联机与语音播报）。
 // 与播放列表分离：列表负责「放哪些媒体」，设置负责「怎么玩」。
 import {
   bpmRandomMax, bpmRandomMin, brightnessMin, customCommandLimit, customCommandTextLimit, restMax, restMin,
@@ -6,6 +6,7 @@ import {
   type Categories, type CustomCommand, type Difficulty, type Finale, type Hand, type InstructionLength,
   toneAfterOrder, toneOrder, type Mix, type RedBeat, type RestMode, type ToneAfter, type ToneKind, type Tune
 } from './engine.ts'
+import { mirrorPlaces, type MirrorPlace } from './mirror.ts'
 
 export interface EdgeRest {
   mode: RestMode
@@ -76,6 +77,8 @@ export interface EdgeSettings {
   /** 口吻：每种开启后在指令前后加一句同口吻的短句 */
   tones: Record<ToneKind, boolean>
   toneLine: { show: boolean; before: boolean; after: ToneAfter }
+  /** 镜子：把前置摄像头左右翻转后显示在屏幕上 */
+  mirror: { on: boolean; place: MirrorPlace }
 }
 
 export const edgeStorageKey = 'shicun.edge.v1'
@@ -126,7 +129,8 @@ export const defaultEdgeSettings: EdgeSettings = {
   videoSound: 'end',
   skipIntro: false,
   tones: { strong: false, tease: false, abuse: false, sweet: false, feet: false },
-  toneLine: { show: true, before: true, after: 'half' }
+  toneLine: { show: true, before: true, after: 'half' },
+  mirror: { on: false, place: 'corner' }
 }
 
 const difficulties: Difficulty[] = ['easy', 'normal', 'hard', 'hell']
@@ -189,6 +193,14 @@ function readToneLine(value: unknown): EdgeSettings['toneLine'] {
     show: boolOr(value.show, base.show),
     before: boolOr(value.before, base.before),
     after: pickValue(value.after, toneAfterOrder, base.after)
+  }
+}
+function readMirror(value: unknown): EdgeSettings['mirror'] {
+  const base = { ...defaultEdgeSettings.mirror }
+  if (!isRecord(value)) return base
+  return {
+    on: boolOr(value.on, base.on),
+    place: pickValue(value.place, mirrorPlaces, base.place)
   }
 }
 function readRest(value: unknown): EdgeRest {
@@ -299,7 +311,8 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     videoSound: pickValue(raw.videoSound, videoSounds, defaultEdgeSettings.videoSound),
     skipIntro: boolOr(raw.skipIntro, defaultEdgeSettings.skipIntro),
     tones: readTones(raw.tones),
-    toneLine: readToneLine(raw.toneLine)
+    toneLine: readToneLine(raw.toneLine),
+    mirror: readMirror(raw.mirror)
   }
 }
 

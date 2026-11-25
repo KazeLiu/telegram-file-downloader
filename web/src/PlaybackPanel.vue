@@ -21,6 +21,10 @@ import { glansCommands, nippleCommands } from './playback/commands'
 import { EdgeSession, type SessionFrame } from './playback/session'
 import { edgeStorageKey, readEdgeSettings, writeEdgeSettings, type EdgeSettings } from './playback/settings'
 import { addSession, readStats, statsStorageKey, writeStats } from './playback/history'
+import {
+  MIRROR_CONSTRAINTS, classifyMirrorError, mirrorErrorLabels, mirrorPlaceFor, mirrorSupport, mirrorText, stopStream,
+  type MirrorError
+} from './playback/mirror'
 import { SoundEngine } from './playback/sound'
 import { loadPlaybackQueue, PlaybackImageBuffer } from './playbackLoader'
 import {
@@ -224,6 +228,74 @@ function videoLoaded(event: Event) {
   syncVideoSound()
   void playVideo()
 }
+
+/* ---- 镜子：前置摄像头左右翻转。画面只在本机使用，暂停 / 结束 / 离开页面就关掉 ---- */
+const mirrorStream = shallowRef<MediaStream | null>(null)
+const mirrorError = ref<MirrorError | null>(null)
+const mirrorVideo = ref<HTMLVideoElement>()
+/** 播放视频时镜子固定收到右下角，避免挡住画面。 */
+const mirrorPlace = computed(() => mirrorPlaceFor(settings.value.mirror.place, current.value?.kind === 'video'))
+const mirrorVisible = computed(() => settings.value.mirror.on && screen.value === 'playing' && !paused.value && !mirrorError.value)
+/** 铺满背景时叠一层模式色遮罩（参考站用暗色变体，浓度跟随变暗设置）。 */
+const mirrorDim = computed(() => {
+  const level = Math.min(100, Math.max(0, dimLevel.value))
+  const alpha = Math.min(0.45, (0.45 * (100 - level)) / 80)
+  return rgbaOf(modeColors[mode.value], alpha)
+})
+
+function rgbaOf(hex: string, alpha: number) {
+  const value = hex.replace('#', '')
+  const full = value.length === 3 ? value.split('').map(char => char + char).join('') : value
+  const r = parseInt(full.slice(0, 2), 16)
+  const g = parseInt(full.slice(2, 4), 16)
+  const b = parseInt(full.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`
+}
+
+function attachMirror() {
+  const element = mirrorVideo.value
+  const stream = mirrorStream.value
+  if (!element || !stream) return
+  if (element.srcObject !== stream) element.srcObject = stream
+  const playback = element.play?.()
+  if (playback && typeof playback.catch === 'function') playback.catch(() => {})
+}
+
+function stopMirror() {
+  stopStream(mirrorStream.value)
+  mirrorStream.value = null
+  const element = mirrorVideo.value
+  if (element) element.srcObject = null
+}
+
+function failMirror(reason: MirrorError) {
+  mirrorError.value = reason
+  stopMirror()
+  settings.value.mirror.on = false
+  note.value = mirrorErrorLabels[reason]
+}
+
+async function startMirror() {
+  if (mirrorStream.value) return
+  const problem = mirrorSupport()
+  if (problem) { failMirror(problem); return }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(MIRROR_CONSTRAINTS)
+    // 期间可能被关掉（或整局结束），拿到流先检查再挂上
+    if (!settings.value.mirror.on || screen.value !== 'playing') { stopStream(stream); return }
+    mirrorStream.value = stream
+    mirrorError.value = null
+    await nextTick()
+    attachMirror()
+  } catch (error) {
+    failMirror(classifyMirrorError(error))
+  }
+}
+
+watch(mirrorVisible, visible => {
+  if (visible) void startMirror()
+  else stopMirror()
+})
 
 /* ---- 双击 / 连点快进：视频右半快进、左半后退，700ms 内同侧累加 ---- */
 const seekFlash = ref<{ side: number; total: number; x: number; y: number; key: number } | null>(null)
@@ -487,6 +559,7 @@ async function playVideo() {
 function finish(reason: FinishReason) {
   queueRequest.abort(); queueLoading.value = false; pendingAdvance = false
   imageLoad++; imageBuffer.clear()
+  stopMirror()
   pause()
   buzz([60, 40, 60, 40, 120], 'finish')
   recordStats(reason)
@@ -818,6 +891,7 @@ function updateVolume(payload: { key: 'mediaVolume' | 'beatVolume' | 'textOpacit
 }
 function backToLists() {
   queueRequest.abort(); queueLoading.value = false; pendingAdvance = false; imageLoad++; imageBuffer.clear()
+  stopMirror()
   pause(); screen.value = 'setup'; runtimeSettings.value = false; queue.value = []; availableMedia = []
   error.value = ''; note.value = ''; session.value = null; frame.value = null; held.value = 0
   if (document.fullscreenElement === playerElement.value) void document.exitFullscreen()
@@ -830,6 +904,7 @@ function exitRun() {
 function restart() {
   if (!options.value) { backToLists(); return }
   imageBuffer.clear(); imageLoad++
+  stopMirror()
   const cycle = playbackCycle(availableMedia, options.value, preferences.shownImages)
   queue.value = cycle.queue; preferences.shownImages = cycle.shownImages
   beginSession()
@@ -902,6 +977,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true; request.abort(); queueRequest.abort(); imageLoad++; imageBuffer.clear(); clearInterval(timer); pause()
+  stopMirror()
   try { pipWindow?.close() } catch {}
   pipWindow = null
   document.documentElement.classList.remove('playback-immersive')
@@ -1011,6 +1087,14 @@ onBeforeUnmount(() => {
               @canplay="videoReady" @play="videoStarted" @playing="videoPlaying" @waiting="videoReady"
               @pause="videoPaused" @ended="$event.currentTarget === video && step(1)" @error="mediaFailed"
             />
+            <!-- 镜子：前置摄像头左右翻转；铺满背景时叠一层模式色遮罩，与参考站一致 -->
+            <video
+              v-if="mirrorVisible" ref="mirrorVideo" class="mirror-video" :class="`mirror-${mirrorPlace}`"
+              :data-sundome-mirror="mirrorPlace" :aria-label="mirrorText.aria"
+              autoplay playsinline muted disablePictureInPicture
+              @loadedmetadata="attachMirror"
+            />
+            <div v-if="mirrorVisible && mirrorPlace === 'bg'" class="mirror-dim" :style="{ backgroundColor: mirrorDim }" aria-hidden="true" />
           </div>
         </template>
         <template #top>
@@ -1157,7 +1241,14 @@ onBeforeUnmount(() => {
 .playback-start { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .playback-runtime { position: fixed; inset: 0; z-index: 60; color: #fff; outline: none; }
 .playback-runtime:fullscreen { inset: 0; width: 100%; height: 100%; background: #000; }
-.playback-media { position: absolute; inset: 0; overflow: hidden; }
+/* 媒体层要接收手势（拖拽缩放、双击快进），外层 .sd-media 是 pointer-events:none。 */
+.playback-media { position: absolute; inset: 0; overflow: hidden; pointer-events: auto; }
+/* 镜子：前置摄像头画面左右翻转。铺满背景时压暗，播放视频时固定到右下角小窗 */
+.mirror-video { pointer-events: none; object-fit: cover; position: absolute; }
+.mirror-bg { inset: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+.mirror-corner { right: 12px; bottom: 84px; z-index: 20; width: 80px; aspect-ratio: 3 / 4; border: 1px solid rgba(255, 255, 255, .3); border-radius: 12px; background: #000; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); transform: scaleX(-1); }
+.mirror-dim { position: absolute; inset: 0; transition: background-color .5s ease; }
+@media (min-width: 640px) { .mirror-corner { width: 128px; } }
 .image-viewport { width: 100%; height: 100%; overflow: hidden; touch-action: pan-y pinch-zoom; cursor: pointer; user-select: none; }
 .image-viewport.zoomed { overflow: auto; touch-action: none; cursor: grab; }
 .image-canvas { display: grid; place-items: center; }

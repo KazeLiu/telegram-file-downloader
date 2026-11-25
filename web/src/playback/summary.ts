@@ -31,6 +31,7 @@ export function settingsSummary(settings: EdgeSettings) {
   if (tones.length) parts.push(`口吻 ${tones.map(key => toneLabels[key]).join('+')}`)
   if (settings.bpmRandom.on) parts.push(`每次变换节奏 ${settings.bpmRandom.min}–${settings.bpmRandom.max}`)
   if (settings.hand === 'left') parts.push('左撇子')
+  if (settings.mirror.on) parts.push('镜子')
   parts.push(settings.metronome ? '节拍声开' : '节拍声关')
   return parts.filter(Boolean).join(' · ')
 }

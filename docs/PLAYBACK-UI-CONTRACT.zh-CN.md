@@ -30,7 +30,8 @@ defineProps<{
 
 - 根 `.sd-stage`：`position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; color: #fff; background: #0a0708`。
 - `.sd-glow`：四层 `radial-gradient`（`110% 60% at 50% 0` α.7 / `110% 55% at 50% 100` α.55 / `70% 50% at 0% 50` α.24 / `70% 50% at 100% 50` α.24），色取 `modeColors[mode]`，`transition: background-image .8s ease; opacity .92`。
-- `.sd-mask`：`opacity = (100 - dim) / 100`，盖在媒体上方。
+- `.sd-mask`：独立 `div`，`backgroundColor: rgba(0, 0, 0, min(0.45, 0.45 × (100 - dim) / 80))`，`transition: background-color .3s ease`。
+  **不是 CSS `filter: brightness()`**——媒体本体不再挂 filter，变暗完全由这层 rgba 遮罩表达（对齐参考站的 `data-sundome-video-shade`）。
 - 插槽：`media`（媒体本体，z-index 1）、`top`、默认插槽（中央）、`bottom`。
 - `.sd-center` 挂 `radial-gradient(70% 55% at 50% 50%, rgba(0,0,0,.6), transparent)` 与文字投影，让白字在视频上也清晰；`.sd-center-inner` 用 CSS 变量 `--sd-text-opacity` / `--sd-text-scale`。
 
@@ -45,7 +46,8 @@ defineProps<{
   paused: boolean
   playing: boolean
   held: number             // 忍住次数
-  noCrop: boolean
+  noCrop: boolean          // = settings.fit === 'contain'
+  align: 'top' | 'center' | 'bottom'   // = settings.pos
   pipAvailable: boolean
   landscapeAvailable: boolean
   volumeOpen: boolean
@@ -54,6 +56,7 @@ defineProps<{
 }>()
 defineEmits<{
   'toggle-crop': []
+  'cycle-position': []
   'pip': []
   'volume': []
   'landscape': []
@@ -63,9 +66,11 @@ defineEmits<{
 }>()
 ```
 
-- 左：`.sd-count`（16px/800 斜体，`第 N 条指令` 或 `note`）+ `.sd-held`（`忍住 N`）；中：`.sd-clock`（18px/700 tabular-nums）；右：4 个 28×28 圆钮（`expand`/`shrink` 切换裁切、`pip`、`volume`、`rotate`）与 3 个 30px 高药丸（全屏／暂停·继续／退出）。
+- 左：`.sd-count`（16px/800 斜体，`第 N 条指令` 或 `note`）+ `.sd-held`（`忍住 N`）；中：`.sd-clock`（18px/700 tabular-nums）；右：`fit`（`expand`/`shrink` 切换裁切）→ `pos`（**仅 `noCrop` 时出现**，`Icon name="position"`，循环 `center → top → bottom`）→ `pip` → `volume` → `landscape` → 3 个 30px 高药丸（全屏／暂停·继续／退出）。
+- 按钮均带 `data-sundome-*` 属性以便和参考站对齐：`data-sundome-count` / `clock` / `fit-toggle` / `pos-toggle` / `pip-toggle` / `volume-toggle` / `landscape` / `fullscreen` / `pause` / `quit`。
 - 所有按钮必须 `min-height: 0`——`web/app/assets/main.css` 有全局 `button { @apply min-h-11 }`，不覆盖会被撑到 44px。
-- 图标名必须存在于 `Icon.vue`（已补 `expand`/`shrink`/`pip`/`volume`/`rotate`/`stop`/`spark`）。
+- 图标名必须存在于 `Icon.vue`（已补 `expand`/`shrink`/`pip`/`volume`/`rotate`/`position`/`stop`/`spark`）。
+
 
 ## PlaybackStage.vue
 
@@ -196,6 +201,8 @@ defineEmits<{ close: [skipped: boolean] }>()
 
 - 媒体层：`shicun.playback.v1`，`schemaVersion = 4`，`format = shicun.playback.config.v4`；`Playlist` **只剩媒体字段**，旧 v1–v3 存档升级时丢弃已作废的玩法字段。
 - 玩法层：`shicun.edge.v1`，`edgeSchemaVersion = 1`，`EdgeSettings` 见实施契约。
+- 本机成绩：`shicun.edge.stats.v1`（`web/src/playback/history.ts`，`sessions/success/ruin/fail/edges/minutes/longest`，只存本机、不上传）。
+- 引导已读标记：`shicun.edge.guide.v2`（`web/src/playback/guideSteps.ts`）。
 - `readPreferences` 遇到旧版本按字段补默认值后升级；结构性损坏才抛错，其余补齐并返回 `issues`。
 - 新增字段必须同时出现在接口、默认值、`validPlaylist` / `normalizeEdgeSettings` 三处。
 - `shownImages` 上限 20000 条，超出按最早记录淘汰。
@@ -206,3 +213,5 @@ defineEmits<{ close: [skipped: boolean] }>()
 - 单卡片：卡片头（标题 + 实时摘要行）+ 搜索框 + 分组标签 + 分组内容；摘要行由 `summary.ts` 的 `settingsSummary(settings)` 生成。
 - 五组：玩法 / 指令 / 视频·图片 / 声音 / 其他，`runtime` 时隐藏「视频·图片」。每组都有「恢复本组」二次确认。
 - 摘要行格式形如 `10 分钟 · 普通 · 抽签 · 指令 88 种 · 许可率 70% · 不许碰 5–10 秒 · 节拍声开`。
+- 「其他」组含镜子（前置摄像头）：开关先弹同意卡（`mirrorText.consentTitle/consentBody`），点「允许使用摄像头」才 `getUserMedia`；
+  失败按 `classifyMirrorError` 出中文提示并保持关闭；开启后可选位置（`铺满背景（调暗）` / `右下角小窗`）。

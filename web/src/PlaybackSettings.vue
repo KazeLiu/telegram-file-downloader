@@ -17,6 +17,10 @@ import {
 import { maleCommands } from './playback/commands'
 import { defaultEdgeSettings, readEdgeSettings } from './playback/settings'
 import { toneNotes } from './playback/tones'
+import {
+  MIRROR_CONSTRAINTS, classifyMirrorError, mirrorErrorLabels, mirrorPlaceLabels, mirrorPlaces, mirrorSupport, mirrorText,
+  stopStream, type MirrorError
+} from './playback/mirror'
 import { emptyStats, readStats, statsStorageKey, statsSummary } from './playback/history'
 import type { EdgeSettings } from './playback/settings'
 
@@ -31,7 +35,7 @@ const groups = computed(() => [
   { id: 'command', label: '指令', keywords: '分类 寸止 挑逗 姿势 羞耻 轻度疼痛 惯用手 左右手 自定义 口令 启停 禁用 口吻 强势 挑逗 羞辱 温柔 足控 短句' },
   { id: 'media', label: '视频·图片', keywords: '视频 图片 混合 仅图片 仅视频 顺序 随机 文件名 每轮 数量 间隔 切图 BPM 循环 喜欢 收藏' },
   { id: 'sound', label: '声音', keywords: '节拍 音量 心跳 红 媒体 视频 音量 变暗 混音' },
-  { id: 'other', label: '其他', keywords: '隐藏 剩余 时间 进度 画面 亮度 变暗 混音' },
+  { id: 'other', label: '其他', keywords: '隐藏 剩余 时间 进度 画面 亮度 变暗 混音 镜子 摄像头 前置 相机 mirror' },
 ])
 const visible = computed(() => groups.value.filter(group => (search.value.trim()
   ? `${group.label} ${group.keywords}`.toLowerCase().includes(search.value.trim().toLowerCase())
@@ -126,6 +130,7 @@ function resetGroup() {
     item.hideRemaining = base.hideRemaining
     item.brightness = base.brightness
     item.mixAudio = base.mixAudio
+    item.mirror = { ...base.mirror }
   }
 }
 
@@ -232,6 +237,43 @@ const videoSoundChoices: { value: EdgeSettings['videoSound']; label: string }[] 
   { value: 'end', label: '只在最后（获得许可时）' },
   { value: 'always', label: '一直开' },
 ]
+
+/* ---- 镜子：打开前先征得同意，再让浏览器请求摄像头 ---- */
+const mirrorAsk = ref(false)
+const mirrorError = ref<MirrorError | null>(null)
+
+function toggleMirror(event: Event) {
+  const input = event.target as HTMLInputElement
+  mirrorError.value = null
+  if (!input.checked) { settings.value.mirror.on = false; mirrorAsk.value = false; return }
+  const problem = mirrorSupport()
+  if (problem) { input.checked = false; settings.value.mirror.on = false; mirrorError.value = problem; return }
+  // 打开前先征得同意：真正的开关由 allowMirror 置位，这里先把勾选退回去。
+  input.checked = false
+  mirrorAsk.value = true
+}
+
+function cancelMirror() {
+  mirrorAsk.value = false
+  settings.value.mirror.on = false
+  mirrorError.value = null
+}
+
+async function allowMirror() {
+  mirrorAsk.value = false
+  const problem = mirrorSupport()
+  if (problem) { mirrorError.value = problem; settings.value.mirror.on = false; return }
+  try {
+    // 设置页只做一次授权与环境校验：拿到流立刻停掉，真正的画面由播放层接管。
+    const stream = await navigator.mediaDevices.getUserMedia(MIRROR_CONSTRAINTS)
+    stopStream(stream)
+    mirrorError.value = null
+    settings.value.mirror.on = true
+  } catch (error) {
+    mirrorError.value = classifyMirrorError(error)
+    settings.value.mirror.on = false
+  }
+}
 const beatsImages = computed(() => !!media.value && media.value.kind === 'image' && media.value.imageTiming === 'beat')
 const secondsLabel = computed(() => readEdgeSettings(null) ? '' : '')
 void secondsLabel
@@ -518,6 +560,25 @@ void secondsLabel
         <p class="muted">{{ brightnessMin }}% 最暗，100% ＝ 完全透明不变暗；只影响播放器画面，不改原文件。</p>
         <label class="toggle"><input :checked="settings.mixAudio" type="checkbox" @change="settings.mixAudio = ($event.target as HTMLInputElement).checked" />边听音乐边玩</label>
         <p class="muted">打开后播放器不会抢占系统的音频焦点。</p>
+        <h5 class="field-label">{{ mirrorText.legend }}</h5>
+        <label class="toggle"><input :checked="settings.mirror.on" type="checkbox" @change="toggleMirror" />{{ mirrorText.label }}</label>
+        <p class="muted">{{ mirrorText.note }}</p>
+        <div v-if="mirrorAsk" class="mirror-consent" data-sundome-mirror-consent>
+          <p class="mirror-consent-title">{{ mirrorText.consentTitle }}</p>
+          <p class="muted">{{ mirrorText.consentBody }}</p>
+          <div class="chips">
+            <button class="chip on" type="button" @click="allowMirror">{{ mirrorText.consentYes }}</button>
+            <button class="chip" type="button" @click="cancelMirror">{{ mirrorText.consentNo }}</button>
+          </div>
+        </div>
+        <p v-if="mirrorError" class="muted mirror-error" role="alert">{{ mirrorErrorLabels[mirrorError] }}</p>
+        <div v-if="settings.mirror.on && !mirrorAsk" class="field">
+          <span class="field-label">{{ mirrorText.placeLegend }}</span>
+          <div class="chips">
+            <button v-for="place in mirrorPlaces" :key="place" class="chip" :class="{ on: settings.mirror.place === place }" type="button" @click="settings.mirror.place = place">{{ mirrorPlaceLabels[place] }}</button>
+          </div>
+          <p class="muted">{{ mirrorText.placeNote }}</p>
+        </div>
         <template v-if="statsLine">
           <h5 class="field-label">本机成绩</h5>
           <p class="muted" data-sundome-stats-line>{{ statsLine }}</p>
@@ -550,6 +611,11 @@ input[type="range"] { padding: 0; min-height: 44px; accent-color: var(--color-pr
 .tone-tuning { margin-top: 4px; }
 .field-label { margin: 16px 0 10px; font-size: 14px; font-weight: 600; color: var(--color-supporting); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 4px 0; }
+.mirror-consent { margin-top: 12px; padding: 14px 16px; border: 1px solid var(--color-hairline); border-radius: 12px; background: var(--color-soft); }
+.mirror-consent-title { margin: 0; font-size: 14px; font-weight: 600; }
+.mirror-consent .muted { margin: 8px 0 0; }
+.mirror-consent .chips { margin-top: 12px; }
+.mirror-error { color: var(--color-danger); }
 .chip { min-height: 38px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--color-hairline); background: var(--color-pearl); font-size: 14px; line-height: 1.4; }
 .chip[aria-pressed="true"] { background: var(--color-selection); border-color: var(--color-primary); color: var(--color-primary); font-weight: 600; }
 .fold { margin-block: 16px; padding: 0 14px; border: 1px solid var(--color-hairline); border-radius: 12px; background: var(--color-pearl); }

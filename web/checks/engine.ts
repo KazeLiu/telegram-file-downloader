@@ -18,6 +18,9 @@ import { abuseLines, feetLines, strongLines, sweetLines, teaseLines, toneNotes }
 import { anerosCommands, maleCommands, toyCommands } from '../src/playback/commands.ts'
 import { defaultEdgeSettings, edgeSchemaVersion, edgeStorageKey, normalizeEdgeSettings, readEdgeSettings, writeEdgeSettings } from '../src/playback/settings.ts'
 import { EdgeSession } from '../src/playback/session.ts'
+import {
+  MIRROR_CONSTRAINTS, classifyMirrorError, mirrorPlaceFor, mirrorPlaces, mirrorPlaceLabels, mirrorText, stopStream
+} from '../src/playback/mirror.ts'
 import { addSession, emptyStats, normalizeStats, readStats, statsSummary } from '../src/playback/history.ts'
 
 // —— 常量口径 ——
@@ -487,5 +490,32 @@ assert.equal(statsSummary(emptyStats), '', '没玩过就不显示成绩')
 assert.ok(statsSummary(statsOnce).includes('至今 1 次'), '有成绩时显示局数')
 assert.deepEqual(normalizeStats({ sessions: -3, success: 2.6, longest: 'x' }), { sessions: 0, success: 3, ruin: 0, fail: 0, edges: 0, minutes: 0, longest: 0 })
 assert.deepEqual(readStats('not json'), emptyStats, '坏数据当没玩过')
+
+// 镜子：默认关闭、place 只认 bg/corner，关掉或离页就停流。
+assert.equal(defaults.mirror.on, false)
+assert.equal(defaults.mirror.place, 'corner')
+assert.deepEqual(normalizeEdgeSettings({ mirror: { on: true, place: 'bg' } }).mirror, { on: true, place: 'bg' })
+assert.deepEqual(normalizeEdgeSettings({ mirror: { on: 'yes', place: 'left' } }).mirror, { on: false, place: 'corner' })
+assert.equal(mirrorPlaceFor('bg', true), 'corner', '播放视频时镜子固定到右下角')
+assert.equal(mirrorPlaceFor('bg', false), 'bg')
+assert.equal(mirrorPlaceFor('corner', false), 'corner')
+assert.equal(classifyMirrorError({ name: 'NotAllowedError' }), 'denied')
+assert.equal(classifyMirrorError({ name: 'NotFoundError' }), 'none')
+assert.equal(classifyMirrorError({ name: 'TypeError' }), 'unsupported')
+assert.equal(classifyMirrorError({ name: 'NotReadableError' }), 'busy')
+assert.equal(classifyMirrorError(null), 'busy')
+assert.deepEqual(MIRROR_CONSTRAINTS, { video: { facingMode: 'user' }, audio: false })
+assert.deepEqual(mirrorPlaces, ['bg', 'corner'])
+assert.equal(mirrorPlaceLabels.bg, '铺满背景（调暗）')
+assert.equal(mirrorPlaceLabels.corner, '右下角小窗')
+assert.ok(mirrorText.consentYes.includes('允许'), '同意文案要说明会打开摄像头')
+{
+  // 停流必须逐个 track 停掉，否则摄像头指示灯不灭。
+  const stopped: string[] = []
+  const stream = { getTracks: () => [{ id: 'a', stop: () => stopped.push('a') }, { id: 'b', stop: () => stopped.push('b') }] } as unknown as MediaStream
+  stopStream(stream)
+  assert.deepEqual(stopped, ['a', 'b'])
+  stopStream(null)
+}
 
 console.log('edge engine checks passed')
