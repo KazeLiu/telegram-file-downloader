@@ -1174,6 +1174,7 @@ onBeforeUnmount(() => {
           :tone-after="frame?.toneAfter ?? ''"
           @hold="hold"
           @lost="lose"
+          @guide="guideOpen = true"
         />
         <template #bottom>
           <PlaybackBottom

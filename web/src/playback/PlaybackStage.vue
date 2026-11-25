@@ -22,7 +22,7 @@ const props = defineProps<{
   toneAfter?: string
 }>()
 
-const emit = defineEmits<{ hold: []; lost: [] }>()
+const emit = defineEmits<{ hold: []; lost: []; guide: [] }>()
 
 /** 「射了」先弹确认条（对齐参考站的「记为中途结束的一局吗？」），避免误触。 */
 const asking = ref(false)
@@ -33,6 +33,8 @@ const label = computed(() => (props.paused ? '已暂停' : modeLabels[props.mode
 const beatDuration = computed(() => (props.bpm > 0 ? `${(60 / props.bpm).toFixed(3)}s` : '0s'))
 const showBeat = computed(() => !props.paused && (props.mode === 'go' || props.mode === 'slow') && props.bpm > 0)
 const clampedProgress = computed(() => Math.min(1, Math.max(0, props.progress)))
+/** 暂停时参考站会在「射了」下面多给一个「查看操作说明」的入口。 */
+const showGuideButton = computed(() => props.paused && !props.cooling && !asking.value)
 
 /**
  * 按句切分指令文字（对齐参考实现的 Sentences 组件）：
@@ -91,6 +93,13 @@ const sentences = computed(() => {
       </div>
     </div>
     <button v-else class="sd-lost" type="button" data-sundome-lost @click="asking = true">射了</button>
+    <button v-if="showGuideButton" class="sd-guide-open" type="button" data-sundome-guide-open @click="emit('guide')">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.7.4-1.1 1-1.1 1.8M12 17h.01" />
+      </svg>
+      查看操作说明
+    </button>
   </div>
 </template>
 
@@ -216,6 +225,22 @@ const sentences = computed(() => {
   cursor: pointer;
 }
 .sd-lost:hover { color: rgba(255, 255, 255, .8); }
+.sd-guide-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 16px;
+  min-height: 0;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, .3);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .3);
+  color: rgba(255, 255, 255, .85);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.sd-guide-open:hover { background: rgba(255, 255, 255, .1); }
 /* 「射了」的二次确认条：参考站是半透明黑底圆角块 + 白底主按钮 + 描边次按钮。 */
 .sd-lost-ask {
   margin-top: 20px;
