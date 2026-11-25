@@ -346,7 +346,7 @@ export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
 | 指令 | 分类 `categories`、惯用手 `hand`、口吻 `tones` + `toneLine(show/before/after)`、自定义口令 `custom`（≤30 条 / 60 字）、逐条启停 `disabled`（按 `modeOrder` 分组列 `maleCommands`） |
 | 视频·图片 | 直接绑 `Playlist`：`kind / order / imageCount / imageTiming / imageSeconds / bpm(20–300) / loop / favoritesOnly` + `keepVideoOnStop` + `switchVideoPerCommand` + `keepVideoWhileCooling` + `videoSound` + `skipIntro` + `fit` / `pos` + `textOpacity` / `textScale` |
 | 声音 | `metronome` + `beatVolume(0–300)`、`mediaVolume(0–100)`、`heartbeat` + `heartbeatVolume(0–300)` + `redBeat` + `heartbeatSync`、`bpmRandom(on/min/max)`、`vibrate` + `vibrateOn(command/edge/finish)` |
-| 其他 | `hideRemaining`、`brightness(20–100)`、`mixAudio`、`mirror(on/place)` + 前置摄像头同意卡、本机成绩行（`shicun.edge.stats.v1`） |
+| 其他 | `hideRemaining`、`brightness(20–100)`、`mixAudio`、`mirror(on/place)` + 前置摄像头同意卡、连续天数（`shicun.edge.days.v1`）、本机成绩行（`shicun.edge.stats.v1`）、历史成绩入口（`shicun.edge.history.v1` + `shicun.edge.tally.v1`） |
 
 ### 单部位模式（`web/src/playback/focus.ts`）
 
@@ -412,4 +412,4 @@ npm run build                                       # nuxt typecheck && nuxt gen
 
 - 联机 / 远程操控 / 双人链接 / 角色音（`sundome_remote`、`/api/rgate/*`、`/rws/lobby` 一律不接）。
 - 语音播报（`speechSynthesis`、`voiceLines.ts` 已删除）。
-- 道具模式（飞机杯 / AV 棒 / 前列腺按摩器）、连续打卡、分享到 X、惩罚一局。
+- 道具模式的 AV 棒（女性版）、分享到 X。

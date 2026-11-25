@@ -223,10 +223,21 @@ defineEmits<{ close: [skipped: boolean] }>()
 - 媒体层：`shicun.playback.v1`，`schemaVersion = 4`，`format = shicun.playback.config.v4`；`Playlist` **只剩媒体字段**，旧 v1–v3 存档升级时丢弃已作废的玩法字段。
 - 玩法层：`shicun.edge.v1`，`edgeSchemaVersion = 1`，`EdgeSettings` 见实施契约。
 - 本机成绩：`shicun.edge.stats.v1`（`web/src/playback/history.ts`，`sessions/success/ruin/fail/edges/minutes/longest`，只存本机、不上传）。
+- 中途结束记录：`shicun.edge.lost.v1`（`web/src/playback/history.ts`，`{count, bestMs}`，只存本机）。
+- 连续天数：`shicun.edge.days.v1`（`web/src/playback/days.ts`，`{last:'YYYY-MM-DD', run, best}`；同一天不重复加，断一天清零，里程碑 3/7/14/30 天后每 30 天一个）。
+- 最近 30 局详细记录：`shicun.edge.history.v1`（`web/src/playback/records.ts`，`ResultRecord[]`，新的在前）与累计 `shicun.edge.tally.v1`（`{n, r:{success,ruin,fail,lost}, seeded}`）。
 - 引导已读标记：`shicun.edge.guide.v2`（`web/src/playback/guideSteps.ts`）。
 - `readPreferences` 遇到旧版本按字段补默认值后升级；结构性损坏才抛错，其余补齐并返回 `issues`。
 - 新增字段必须同时出现在接口、默认值、`validPlaylist` / `normalizeEdgeSettings` 三处。
 - `shownImages` 上限 20000 条，超出按最早记录淘汰。
+
+## 历史成绩弹窗 `web/src/playback/PlaybackHistory.vue`
+
+- props：`{ open: boolean }`；emits：`{ close: [] }`；`defineExpose({ reload })`。
+- 根节点 `div.history-mask[data-sundome-history]`（`position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.55)`，`role="dialog" aria-modal="true"`，点遮罩关闭）；内层 `.history-sheet` 卡片宽 `min(544px, 100vw - 24px)`。
+- 列表态：`[data-sundome-history-close]` 36×36 圆形关闭钮、`[data-sundome-history-total]` 大号「累计 N 次」、`[data-sundome-history-breakdown]` 各结局计数、note、`ul[data-sundome-history-list]` 里每条 `button[data-sundome-history-item=<outcome>]`（高 86：时间 + `#序号` + 标题 + meta + `→`）、`[data-sundome-history-clear]`（点后变 `-clear-ask` + `-clear-yes` + 取消）。
+- 详情态：`[data-sundome-history-back]`「← 返回列表」、`[data-sundome-history-detail=<outcome>]` + `[data-sundome-history-when]` + 眉标（`Finished / Ruined / Denied / Lost`）+ 标题（坚持到底了 / 松手收场 / 今天被禁止了 / 没忍住，射了）+ `[data-sundome-nth]` 集章行（「累计第 N 次」+ 10 个 12×12 圆点，亮起的用 `--color-primary`）+ 四格（坚持时间或时间 / 指令 / 忍住 / 难度）+ `[data-sundome-history-remove]`（二次确认 `-remove-ask` / `-remove-yes`）。
+- 入口在设置页头部 `div.head-actions` 最前面：`button.card-history[data-sundome-history-open="setup"]`，文案「记录」+ 累计局数。
 
 ## 三、设置页（`PlaybackSettings.vue`）
 
