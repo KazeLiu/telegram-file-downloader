@@ -81,11 +81,8 @@ const sentences = computed(() => {
         :style="{ background: color, animationDuration: `${Math.max(0.05, taskSeconds)}s`, animationPlayState: paused ? 'paused' : 'running' }"
       />
     </div>
-    <button class="sd-hold" type="button" :disabled="!canHold" data-sundome-edge @click="emit('hold')">
-      <template v-if="cooling">等它平息…</template>
-      <template v-else>忍住了</template>
-    </button>
-    <p class="sd-hint" data-sundome-edge-hint><span>在快射的前一刻停下来了就按。</span><span>{{ cooling ? '已记录。下一条指令前不许碰。' : '按下后切换成“等它平息”' }}</span></p>
+    <button class="sd-hold" type="button" :disabled="!canHold" data-sundome-edge @click="emit('hold')">忍住了</button>
+    <p class="sd-hint" data-sundome-edge-hint><span>在快射的前一刻停下来了就按。</span><span>按下后切换成“等它平息”</span></p>
     <p v-if="note" class="sd-note">{{ note }}</p>
     <div v-if="asking" class="sd-lost-ask" data-sundome-lost-ask>
       <p>记为中途结束的一局吗？</p>
