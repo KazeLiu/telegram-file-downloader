@@ -72,15 +72,21 @@ function onInput(key: VolumeKey, event: Event) {
 }
 .sd-row { display: block; padding: 12px 0; cursor: pointer; }
 .sd-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.sd-label { min-width: 0; font-size: 14px; font-weight: 500; }
+.sd-label { min-width: 0; font-size: 14px; font-weight: 500; line-height: 20px; }
 .sd-head b { flex: 0 0 auto; font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; color: rgba(255, 255, 255, .7); }
+/* 全局 input 的 46px 高度与描边都不适用于滑杆（参考站是 h-6 的无框 range）。 */
 .sd-row input[type='range'] {
   display: block;
-  width: 100%; min-width: 0; height: 24px;
+  width: 100%; min-width: 0;
+  height: 24px; min-height: 0;
   margin-top: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   cursor: pointer;
   accent-color: #5ee3a1;
 }
-.sd-note { display: block; margin-top: 2px; font-size: 12px; line-height: 1.5; color: rgba(255, 255, 255, .6); }
+.sd-note { display: block; margin-top: 2px; font-size: 12px; line-height: 1rem; color: rgba(255, 255, 255, .6); }
 @media (min-width: 640px) { .sd-panel { right: 16px; } }
 </style>
