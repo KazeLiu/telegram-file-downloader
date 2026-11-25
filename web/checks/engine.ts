@@ -18,6 +18,7 @@ import {
 } from '../src/playback/engine.ts'
 import { abuseLines, feetLines, strongLines, sweetLines, teaseLines, toneNotes } from '../src/playback/tones.ts'
 import { anerosCommands, focusGlansCommands, focusNippleCommands, maleCommands, toyCommands } from '../src/playback/commands.ts'
+import { commandPoolNotice } from '../src/playback/summary.ts'
 import { addDay, dayKey, daysBetween, daysStorageKey, daysSummary, daysText, daysView, emptyDays, hoursLeftToday, nextMilestone, normalizeDays, readDays, writeDays } from '../src/playback/days.ts'
 import {
   countResult, emptyTally, parseRecords, pushRecord, readRecords, readTally, recordOutcome, recordOrder, recordTime,
@@ -805,6 +806,20 @@ assert.ok(mirrorText.consentYes.includes('允许'), '同意文案要说明会打
     if (original2) Object.defineProperty(globalThis, 'localStorage', original2)
     else delete (globalThis as { localStorage?: unknown }).localStorage
   }
+}
+
+// 指令池为空时的提示：只关掉全部内置指令才提示，且分「有没有自己的指令」两种口径。
+{
+  const base = normalizeEdgeSettings({ ...defaultEdgeSettings })
+  assert.equal(commandPoolNotice(base), '')
+  const allOff = normalizeEdgeSettings({ ...defaultEdgeSettings, disabled: maleCommands.map((_, index) => index) })
+  assert.equal(commandPoolNotice(allOff), '默认指令已全部关闭，而且还没有自己的指令。请在「添加自己的指令」里添加，或在「指令类型」里重新打开')
+  const withOwn = normalizeEdgeSettings({ ...defaultEdgeSettings, disabled: maleCommands.map((_, index) => index), custom: [{ text: '自己的口令', mode: 'go' }] })
+  assert.equal(commandPoolNotice(withOwn), '默认指令已全部关闭。只会出现你自己的指令')
+  const partial = normalizeEdgeSettings({ ...defaultEdgeSettings, disabled: [0, 1, 2] })
+  assert.equal(commandPoolNotice(partial), '')
+  const nippleOnly = normalizeEdgeSettings({ ...defaultEdgeSettings, focus: 'nipple', disabled: maleCommands.map((_, index) => index) })
+  assert.equal(commandPoolNotice(nippleOnly), '')
 }
 
 console.log('edge engine checks passed')

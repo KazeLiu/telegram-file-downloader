@@ -15,6 +15,18 @@ export function enabledCommandCount(settings: EdgeSettings) {
   return Math.max(0, maleCommands.length + settings.custom.length - settings.disabled.length)
 }
 
+/** 指令池为空时的提示：与参考站的 `OWN_ONLY_TEXT` 同口径（只关掉部分时不提示）。 */
+export function commandPoolNotice(settings: EdgeSettings) {
+  // 单部位模式用的是专属池，不受「逐条停用」影响。
+  if (settings.focus !== 'none') return ''
+  const builtinOff = settings.disabled.length >= maleCommands.length
+  if (!builtinOff) return ''
+  if (!settings.custom.length) {
+    return '默认指令已全部关闭，而且还没有自己的指令。请在「添加自己的指令」里添加，或在「指令类型」里重新打开'
+  }
+  return '默认指令已全部关闭。只会出现你自己的指令'
+}
+
 export function settingsSummary(settings: EdgeSettings) {
   const parts: string[] = []
   parts.push(settings.durationRandom ? '随机时长' : `${settings.minutes} 分钟`)

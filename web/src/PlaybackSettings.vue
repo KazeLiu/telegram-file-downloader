@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { newPlaylist } from './playback'
 import type { Playlist } from './playback'
-import { settingsSummary } from './playback/summary'
+import { commandPoolNotice, settingsSummary } from './playback/summary'
 import {
   adjustMix, beatVolumeMax, bpmRandomMax, bpmRandomMin, brightnessMin, categoryHints, categoryLabels, categoryOrder,
   textOpacityMin, textScaleMin, formatClock,
@@ -45,6 +45,7 @@ const visible = computed(() => groups.value.filter(group => (search.value.trim()
   ? `${group.label} ${group.keywords}`.toLowerCase().includes(search.value.trim().toLowerCase())
   : group.id === selected.value) && !(props.runtime && group.id === 'media')))
 const summary = computed(() => settingsSummary(settings.value))
+const poolNotice = computed(() => commandPoolNotice(settings.value))
 const activeTones = computed(() => toneOrder.filter(key => settings.value.tones[key]))
 
 /** 本机成绩：只读给设置页顶部那行看，清除要再点一次确认。 */
@@ -381,6 +382,7 @@ void secondsLabel
       <div class="card-heading">
         <h3 class="card-title">玩法设置</h3>
         <p class="card-summary" data-sundome-summary>{{ summary }}</p>
+        <p v-if="poolNotice" class="card-pool-empty" role="alert" data-sundome-pool-empty>{{ poolNotice }}</p>
         <p v-if="statsLine" class="card-stats" data-sundome-stats>{{ statsLine }}</p>
         <div v-if="dayLines.length" class="card-days" data-sundome-days>
           <p v-for="(line, index) in dayLines" :key="index" :class="{ 'card-days-strong': index === 0 }">{{ line }}</p>
@@ -737,6 +739,7 @@ void secondsLabel
 .card-heading { display: grid; gap: 6px; min-width: 0; }
 .card-title { margin: 0; font-size: 20px; line-height: 1.4; }
 .card-summary { margin: 0; font-size: 14px; line-height: 1.6; color: var(--color-muted); overflow-wrap: anywhere; }
+.card-pool-empty { margin: 10px 0 0; padding: 12px 14px; border: 1px solid rgba(168, 61, 104, 0.5); border-radius: 12px; background: var(--color-selection); font-size: 13px; font-weight: 600; line-height: 1.6; color: var(--color-primary); overflow-wrap: anywhere; }
 .head-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
 .card-history {
   display: inline-flex;
