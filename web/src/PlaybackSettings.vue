@@ -819,8 +819,8 @@ input[type="range"] { padding: 0; min-height: 44px; accent-color: var(--color-pr
 }
 .toggle input[data-sundome-switch] {
   appearance: none;
-  width: 44px;
-  height: 26px;
+  width: 48px;
+  height: 28px;
   margin-left: auto;
   border-radius: 999px;
   background: var(--color-soft);
@@ -832,8 +832,8 @@ input[type="range"] { padding: 0; min-height: 44px; accent-color: var(--color-pr
 .toggle input[data-sundome-switch]::after {
   content: '';
   position: absolute;
-  top: 3px;
-  left: 3px;
+  top: 4px;
+  left: 4px;
   width: 20px;
   height: 20px;
   border-radius: 999px;
@@ -844,6 +844,6 @@ input[type="range"] { padding: 0; min-height: 44px; accent-color: var(--color-pr
   background: var(--color-primary);
 }
 .toggle input[data-sundome-switch]:checked::after {
-  transform: translateX(18px);
+  transform: translateX(24px);
 }
 </style>
