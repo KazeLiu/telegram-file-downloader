@@ -47,6 +47,7 @@ const visible = computed(() => groups.value.filter(group => (search.value.trim()
 const summary = computed(() => settingsSummary(settings.value))
 const poolNotice = computed(() => commandPoolNotice(settings.value))
 const activeTones = computed(() => toneOrder.filter(key => settings.value.tones[key]))
+const activeToneCount = computed(() => activeTones.value.length)
 
 /** 本机成绩：只读给设置页顶部那行看，清除要再点一次确认。 */
 const stats = ref(readStats(typeof localStorage === 'undefined' ? null : localStorage.getItem(statsStorageKey)))
@@ -528,7 +529,7 @@ void secondsLabel
         <div class="chips">
           <button v-for="key in categoryOrder" :key="key" type="button" class="chip" :data-sundome-choice="`category-${key}`" :aria-pressed="settings.categories[key]" @click="toggleCategory(key)">{{ categoryLabels[key] }}</button>
         </div>
-        <p class="muted">{{ categoryHints.edge }}；{{ categoryHints.tease }}；{{ categoryHints.pose }}；{{ categoryHints.pain }}。关掉的类型不会再被抽到。</p>
+        <p class="muted">基础指令（绿·黄·红）始终包含在内，关掉的类型不会再被抽到。{{ categoryHints.edge }}；{{ categoryHints.tease }}；{{ categoryHints.pose }}；{{ categoryHints.pain }}。</p>
 
         <div class="settings-grid">
           <label>惯用手<select :value="settings.hand" @change="settings.hand = ($event.target as HTMLSelectElement).value as 'right'">
@@ -539,7 +540,8 @@ void secondsLabel
         <p class="muted">选左手时，指令里的左右手会自动对调。</p>
 
         <h5 class="field-label">口吻</h5>
-        <p class="muted">开启后会在指令前后各加一句同口吻的短句；“强势”是命令式，“挑逗”是一边调侃一边撩你，“羞辱”会出现很重的话，“温柔”像恋人在旁边陪着，“足控”只有话语、指令不变。同时开两种以上时，每条指令轮流使用。</p>
+        <p class="muted">“强硬”会在指令前后加一句命令式的短句；“挑逗”则是一个女人一边调侃你、一边撩你继续的短句；“辱骂”会出现很重的话；“温柔”像恋人在旁边陪着；“足控”只有话语、指令不变。</p>
+        <p v-if="activeToneCount > 1" class="muted">同时打开两个以上时，每条指令轮流使用。</p>
         <div class="chips">
           <button v-for="key in toneOrder" :key="key" type="button" class="chip" :data-sundome-choice="`tone-${key}`" :aria-pressed="settings.tones[key]" @click="settings.tones[key] = !settings.tones[key]">{{ toneLabels[key] }}</button>
         </div>
@@ -649,7 +651,8 @@ void secondsLabel
       </template>
 
       <template v-else-if="group.id === 'sound'">
-        <label class="toggle"><input :checked="settings.metronome" type="checkbox" data-sundome-switch="sound" @change="settings.metronome = ($event.target as HTMLInputElement).checked" />节拍声</label>
+        <label class="toggle"><input :checked="settings.metronome" type="checkbox" data-sundome-switch="sound" @change="settings.metronome = ($event.target as HTMLInputElement).checked" />节拍声（节拍器）</label>
+        <p class="muted">按指令的速度轻声打拍子。灯光节拍始终显示。</p>
         <div class="settings-grid">
           <label>节拍音量 · {{ settings.beatVolume }}%<input :value="settings.beatVolume" type="range" min="0" :max="beatVolumeMax" step="5" @input="settings.beatVolume = Number(($event.target as HTMLInputElement).value)" /></label>
           <label v-if="media?.kind !== 'image'">视频音量 · {{ settings.mediaVolume }}%<input :value="settings.mediaVolume" type="range" min="0" max="100" step="5" @input="settings.mediaVolume = Number(($event.target as HTMLInputElement).value)" /></label>
@@ -661,17 +664,22 @@ void secondsLabel
           <label>最慢 · {{ settings.bpmRandom.min }}<input :value="settings.bpmRandom.min" type="number" :min="bpmRandomMin" :max="bpmRandomMax" step="5" @change="settings.bpmRandom.min = clampBpm(($event.target as HTMLInputElement).value, settings.bpmRandom.min)" /></label>
           <label>最快 · {{ settings.bpmRandom.max }}<input :value="settings.bpmRandom.max" type="number" :min="bpmRandomMin" :max="bpmRandomMax" step="5" @change="settings.bpmRandom.max = clampBpm(($event.target as HTMLInputElement).value, settings.bpmRandom.max)" /></label>
         </div>
-        <label class="toggle"><input :checked="settings.heartbeat" type="checkbox" data-sundome-switch="heartbeat" @change="settings.heartbeat = ($event.target as HTMLInputElement).checked" />心跳声</label>
+        <h5 class="field-label">高级设置</h5>
+        <p class="muted">一般不用改。保持默认即可。</p>
+        <label class="toggle"><input :checked="settings.heartbeat" type="checkbox" data-sundome-switch="heartbeat" @change="settings.heartbeat = ($event.target as HTMLInputElement).checked" />心跳声（氛围）</label>
+        <p class="muted">「不许碰」时播放低沉的心跳声。</p>
         <div v-if="settings.heartbeat" class="settings-grid">
           <label>心跳音量 · {{ settings.heartbeatVolume }}%<input :value="settings.heartbeatVolume" type="range" min="0" :max="beatVolumeMax" step="5" @input="settings.heartbeatVolume = Number(($event.target as HTMLInputElement).value)" /></label>
           <label>红色时<select :value="settings.redBeat" @change="settings.redBeat = ($event.target as HTMLSelectElement).value as 'heartbeat'">
             <option v-for="key in redBeatOrder" :key="key" :value="key">{{ redBeatLabels[key] }}</option>
           </select></label>
         </div>
+        <p class="muted">「不许碰」带 BPM 时用什么声音打拍子。关掉心跳声的话就用节拍器。</p>
         <label class="toggle"><input :checked="settings.heartbeatSync" type="checkbox" data-sundome-switch="heartbeat-sync" @change="settings.heartbeatSync = ($event.target as HTMLInputElement).checked" />心跳跟随 BPM</label>
         <p class="muted">关掉后，即使红色带 BPM，心跳也保持固定节奏。</p>
         <label class="toggle"><input :checked="settings.vibrate" type="checkbox" data-sundome-switch="vibrate" @change="settings.vibrate = ($event.target as HTMLInputElement).checked" />切换时振动</label>
         <p class="muted">仅限手机。“不许碰”时振动更久。</p>
+        <h5 v-if="settings.vibrate" class="field-label">振动的时机</h5>
         <div v-if="settings.vibrate" class="settings-grid">
           <label class="toggle"><input :checked="settings.vibrateOn.command" type="checkbox" data-sundome-switch="vib-command" @change="settings.vibrateOn.command = ($event.target as HTMLInputElement).checked" />指令切换时</label>
           <label class="toggle"><input :checked="settings.vibrateOn.edge" type="checkbox" data-sundome-switch="vib-edge" @change="settings.vibrateOn.edge = ($event.target as HTMLInputElement).checked" />按“忍住了”时</label>
