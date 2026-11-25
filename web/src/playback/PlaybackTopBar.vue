@@ -38,29 +38,29 @@ const emit = defineEmits<{
 <template>
   <div class="sd-topbar">
     <div class="sd-left">
-      <span class="sd-count">{{ note || (position.index + 1 ? `第 ${position.index + 1} 条指令` : '准备中') }}</span>
+      <span class="sd-count" data-sundome-count>{{ note || (position.index + 1 ? `第 ${position.index + 1} 条指令` : '准备中') }}</span>
       <span v-if="held" class="sd-held">忍住 {{ held }}</span>
     </div>
-    <span v-if="!hideTime && remaining" class="sd-clock">{{ remaining }}</span>
+    <span v-if="!hideTime && remaining" class="sd-clock" data-sundome-clock>{{ remaining }}</span>
     <div class="sd-buttons">
-      <button class="sd-icon" type="button" :title="noCrop ? '铺满屏幕' : '完整显示'" :aria-label="noCrop ? '铺满屏幕' : '完整显示'" @click="emit('toggle-crop')">
+      <button class="sd-icon" type="button" data-sundome-fit-toggle :title="noCrop ? '铺满屏幕' : '完整显示'" :aria-label="noCrop ? '铺满屏幕' : '完整显示'" @click="emit('toggle-crop')">
         <Icon :name="noCrop ? 'expand' : 'shrink'" :size="14" />
       </button>
       <button v-if="noCrop" class="sd-icon" type="button" data-sundome-pos-toggle :data-pos="align" :title="`显示位置：${positionLabel}`" :aria-label="`显示位置：${positionLabel}`" @click="emit('cycle-position')">
         <Icon name="position" :size="14" />
       </button>
-      <button v-if="pipAvailable" class="sd-icon" type="button" title="悬浮窗" aria-label="悬浮窗" @click="emit('pip')">
+      <button v-if="pipAvailable" class="sd-icon" type="button" data-sundome-pip-toggle title="悬浮窗" aria-label="悬浮窗" @click="emit('pip')">
         <Icon name="pip" :size="14" />
       </button>
-      <button class="sd-icon" :class="{ on: volumeOpen }" type="button" title="声音" aria-label="声音" @click="emit('volume')">
+      <button class="sd-icon" :class="{ on: volumeOpen }" data-sundome-volume-toggle type="button" title="声音" aria-label="声音" @click="emit('volume')">
         <Icon name="volume" :size="14" />
       </button>
-      <button v-if="landscapeAvailable" class="sd-icon sd-wide" type="button" title="横屏" aria-label="横屏" @click="emit('landscape')">
+      <button v-if="landscapeAvailable" class="sd-icon sd-wide" type="button" data-sundome-landscape title="横屏" aria-label="横屏" @click="emit('landscape')">
         <Icon name="rotate" :size="14" />
       </button>
-      <button class="sd-pill" type="button" @click="emit('fullscreen')">{{ fullscreen ? '退出全屏' : '全屏' }}</button>
-      <button class="sd-pill" type="button" :disabled="!playing" @click="emit('toggle-pause')">{{ paused ? '继续' : '暂停' }}</button>
-      <button class="sd-pill" type="button" @click="emit('exit')">退出</button>
+      <button class="sd-pill" type="button" data-sundome-fullscreen @click="emit('fullscreen')">{{ fullscreen ? '退出全屏' : '全屏' }}</button>
+      <button class="sd-pill" type="button" data-sundome-pause :disabled="!playing" @click="emit('toggle-pause')">{{ paused ? '继续' : '暂停' }}</button>
+      <button class="sd-pill" type="button" data-sundome-quit @click="emit('exit')">退出</button>
     </div>
   </div>
 </template>
@@ -71,7 +71,7 @@ const emit = defineEmits<{
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 12px 0;
+  padding: 12px 16px 0;
   padding-top: max(12px, env(safe-area-inset-top));
   font-size: 14px;
 }

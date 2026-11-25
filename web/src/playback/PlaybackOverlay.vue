@@ -31,7 +31,14 @@ const glow = computed(() => {
     `radial-gradient(70% 50% at 100% 50%, ${rgba(tint, 0.24)}, rgba(0, 0, 0, 0) 72%)`,
   ].join(', ')
 })
-const mask = computed(() => Math.min(1, Math.max(0, (100 - props.dim) / 100)))
+/**
+ * 遮罩浓度对齐参考站：无遮罩=原亮度，最暗=rgba(0,0,0,.45)。
+ * 我们的 brightness 越小越暗（20 最暗、100 完全透明），参考站是 dim 越大越暗，这里做线性映射。
+ */
+const mask = computed(() => {
+  const level = Math.min(100, Math.max(0, props.dim))
+  return Math.min(0.45, (0.45 * (100 - level)) / 80)
+})
 </script>
 
 <template>
@@ -40,7 +47,7 @@ const mask = computed(() => Math.min(1, Math.max(0, (100 - props.dim) / 100)))
     <div class="sd-glow" :style="{ backgroundImage: glow }" />
     <div class="sd-media">
       <slot name="media" />
-      <div class="sd-mask" :style="{ opacity: mask }" />
+      <div class="sd-mask" :style="{ backgroundColor: `rgba(0, 0, 0, ${mask.toFixed(3)})` }" />
     </div>
     <div class="sd-top"><slot name="top" /></div>
     <div class="sd-center" :style="{ '--sd-text-opacity': String(opacity / 100), '--sd-text-scale': String(scale / 100) }">
@@ -78,7 +85,7 @@ const mask = computed(() => Math.min(1, Math.max(0, (100 - props.dim) / 100)))
   background: #000;
   pointer-events: none;
 }
-.sd-mask { position: absolute; inset: 0; background: #000; transition: opacity .3s ease; }
+.sd-mask { position: absolute; inset: 0; transition: background-color .3s ease; }
 .sd-top { position: relative; z-index: 10; flex: none; }
 .sd-center {
   position: relative;

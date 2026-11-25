@@ -136,7 +136,6 @@ const ruined = computed(() => session.value?.ruined ?? finishedReason.value === 
 
 const textOpacity = computed(() => settings.value.textOpacity)
 const textScale = computed(() => settings.value.textScale)
-const dimLevel = computed(() => settings.value.brightness)
 /** 红色（不许碰）且没开「红色也播放视频」时，画面额外压暗一档（参考站行为）。 */
 const videoDimmed = computed(() => {
   if (allowed.value) return false
@@ -144,7 +143,8 @@ const videoDimmed = computed(() => {
   if (cooling.value) return !settings.value.keepVideoWhileCooling
   return mode.value === 'stop' && !settings.value.keepVideoOnStop
 })
-const brightnessPercent = computed(() => (videoDimmed.value ? Math.max(brightnessMin, Math.round(settings.value.brightness * 0.55)) : settings.value.brightness))
+/** 播放层遮罩浓度：红色（不许碰）且没开「红色也播放视频」时压得更暗，与参考站一致。 */
+const dimLevel = computed(() => (videoDimmed.value ? Math.max(brightnessMin, Math.round(settings.value.brightness * 0.45)) : settings.value.brightness))
 
 /** 相位切到红色/离开红色时同步视频：关掉「红色也播放」就暂停并压暗，绿黄恢复播放。 */
 function syncVideoPhase() {
@@ -785,13 +785,13 @@ onBeforeUnmount(() => {
             >
               <div class="image-canvas" :style="{ width: `${zoomLevel * 100}%`, height: `${zoomLevel * 100}%` }">
                 <img v-if="imageSource" :key="mediaKey(current)" :src="imageSource" :alt="current.name"
-                  :style="{ filter: `brightness(${brightnessPercent}%)`, objectFit: noCrop ? 'contain' : 'cover', objectPosition: noCrop ? `center ${settings.pos}` : 'center' }"
+                  :style="{ objectFit: noCrop ? 'contain' : 'cover', objectPosition: noCrop ? `center ${settings.pos}` : 'center' }"
                   draggable="false" @load="imageLoaded" @error="mediaFailed" />
               </div>
             </div>
             <video
               v-else-if="current" :key="mediaKey(current)" ref="video" :src="mediaUrl(current)"
-              :style="{ filter: `brightness(${brightnessPercent}%)`, objectFit: noCrop ? 'contain' : 'cover', objectPosition: noCrop ? `center ${settings.pos}` : 'center' }"
+              :style="{ objectFit: noCrop ? 'contain' : 'cover', objectPosition: noCrop ? `center ${settings.pos}` : 'center' }"
               playsinline preload="metadata" :muted="videoMuted"
               @volumechange="videoVolumeChanged" @loadedmetadata="videoLoaded"
               @canplay="videoReady" @play="videoStarted" @playing="videoPlaying" @waiting="videoReady"
