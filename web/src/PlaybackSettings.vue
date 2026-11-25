@@ -23,6 +23,7 @@ import {
   stopStream, type MirrorError
 } from './playback/mirror'
 import { emptyLost, emptyStats, lostStorageKey, readLost, readStats, statsStorageKey, statsSummary } from './playback/history'
+import { daysStorageKey, daysSummary, emptyDays, readDays } from './playback/days'
 import type { EdgeSettings } from './playback/settings'
 
 const settings = defineModel<EdgeSettings>({ required: true })
@@ -49,6 +50,9 @@ const stats = ref(readStats(typeof localStorage === 'undefined' ? null : localSt
 const statsLine = computed(() => statsSummary(stats.value))
 /** 「射了」的记录：中途结束次数与最长坚持（只存在本机）。 */
 const lost = ref(readLost(typeof localStorage === 'undefined' ? null : localStorage.getItem(lostStorageKey)))
+/** 连续天数：顶部那几行「已连续 N 天 · 下一个目标」。 */
+const days = ref(readDays(typeof localStorage === 'undefined' ? null : localStorage.getItem(daysStorageKey)))
+const dayLines = computed(() => daysSummary(days.value))
 const lostLine = computed(() => (lost.value.count
   ? `中途结束 ${lost.value.count} 次 · 最长坚持 ${formatClock(lost.value.bestMs)}（只存在这台设备里）`
   : ''))
@@ -58,8 +62,10 @@ function clearStats() {
   statsArmed.value = false
   try { localStorage.setItem(statsStorageKey, JSON.stringify(emptyStats)) } catch { /* 存不进去就当没清 */ }
   try { localStorage.setItem(lostStorageKey, JSON.stringify(emptyLost)) } catch { /* 同上 */ }
+  try { localStorage.setItem(daysStorageKey, JSON.stringify(emptyDays)) } catch { /* 同上 */ }
   stats.value = { ...emptyStats }
   lost.value = { ...emptyLost }
+  days.value = { ...emptyDays }
 }
 
 function selectGroup(id: string) {
@@ -314,6 +320,9 @@ void secondsLabel
         <h3 class="card-title">玩法设置</h3>
         <p class="card-summary">{{ summary }}</p>
         <p v-if="statsLine" class="card-stats" data-sundome-stats>{{ statsLine }}</p>
+        <div v-if="dayLines.length" class="card-days" data-sundome-days>
+          <p v-for="(line, index) in dayLines" :key="index" :class="{ 'card-days-strong': index === 0 }">{{ line }}</p>
+        </div>
       </div>
       <div class="head-actions">
         <p v-if="changedCount" class="card-changed" data-sundome-changed>与默认不同的项目：{{ changedCount }}</p>
@@ -649,6 +658,9 @@ void secondsLabel
 .card-summary { margin: 0; font-size: 14px; line-height: 1.6; color: var(--color-muted); overflow-wrap: anywhere; }
 .head-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
 .card-changed { margin: 0; font-size: 12px; color: var(--color-muted); }
+.card-days { margin: 2px 0 0; display: grid; gap: 2px; }
+.card-days p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--color-muted); }
+.card-days p.card-days-strong { font-size: 13px; font-weight: 600; color: var(--color-ink); }
 .card-stats { margin: 0; font-size: 12px; line-height: 1.6; color: var(--color-supporting); overflow-wrap: anywhere; }
 .card-reset { flex-shrink: 0; min-height: 44px; font-size: 14px; }
 .settings-search { max-width: 440px; margin-top: 18px; font-size: 14px; }

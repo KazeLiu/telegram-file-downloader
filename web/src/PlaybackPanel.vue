@@ -21,6 +21,7 @@ import { glansCommands, nippleCommands } from './playback/commands'
 import { EdgeSession, type SessionFrame } from './playback/session'
 import { edgeStorageKey, readEdgeSettings, writeEdgeSettings, type EdgeSettings } from './playback/settings'
 import { addLost, addSession, lostPct, lostStorageKey, readLost, readStats, statsStorageKey, writeLost, writeStats, type LostRecord } from './playback/history'
+import { addDay, daysStorageKey, readDays, writeDays, type EdgeDays } from './playback/days'
 import {
   MIRROR_CONSTRAINTS, classifyMirrorError, mirrorErrorLabels, mirrorPlaceFor, mirrorSupport, mirrorText, stopStream,
   type MirrorError
@@ -97,6 +98,8 @@ let lastTask = -1
 let statsDone = false
 /** 中途结束（射了）的记录：次数与最长坚持，只存本机。 */
 const lostRecord = ref<LostRecord>({ count: 0, bestMs: 0 })
+/** 连续天数：设置页顶部要显示「已连续 N 天」，这里读一次供外部查看。 */
+const days = ref<EdgeDays>(readDays(typeof localStorage === 'undefined' ? null : localStorage.getItem(daysStorageKey)))
 const lostBestNow = ref(false)
 /** 红色（不许碰）时由我们主动暂停视频，避免被 videoPaused 当成用户暂停整局。 */
 let videoHold = false
@@ -587,6 +590,7 @@ function finish(reason: FinishReason) {
   pause()
   buzz([60, 40, 60, 40, 120], 'finish')
   recordStats(reason)
+  recordDay()
   finishedReason.value = reason
   screen.value = 'finished'
   error.value = ''
@@ -604,6 +608,15 @@ function recordStats(reason: FinishReason) {
   const next = addSession(readStats(stored), reason, instance.minutes, instance.held)
   writeStats(next)
   recordLost(reason)
+}
+
+/** 记一次今天玩过了：连续天数（参考站 sundome:days 的口径）。 */
+function recordDay() {
+  let stored: string | null = null
+  try { stored = localStorage.getItem(daysStorageKey) } catch { return }
+  const result = addDay(readDays(stored))
+  writeDays(result.next)
+  days.value = result.next
 }
 
 /** 「射了」单独记一档：中途结束次数与最长坚持（对齐参考站的 lost 存储）。 */

@@ -18,6 +18,7 @@ import {
 } from '../src/playback/engine.ts'
 import { abuseLines, feetLines, strongLines, sweetLines, teaseLines, toneNotes } from '../src/playback/tones.ts'
 import { anerosCommands, focusGlansCommands, focusNippleCommands, maleCommands, toyCommands } from '../src/playback/commands.ts'
+import { addDay, dayKey, daysBetween, daysStorageKey, daysSummary, daysText, daysView, emptyDays, hoursLeftToday, nextMilestone, normalizeDays, readDays, writeDays } from '../src/playback/days.ts'
 import { focusAllowBelow, focusAreas, focusLabels } from '../src/playback/focus.ts'
 import { defaultEdgeSettings, edgeSchemaVersion, edgeStorageKey, normalizeEdgeSettings, readEdgeSettings, writeEdgeSettings } from '../src/playback/settings.ts'
 import { EdgeSession } from '../src/playback/session.ts'
@@ -646,6 +647,67 @@ assert.ok(mirrorText.consentYes.includes('允许'), '同意文案要说明会打
   assert.equal(nippleRun.allowBelow, focusAllowBelow)
   nippleRun.ruined = true
   assert.equal(nippleRun.allowBelow, '', '松手射精时不提示可以摸下面')
+}
+
+// ---- 连续天数（每日打卡）----
+{
+  const base = new Date(2026, 10, 20, 12).getTime()
+  assert.equal(dayKey(base), '2026-11-20')
+  assert.equal(daysBetween('2026-11-20', '2026-11-21'), 1)
+  assert.equal(daysBetween('2026-11-20', '2026-11-20'), 0)
+  assert.equal(daysBetween('2026-11-20', '2026-11-19'), -1)
+  // 坏数据一律归零
+  assert.deepEqual(normalizeDays(null), { last: '', run: 0, best: 0 })
+  assert.deepEqual(normalizeDays({ last: 'x', run: 9, best: 9 }), { last: '', run: 0, best: 0 })
+  assert.deepEqual(normalizeDays({ last: '2026-11-20', run: 0, best: 0 }), { last: '2026-11-20', run: 1, best: 1 })
+  assert.equal(readDays('not json').run, 0)
+  assert.equal(readDays(null).best, 0)
+  // 首次玩就是 1 天
+  const first = addDay(emptyDays, base)
+  assert.deepEqual(first.next, { last: '2026-11-20', run: 1, best: 1 })
+  assert.deepEqual(first.view, { run: 1, best: 1, today: true })
+  // 同一天再玩不加
+  assert.deepEqual(addDay(first.next, base).next, first.next)
+  // 隔一天 +1
+  const second = addDay(first.next, new Date(2026, 10, 21, 9).getTime())
+  assert.deepEqual(second.next, { last: '2026-11-21', run: 2, best: 2 })
+  // 断一天就清零
+  const gap = addDay(second.next, new Date(2026, 10, 23, 9).getTime())
+  assert.deepEqual(gap.next, { last: '2026-11-23', run: 1, best: 2 }, '断一天清零但最高纪录保留')
+  // daysView 只看不改
+  assert.deepEqual(daysView(first.next, base), { run: 1, best: 1, today: true })
+  assert.deepEqual(daysView(first.next, new Date(2026, 10, 22, 0, 30).getTime()), { run: 0, best: 1, today: false })
+  // 里程碑
+  assert.equal(nextMilestone(0), 3)
+  assert.equal(nextMilestone(2), 3)
+  assert.equal(nextMilestone(3), 7)
+  assert.equal(nextMilestone(29), 30)
+  assert.equal(nextMilestone(30), 60)
+  // 剩余小时：至少 1，且不超过 24
+  const hours = hoursLeftToday(base)
+  assert.ok(hours >= 1 && hours <= 24, `剩余小时应当在 1…24，得到 ${hours}`)
+  // 摘要：没玩过 / 今天已玩 / 明天再来
+  const cold = daysSummary(emptyDays, base)
+  assert.equal(cold[0], daysText.fresh)
+  assert.ok(cold.some(line => line.includes('今天还剩')))
+  const warm = daysSummary(first.next, base)
+  assert.equal(warm[0], '已连续 1 天')
+  assert.ok(warm.includes(daysText.doneToday))
+  const tomorrow = daysSummary(first.next, new Date(2026, 10, 21, 8).getTime())
+  assert.ok(tomorrow.some(line => line.includes('今天玩就是第 2 天')))
+  // 存取往返
+  const store = new Map<string, string>()
+  const stub = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value), removeItem: (key: string) => void store.delete(key) }
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  Object.defineProperty(globalThis, 'localStorage', { value: stub, configurable: true })
+  try {
+    assert.equal(writeDays(first.next), '')
+    assert.equal(store.get(daysStorageKey), JSON.stringify(first.next))
+    assert.deepEqual(readDays(store.get(daysStorageKey) ?? null), first.next)
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'localStorage', original)
+    else delete (globalThis as { localStorage?: unknown }).localStorage
+  }
 }
 
 console.log('edge engine checks passed')
