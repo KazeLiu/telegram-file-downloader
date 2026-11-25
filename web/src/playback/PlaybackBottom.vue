@@ -23,9 +23,9 @@ const legend = computed(() => modeOrder.map(mode => ({ mode, label: modeLabels[m
   <div class="sd-bottombar">
     <div class="sd-progress-row">
       <div class="sd-track">
-        <div class="sd-fill" :class="{ window: allowed }" :style="{ transform: `scaleX(${allowed ? Math.min(1, Math.max(0, percent)) : percent})`, background: allowed ? '#fff' : undefined }" />
+        <div class="sd-fill" :class="{ window: allowed }" data-sundome-session-bar :style="{ transform: `scaleX(${allowed ? Math.min(1, Math.max(0, percent)) : percent})`, background: allowed ? '#fff' : undefined }" />
       </div>
-      <span class="sd-time">{{ allowed ? `许可 ${windowLeft} 秒` : `${elapsed} / ${total}` }}</span>
+      <span class="sd-time" data-sundome-elapsed>{{ allowed ? `许可 ${windowLeft} 秒` : `${elapsed} / ${total}` }}</span>
     </div>
     <div class="sd-legend-row">
       <ul class="sd-legend">
