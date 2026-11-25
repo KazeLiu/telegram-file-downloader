@@ -4,6 +4,8 @@ import {
   pickToneLine, randomSeed, restSeconds, taskAt, toneAfterForCommand, toneForTask,
   type EdgeCommand, type EdgeMode, type Task, type ToneKind, varyBpm } from './engine.ts'
 import type { EdgeSettings } from './settings.ts'
+import { focusNippleCommands, focusGlansCommands } from './commands.ts'
+import { focusAllowBelow } from './focus.ts'
 import { toneLines } from './tones.ts'
 
 /** 一局寸止的状态机：与界面无关，只吃时间增量、吐当前该显示什么。 */
@@ -74,8 +76,8 @@ function makeTimeline(
     difficulty: settings.difficulty,
     tune: settings.tune,
     length: settings.instructionLength,
-    nipple: settings.nipple.on ? { times: settings.nipple.times } : undefined,
-    glans: settings.glans.on ? { times: settings.glans.times } : undefined,
+    nipple: settings.focus === 'none' && settings.nipple.on ? { times: settings.nipple.times } : undefined,
+    glans: settings.focus === 'none' && settings.glans.on ? { times: settings.glans.times } : undefined,
   })
   const bound = bindCommands(tasks, pool, nipple, glans)
   // 每次变换节奏：开启后每条绿黄指令的 BPM 在范围内重新随机（同一条始终稳定）。
@@ -130,13 +132,19 @@ export class EdgeSession {
       : settings.minutes
     this.minutes = minutes
     // 指令池要按本局时长剔除过长的指令，所以放在算出分钟数之后。
-    this.pool = dropOverlongCommands(
-      filterByCategories(
-        commandPool(settings.disabled, settings.custom, settings.hand, undefined, { toy: settings.toy, aneros: settings.aneros }),
-        settings.categories
-      ),
-      minutes
-    )
+    // 整局只玩一个部位时，指令池整局换成该部位的专属池（参考站 focusPool 的口径）。
+    const focusPool = settings.focus === 'nipple'
+      ? focusNippleCommands
+      : settings.focus === 'glans' ? focusGlansCommands : null
+    this.pool = focusPool
+      ? [...focusPool]
+      : dropOverlongCommands(
+        filterByCategories(
+          commandPool(settings.disabled, settings.custom, settings.hand, undefined, { toy: settings.toy, aneros: settings.aneros }),
+          settings.categories
+        ),
+        minutes
+      )
     this.totalMs = Math.max(60_000, Math.round(minutes * 60_000))
     this.tasks = makeTimeline(settings, this.pool, this.seed, this.totalMs, this.nipplePool, this.glansPool)
   }
@@ -180,6 +188,11 @@ export class EdgeSession {
     const value = { tone, before, after }
     this.toneCache.set(task.index, value)
     return value
+  }
+
+  /** 只玩乳头且拿到许可时，奖励屏下方多一句「现在可以摸下面了」。 */
+  get allowBelow() {
+    return this.phase === 'allow' && this.settings.focus === 'nipple' && !this.ruined ? focusAllowBelow : ''
   }
 
   frame(): SessionFrame {

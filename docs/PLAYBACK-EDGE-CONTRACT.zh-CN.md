@@ -81,7 +81,8 @@ interface DifficultyProfile {
 | `hand` | `'right' \| 'left'`（左手会把口令里的左右手对调） | `'right'` |
 | `custom` | `{ text, mode }[]`，≤30 条、每条 ≤60 字 | `[]` |
 | `disabled` | `number[]`（内置口令的**下标**） | `[]` |
-| `nipple` / `glans` | `{ on: boolean, times: 1–4 }` | `{ on: false, times: 1 }` |
+| `nipple` / `glans` | `{ on: boolean, times: 1–4 }`（整局中途插入几段专属指令） | `{ on: false, times: 1 }` |
+| `focus` | `'none' \| 'nipple' \| 'glans'`（整局只玩一个部位：开了就不再插入中途专属段，指令池整局换成该部位专属池） | `'none'` |
 | `redBeat` | `'heartbeat' \| 'both' \| 'metronome'` | `'heartbeat'` |
 | `heartbeat` / `metronome` | boolean | `true` / `true` |
 | `heartbeatVolume` / `beatVolume` | 0–300 整数 | 100 / 100 |
@@ -346,6 +347,20 @@ export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
 | 视频·图片 | 直接绑 `Playlist`：`kind / order / imageCount / imageTiming / imageSeconds / bpm(20–300) / loop / favoritesOnly` + `keepVideoOnStop` + `switchVideoPerCommand` + `keepVideoWhileCooling` + `videoSound` + `skipIntro` + `fit` / `pos` + `textOpacity` / `textScale` |
 | 声音 | `metronome` + `beatVolume(0–300)`、`mediaVolume(0–100)`、`heartbeat` + `heartbeatVolume(0–300)` + `redBeat` + `heartbeatSync`、`bpmRandom(on/min/max)`、`vibrate` + `vibrateOn(command/edge/finish)` |
 | 其他 | `hideRemaining`、`brightness(20–100)`、`mixAudio`、`mirror(on/place)` + 前置摄像头同意卡、本机成绩行（`shicun.edge.stats.v1`） |
+
+### 单部位模式（`web/src/playback/focus.ts`）
+
+`focus` 非 `none` 时，整局只出该部位的专属指令，并且**不再插入**中途的「只玩乳头 / 只玩龟头」时间（那两个开关同时变灰）。
+
+| 导出 | 说明 |
+| --- | --- |
+| `focusAreas` | `['none', 'nipple', 'glans']` |
+| `focusLabels` | `none`=不限制 / `nipple`=只玩乳头 / `glans`=只玩龟头 |
+| `focusNotes` | 选中后显示在设置项下方的说明（乳头：从头到尾只出乳头指令，最后允许前下面一下都不许碰；龟头：从头到尾只出龟头指令，不许握柱身） |
+| `focusSectionsOff` | `单部位模式下不会使用`（两个专属段开关上的灰字） |
+| `focusAllowBelow` | `现在可以摸下面了。`（只玩乳头拿到许可时，奖励屏下方多这一句） |
+
+指令池在 `web/src/playback/commands.ts`：`focusNippleCommands`（18 条，`mode` 覆盖 go / slow / stop，其中 2 条 `category: 'edge'` 保留寸止语义）、`focusGlansCommands`（16 条，同结构）。`EdgeSession` 构造时按 `settings.focus` 直接把 `this.pool` 换成对应池（不经过分类过滤与道具合并），`allowBelow` getter 只在 `phase === 'allow'` 且 `focus === 'nipple'` 且非 `ruined` 时给文案。
 
 ### 镜子（`web/src/playback/mirror.ts`）
 

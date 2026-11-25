@@ -17,6 +17,7 @@ import {
 import { maleCommands } from './playback/commands'
 import { defaultEdgeSettings, readEdgeSettings } from './playback/settings'
 import { toneNotes } from './playback/tones'
+import { focusAreas, focusLabels, focusLegend, focusNotes, focusSectionsOff } from './playback/focus'
 import {
   MIRROR_CONSTRAINTS, classifyMirrorError, mirrorErrorLabels, mirrorPlaceLabels, mirrorPlaces, mirrorSupport, mirrorText,
   stopStream, type MirrorError
@@ -31,7 +32,7 @@ const selected = ref('play')
 const search = ref('')
 // 分组顺序对齐参考站：玩法 / 指令 / 视频·图片 / 声音 / 其他。
 const groups = computed(() => [
-  { id: 'play', label: '玩法', keywords: '推荐 第一次 标准 慢慢来 时间 分钟 随机 难度 简单 普通 困难 地狱 许可率 自己调 混合 可以撸 慢慢来 不许碰 结局 抽签 必定 松手 连续 加时 允许射精 秒 等待 随机 固定 指令时长 较长 很长 乳头 龟头' },
+  { id: 'play', label: '玩法', keywords: '推荐 第一次 标准 慢慢来 时间 分钟 随机 难度 简单 普通 困难 地狱 许可率 自己调 混合 可以撸 慢慢来 不许碰 结局 抽签 必定 松手 连续 加时 允许射精 秒 等待 随机 固定 指令时长 较长 很长 乳头 龟头 整局 单部位 一个部位 focus' },
   { id: 'command', label: '指令', keywords: '分类 寸止 挑逗 姿势 羞耻 轻度疼痛 惯用手 左右手 自定义 口令 启停 禁用 口吻 强势 挑逗 羞辱 温柔 足控 短句' },
   { id: 'media', label: '视频·图片', keywords: '视频 图片 混合 仅图片 仅视频 顺序 随机 文件名 每轮 数量 间隔 切图 BPM 循环 喜欢 收藏' },
   { id: 'sound', label: '声音', keywords: '节拍 音量 心跳 红 媒体 视频 音量 变暗 混音' },
@@ -92,6 +93,7 @@ function resetGroup() {
     item.rest = { ...base.rest }
     item.nipple = { ...base.nipple }
     item.glans = { ...base.glans }
+    item.focus = base.focus
     item.toy = base.toy
     item.aneros = base.aneros
   } else if (selected.value === 'command') {
@@ -311,8 +313,15 @@ void secondsLabel
         </div>
         <p class="muted">点一下换一套推荐组合：{{ presetLabels.first }} = 5 分钟·简单·必定允许；{{ presetLabels.standard }} = 10 分钟·普通·抽签；{{ presetLabels.long }} = 20 分钟·困难·抽签。</p>
 
+        <h5 class="field-label">{{ focusLegend }}</h5>
+        <div class="chips">
+          <button v-for="area in focusAreas" :key="area" type="button" class="chip" :aria-pressed="settings.focus === area" data-sundome-focus @click="settings.focus = area">{{ focusLabels[area] }}</button>
+        </div>
+        <p v-if="settings.focus !== 'none'" class="muted" data-sundome-focus-note>{{ focusNotes[settings.focus] }}</p>
+
         <h5 class="field-label">只玩乳头 / 只玩龟头</h5>
-        <div class="settings-grid">
+        <div v-if="settings.focus !== 'none'" class="muted">{{ focusSectionsOff }}</div>
+        <div v-else class="settings-grid">
           <label class="toggle"><input :checked="settings.nipple.on" type="checkbox" @change="settings.nipple.on = ($event.target as HTMLInputElement).checked" />只玩乳头</label>
           <label v-if="settings.nipple.on">插入段数<input :value="settings.nipple.times" type="number" min="1" max="4" @change="settings.nipple.times = Math.min(4, Math.max(1, Math.round(Number(($event.target as HTMLInputElement).value) || 1)))" /></label>
           <label class="toggle"><input :checked="settings.glans.on" type="checkbox" @change="settings.glans.on = ($event.target as HTMLInputElement).checked" />只玩龟头</label>

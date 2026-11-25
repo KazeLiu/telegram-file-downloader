@@ -160,3 +160,45 @@ export const anerosCommands: EdgeCommand[] = [
   { text: "快速、轻轻地夹紧。手放在膝盖上", mode: "stop", category: "basic", bpm: 90, seconds: 15 },
   { text: "捏着乳头，夹紧、放松，反复来。下面不许碰", mode: "stop", category: "tease", bpm: 40, seconds: 20 },
 ]
+
+// 「整局只玩乳头」池：18 条，逐条对应参考站 focus 模式的乳头元数据与中文文案。
+export const focusNippleCommands: EdgeCommand[] = [
+  { text: "用指尖弹乳头。下面不许碰", mode: "go", category: "nipple", bpm: 120 },
+  { text: "捏住乳头，在指间快速搓动", mode: "go", category: "nipple", bpm: 110 },
+  { text: "用指甲轻轻刮乳头。手不许往下伸", mode: "go", category: "nipple", bpm: 130 },
+  { text: "两边乳头轮流快速玩", mode: "go", category: "nipple", bpm: 150 },
+  { text: "沿着乳头周围慢慢画圈", mode: "slow", category: "nipple", bpm: 35 },
+  { text: "只摸乳晕，慢慢揉。暂时别碰乳头", mode: "slow", category: "nipple", bpm: 30 },
+  { text: "若有若无地轻扫乳头", mode: "slow", category: "nipple", bpm: 20 },
+  { text: "像要吹气一样，用指尖轻轻划过", mode: "slow", category: "nipple", bpm: 25 },
+  { text: "彻底放手。下面也不许碰", mode: "stop", category: "nipple", seconds: 8 },
+  { text: "松手，感受乳头一阵阵发痒", mode: "stop", category: "nipple", seconds: 10 },
+  { text: "挺起胸把乳头露出来。什么都别碰", mode: "stop", category: "nipple", seconds: 12 },
+  { text: "双手放到背后。乳头和下面都不许碰", mode: "stop", category: "nipple", seconds: 8 },
+  { text: "只靠乳头做到临界前一刻，然后停下", mode: "go", category: "edge", bpm: 120, seconds: 30, edge: true },
+  { text: "只靠乳头慢慢逼近临界。松手", mode: "slow", category: "edge", bpm: 40, seconds: 30, edge: true },
+  { text: "捏着乳头快速搓。下面禁止", mode: "go", category: "nipple", bpm: 110 },
+  { text: "一边一边慢慢玩。想摸下面也得忍住", mode: "slow", category: "nipple", bpm: 30 },
+  { text: "盯着乳头等。手不许往下伸", mode: "stop", category: "nipple", seconds: 10 },
+  { text: "乳头再快一点。结束前下面都不许碰", mode: "go", category: "nipple", bpm: 140 },
+]
+
+// 「整局只玩龟头」池：16 条，逐条对应参考站 focus 模式的龟头元数据与中文文案。
+export const focusGlansCommands: EdgeCommand[] = [
+  { text: "用手心包住龟头，快速磨。不许握柱身", mode: "go", category: "glans", bpm: 120 },
+  { text: "手指圈成环，只在冠状沟快速动", mode: "go", category: "glans", bpm: 130 },
+  { text: "抹上润滑液，只快速揉龟头", mode: "go", category: "glans", bpm: 150 },
+  { text: "龟头正面和背面轮流快速揉", mode: "go", category: "glans", bpm: 110 },
+  { text: "只用指尖慢慢抚摸龟头", mode: "slow", category: "glans", bpm: 35 },
+  { text: "只在最前端慢慢画小圈", mode: "slow", category: "glans", bpm: 25 },
+  { text: "用一根手指慢慢沿着冠状沟划", mode: "slow", category: "glans", bpm: 30 },
+  { text: "手心轻轻贴上去，只慢慢磨龟头", mode: "slow", category: "glans", bpm: 20 },
+  { text: "松手。龟头和柱身都不许碰", mode: "stop", category: "glans", seconds: 8 },
+  { text: "让龟头露在空气里，等着", mode: "stop", category: "glans", seconds: 12 },
+  { text: "双手放在大腿上。盯着龟头等", mode: "stop", category: "glans", seconds: 10 },
+  { text: "马上放手。不许再握回去", mode: "stop", category: "glans", seconds: 8 },
+  { text: "只靠龟头做到临界前一刻，然后停下", mode: "go", category: "edge", bpm: 120, seconds: 30, edge: true },
+  { text: "只靠龟头慢慢逼近临界。松手", mode: "slow", category: "edge", bpm: 35, seconds: 30, edge: true },
+  { text: "龟头再快一点。不许握柱身", mode: "go", category: "glans", bpm: 140 },
+  { text: "只轻轻摸最前端。柱身禁止", mode: "slow", category: "glans", bpm: 30 },
+]

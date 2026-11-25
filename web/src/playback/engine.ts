@@ -1,6 +1,8 @@
 // 寸止引擎：语义与数值对齐参考实现（go / slow / stop 三相位 + 难度份额 + 预生成任务）。
 // 纯函数、可播种随机，便于校验与复现。
-import { anerosCommands, maleCommands, toyCommands, type EdgeCommand, type EdgeMode } from './commands.ts'
+import {
+  anerosCommands, focusGlansCommands, focusNippleCommands, maleCommands, toyCommands,
+  type EdgeCommand, type EdgeMode } from './commands.ts'
 
 export type { EdgeCommand, EdgeMode }
 

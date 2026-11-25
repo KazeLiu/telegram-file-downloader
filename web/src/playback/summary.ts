@@ -1,6 +1,7 @@
 // 设置摘要：一行话描述当前这套玩法，显示在设置卡与首页。
 // 句式对齐参考站：`10 分钟 · 普通 · 抽签 · 指令 81 种 · 语音播报 指令`。
-import { maleCommands } from './commands.ts'
+import { focusGlansCommands, focusNippleCommands, maleCommands } from './commands.ts'
+import { focusLabels } from './focus.ts'
 import {
   difficultyLabels, extendLengthLabels, finaleLabels, instructionLengthLabels, modeLabels, permitRate, restModeLabels, toneLabels, toneOrder,
 } from './engine.ts'
@@ -8,6 +9,9 @@ import type { EdgeSettings } from './settings.ts'
 
 /** 当前会进入抽选池的口令条数（含自定义，减去逐条停用的）。 */
 export function enabledCommandCount(settings: EdgeSettings) {
+  // 单部位模式下整局换成该部位的专属池（条数与主池不同）。
+  if (settings.focus === 'nipple') return focusNippleCommands.length
+  if (settings.focus === 'glans') return focusGlansCommands.length
   return Math.max(0, maleCommands.length + settings.custom.length - settings.disabled.length)
 }
 
@@ -24,8 +28,9 @@ export function settingsSummary(settings: EdgeSettings) {
     ? `${modeLabels.stop} ${settings.rest.seconds} 秒`
     : `${modeLabels.stop} ${settings.rest.min}–${settings.rest.max} 秒`
   parts.push(restModeLabels[settings.rest.mode] === '随机' ? rest : rest)
-  if (settings.nipple.on) parts.push('只玩乳头')
-  if (settings.glans.on) parts.push('只玩龟头')
+  if (settings.focus !== 'none') parts.push(focusLabels[settings.focus])
+  if (settings.focus === 'none' && settings.nipple.on) parts.push('只玩乳头')
+  if (settings.focus === 'none' && settings.glans.on) parts.push('只玩龟头')
   if (settings.toy) parts.push('飞机杯')
   if (settings.aneros) parts.push('按摩器')
   const tones = toneOrder.filter(key => settings.tones[key])

@@ -17,7 +17,8 @@ import {
   toneAfterForCommand, toneForTask, pickToneLine, toneLabels, toneOrder, type EdgeMode
 } from '../src/playback/engine.ts'
 import { abuseLines, feetLines, strongLines, sweetLines, teaseLines, toneNotes } from '../src/playback/tones.ts'
-import { anerosCommands, maleCommands, toyCommands } from '../src/playback/commands.ts'
+import { anerosCommands, focusGlansCommands, focusNippleCommands, maleCommands, toyCommands } from '../src/playback/commands.ts'
+import { focusAllowBelow, focusAreas, focusLabels } from '../src/playback/focus.ts'
 import { defaultEdgeSettings, edgeSchemaVersion, edgeStorageKey, normalizeEdgeSettings, readEdgeSettings, writeEdgeSettings } from '../src/playback/settings.ts'
 import { EdgeSession } from '../src/playback/session.ts'
 import {
@@ -619,6 +620,32 @@ assert.ok(mirrorText.consentYes.includes('允许'), '同意文案要说明会打
   stopStream(stream)
   assert.deepEqual(stopped, ['a', 'b'])
   stopStream(null)
+}
+
+{
+  // 单部位模式：整局只出该部位的专属指令，且不再插入中途的专属段。
+  assert.deepEqual(focusAreas, ['none', 'nipple', 'glans'])
+  assert.equal(focusLabels.nipple, '只玩乳头')
+  assert.equal(focusAllowBelow, '现在可以摸下面了。')
+  assert.ok(focusNippleCommands.length >= 15, '乳头专属池要有足够条数')
+  assert.ok(focusGlansCommands.length >= 12, '龟头专属池要有足够条数')
+  assert.ok(focusNippleCommands.every(item => item.category === 'nipple' || item.category === 'edge'))
+  assert.ok(focusGlansCommands.every(item => item.category === 'glans' || item.category === 'edge'))
+  const nippleRun = new EdgeSession({ ...defaults, seed: 21, minutes: 3, focus: 'nipple', nipple: { on: true, times: 2 } })
+  assert.ok(nippleRun.tasks.every(task => task.focus === null), '单部位模式不再插入中途专属段')
+  assert.ok(nippleRun.tasks.every(task => (task.command?.category === 'nipple' || task.command?.category === 'edge')),
+    '单部位模式整局只出乳头指令')
+  const glansRun = new EdgeSession({ ...defaults, seed: 21, minutes: 3, focus: 'glans', glans: { on: true, times: 2 } })
+  assert.ok(glansRun.tasks.every(task => task.focus === null))
+  assert.ok(glansRun.tasks.every(task => (task.command?.category === 'glans' || task.command?.category === 'edge')),
+    '单部位模式整局只出龟头指令')
+  // 只玩乳头拿到许可时才有「现在可以摸下面了」。
+  assert.equal(nippleRun.allowBelow, '')
+  nippleRun.held = 0
+  nippleRun.phase = 'allow'
+  assert.equal(nippleRun.allowBelow, focusAllowBelow)
+  nippleRun.ruined = true
+  assert.equal(nippleRun.allowBelow, '', '松手射精时不提示可以摸下面')
 }
 
 console.log('edge engine checks passed')

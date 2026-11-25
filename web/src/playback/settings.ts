@@ -7,6 +7,7 @@ import {
   toneAfterOrder, toneOrder, type Mix, type RedBeat, type RestMode, type ToneAfter, type ToneKind, type Tune
 } from './engine.ts'
 import { mirrorPlaces, type MirrorPlace } from './mirror.ts'
+import { focusAreas, type FocusArea } from './focus.ts'
 
 export interface EdgeRest {
   mode: RestMode
@@ -37,6 +38,8 @@ export interface EdgeSettings {
   /** 只玩乳头 / 只玩龟头：整局固定插入几段专属指令 */
   nipple: { on: boolean; times: number }
   glans: { on: boolean; times: number }
+  /** 整局只玩一个部位：开了就不再插入中途的专属段，指令池整局换成该部位的专属池 */
+  focus: FocusArea
   /** 道具模式：飞机杯（会剔除只能用手的指令）与前列腺按摩器（红色段追加夹紧指令） */
   toy: boolean
   aneros: boolean
@@ -105,6 +108,7 @@ export const defaultEdgeSettings: EdgeSettings = {
   disabled: [],
   nipple: { on: false, times: 1 },
   glans: { on: false, times: 1 },
+  focus: 'none',
   toy: false,
   aneros: false,
   redBeat: 'heartbeat',
@@ -288,6 +292,7 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     disabled: readDisabled(raw.disabled),
     nipple: readFocus(raw.nipple, defaultEdgeSettings.nipple),
     glans: readFocus(raw.glans, defaultEdgeSettings.glans),
+    focus: pickValue(raw.focus, focusAreas, defaultEdgeSettings.focus),
     toy: boolOr(raw.toy, defaultEdgeSettings.toy),
     aneros: boolOr(raw.aneros, defaultEdgeSettings.aneros),
     redBeat: pickValue(raw.redBeat, redBeats, defaultEdgeSettings.redBeat),

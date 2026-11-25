@@ -13,6 +13,8 @@ const props = defineProps<{
   multi?: boolean
   /** 连续结局的第几次（从 1 开始）。 */
   round?: number
+  /** 只玩乳头且拿到许可时，多一句「现在可以摸下面了」。 */
+  allowBelow?: string
 }>()
 
 /** 已经用掉的比例 0–1。 */
@@ -56,6 +58,7 @@ const background = computed(() => (props.ruined
       <p class="sd-multi-line" data-sundome-multi-line>{{ line }}</p>
     </template>
     <p v-else class="sd-body">{{ ruined ? '但射出的瞬间要松手。不碰，让它自己流' : '在进度条消失前射出来' }}</p>
+    <p v-if="allowBelow" class="sd-allow-below" data-sundome-focus-allow>{{ allowBelow }}</p>
     <div class="sd-bar" data-sundome-reward-bar>
       <div class="sd-bar-fill" :style="{ width: `${(1 - used) * 100}%` }" />
     </div>
@@ -99,6 +102,10 @@ const background = computed(() => (props.ruined
 .sd-bar-fill {
   height: 100%; border-radius: 999px; background: #fff;
   transition: width .1s linear;
+}
+.sd-allow-below {
+  margin: 12px 0 0; max-width: 30rem;
+  font-size: 16px; font-weight: 700; line-height: 1.5;
 }
 .sd-remain {
   position: relative; z-index: 10; margin: 12px 0 0;

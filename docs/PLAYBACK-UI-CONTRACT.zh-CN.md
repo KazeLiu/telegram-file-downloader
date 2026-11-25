@@ -130,6 +130,7 @@ defineProps<{
   windowTotal: number
   multi?: boolean          // 连续（多少次都行）结局：换成多轮文案
   round?: number           // 连续结局里现在播到第几次（1 起，最多 4）
+  allowBelow?: string      // 只玩乳头拿到许可时多一句「现在可以摸下面了。」
 }>()
 ```
 
@@ -142,6 +143,7 @@ defineProps<{
   文案常量在 `engine.ts`：`multiTitle = '可以射。多少次都行'`、`multiLines`（4 条）、
   `multiRoundLabel(round)`、`multiWindowSeconds = 100`、`multiRoundSeconds = 25`、`multiRounds = 4`。
 
+- `allowBelow` 非空时在正文下方多一段 `p.sd-allow-below[data-sundome-focus-allow]`（16px/700）。
 - 根 `data-sundome="reward"`，`:data-result="ruined ? 'ruin' : 'allow'"`，`position: fixed; inset: 0; z-index: 95`。
 - 背景：`ruined` → `radial-gradient(ellipse at 50% 30%, #c86a2a 0%, #6b2f0f 55%, #2a1206 100%)`，否则 `radial-gradient(ellipse at 50% 30%, #ff4d6d 0%, #a4123a 55%, #3a0612 100%)`。
 - 内容：眉标（`Ruined` / `Permission`，12px/600，`letter-spacing .35em`，70% 白）→ 标题「可以射」/「可以射了」（`clamp(44px,13vw,96px)` 斜体 800）→ 正文「但射出的瞬间要松手。不碰，让它自己流」/「在进度条消失前射出来」→ 倒计时条（`height: 12px; max-width: 28rem`，白色内条）→ `剩余 N 秒`。

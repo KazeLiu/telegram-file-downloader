@@ -162,6 +162,8 @@ const windowTotal = computed(() => {
 const multi = computed(() => Boolean(frame.value?.multi) && allowed.value)
 /** 连续结局现在播到第几次「再来一次」。 */
 const multiRound = computed(() => Math.max(1, Math.round(frame.value?.multiRound ?? 1)))
+/** 只玩乳头且拿到许可时，奖励屏下方多一句「现在可以摸下面了」。 */
+const allowBelow = computed(() => session.value?.allowBelow ?? '')
 /** 这次许可是不是「松手射精」。 */
 const ruined = computed(() => session.value?.ruined ?? finishedReason.value === 'ruin')
 /** 这一局是不是连续（多少次都行）结局——结算屏在成功时换成多轮正文。 */
@@ -1220,6 +1222,7 @@ onBeforeUnmount(() => {
         :window-total="windowTotal"
         :multi="multi"
         :round="multiRound"
+        :allow-below="allowBelow"
       />
 
       <div class="runtime-controls">
