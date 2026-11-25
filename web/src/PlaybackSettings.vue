@@ -106,6 +106,8 @@ function resetGroup() {
     item.mediaVolume = base.mediaVolume
     item.bpmRandom = { ...base.bpmRandom }
     item.heartbeatSync = base.heartbeatSync
+    item.vibrate = base.vibrate
+    item.vibrateOn = { ...base.vibrateOn }
   } else {
     item.hideRemaining = base.hideRemaining
     item.brightness = base.brightness
@@ -478,6 +480,13 @@ void secondsLabel
         </div>
         <label class="toggle"><input :checked="settings.heartbeatSync" type="checkbox" @change="settings.heartbeatSync = ($event.target as HTMLInputElement).checked" />心跳跟随 BPM</label>
         <p class="muted">关掉后，即使红色带 BPM，心跳也保持固定节奏。</p>
+        <label class="toggle"><input :checked="settings.vibrate" type="checkbox" @change="settings.vibrate = ($event.target as HTMLInputElement).checked" />切换时振动</label>
+        <p class="muted">仅限手机。“不许碰”时振动更久。</p>
+        <div v-if="settings.vibrate" class="settings-grid">
+          <label class="toggle"><input :checked="settings.vibrateOn.command" type="checkbox" @change="settings.vibrateOn.command = ($event.target as HTMLInputElement).checked" />指令切换时</label>
+          <label class="toggle"><input :checked="settings.vibrateOn.edge" type="checkbox" @change="settings.vibrateOn.edge = ($event.target as HTMLInputElement).checked" />按“忍住了”时</label>
+          <label class="toggle"><input :checked="settings.vibrateOn.finish" type="checkbox" @change="settings.vibrateOn.finish = ($event.target as HTMLInputElement).checked" />结局（许可·结束）时</label>
+        </div>
         <p class="muted">全部是浏览器实时合成的音，不加载任何音频文件。</p>
       </template>
 

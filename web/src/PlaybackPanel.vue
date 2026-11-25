@@ -88,6 +88,7 @@ let immersive = false
 let pointer: { id: number; x: number; y: number; left: number; top: number; moved: boolean } | undefined
 let suppressClick = false
 let lastMode = ''
+let lastTask = -1
 /** 红色（不许碰）时由我们主动暂停视频，避免被 videoPaused 当成用户暂停整局。 */
 let videoHold = false
 
@@ -435,6 +436,7 @@ function beginSession() {
   zoomLevel.value = 1
   imageElapsed.value = 0
   lastMode = frame.value.mode
+  lastTask = frame.value.task?.index ?? -1
   previousTick = performance.now()
   nextBeat = 0
   void nextTick(() => {
@@ -470,6 +472,7 @@ function finish(reason: FinishReason) {
   queueRequest.abort(); queueLoading.value = false; pendingAdvance = false
   imageLoad++; imageBuffer.clear()
   pause()
+  buzz([60, 40, 60, 40, 120], 'finish')
   finishedReason.value = reason
   screen.value = 'finished'
   error.value = ''
@@ -511,6 +514,11 @@ function step(delta: number) {
 }
 
 /** 忍住了：交给 session 记一次，并立刻切到「等它平息」。 */
+/** 切换时振动：参考站在指令切换、按「忍住了」、结局三处振动。 */
+function buzz(pattern: number | number[], kind: 'command' | 'edge' | 'finish') {
+  if (!settings.value.vibrate || !settings.value.vibrateOn[kind]) return
+  try { navigator.vibrate?.(pattern) } catch { /* 桌面浏览器不支持，忽略 */ }
+}
 function hold() {
   if (!canHold.value || !session.value) return
   session.value.hold()
@@ -518,6 +526,7 @@ function hold() {
   frame.value = session.value.frame()
   note.value = ''
   nextBeat = 0
+  buzz([40, 30, 40], 'edge')
   if (settings.value.metronome) void sound.cue({ beatVolume: settings.value.beatVolume, heartbeatVolume: settings.value.heartbeatVolume })
 }
 function lose() {
@@ -572,6 +581,12 @@ function tick() {
   session.value.tick(delta)
   frame.value = session.value.frame()
   held.value = session.value.held
+  /* 参考站口径：每换一条指令振一次，「不许碰」更久。 */
+  const tickTask = frame.value.task?.index ?? -1
+  if (tickTask !== lastTask) {
+    lastTask = tickTask
+    if (tickTask >= 0 && !frame.value.cooling) buzz(frame.value.mode === 'stop' ? [90, 60, 90] : 40, 'command')
+  }
   if (session.value.phase === 'done') {
     const outcome = session.value.outcome ?? 'manual'
     finish(outcome)

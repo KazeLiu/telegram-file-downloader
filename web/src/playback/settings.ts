@@ -48,6 +48,10 @@ export interface EdgeSettings {
   bpmRandom: { on: boolean; min: number; max: number }
   /** 心跳跟随 BPM：关掉后红色带 BPM 时心跳仍保持固定节奏 */
   heartbeatSync: boolean
+  /** 切换时振动：仅限手机 */
+  vibrate: boolean
+  /** 振动的时机 */
+  vibrateOn: { command: boolean; edge: boolean; finish: boolean }
   /** 红色（不许碰）时也继续播放视频：关掉时红色会暂停并额外变暗（参考站默认行为） */
   keepVideoOnStop: boolean
   /** 每换一条指令就换一个视频 */
@@ -105,6 +109,8 @@ export const defaultEdgeSettings: EdgeSettings = {
   mixAudio: false,
   bpmRandom: { on: false, min: 60, max: 160 },
   heartbeatSync: true,
+  vibrate: true,
+  vibrateOn: { command: true, edge: true, finish: true },
   keepVideoOnStop: false,
   switchVideoPerCommand: false,
   keepVideoWhileCooling: true,
@@ -219,6 +225,16 @@ function readFocus(value: unknown, fallback: { on: boolean; times: number }) {
   return { on: boolOr(value.on, fallback.on), times: clampNumber(value.times, 1, 4, fallback.times) }
 }
 
+function readVibrateOn(value: unknown): EdgeSettings['vibrateOn'] {
+  const base = { ...defaultEdgeSettings.vibrateOn }
+  if (!isRecord(value)) return base
+  return {
+    command: boolOr(value.command, base.command),
+    edge: boolOr(value.edge, base.edge),
+    finish: boolOr(value.finish, base.finish)
+  }
+}
+
 function readBpmRandom(value: unknown): EdgeSettings['bpmRandom'] {
   const base = { ...defaultEdgeSettings.bpmRandom }
   if (!isRecord(value)) return base
@@ -264,6 +280,8 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     mixAudio: boolOr(raw.mixAudio, defaultEdgeSettings.mixAudio),
     bpmRandom: readBpmRandom(raw.bpmRandom),
     heartbeatSync: boolOr(raw.heartbeatSync, defaultEdgeSettings.heartbeatSync),
+    vibrate: boolOr(raw.vibrate, defaultEdgeSettings.vibrate),
+    vibrateOn: readVibrateOn(raw.vibrateOn),
     keepVideoOnStop: boolOr(raw.keepVideoOnStop, defaultEdgeSettings.keepVideoOnStop),
     switchVideoPerCommand: boolOr(raw.switchVideoPerCommand, defaultEdgeSettings.switchVideoPerCommand),
     keepVideoWhileCooling: boolOr(raw.keepVideoWhileCooling, defaultEdgeSettings.keepVideoWhileCooling),
