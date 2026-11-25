@@ -938,6 +938,16 @@ function renderPip() {
   }
   const center = doc.createElement('div')
   center.style.cssText = 'flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center'
+  // 小窗里的弹性留白（对齐参考站的 data-sundome-upper-pad）：上方 2 份、下方 1 份。
+  const upperPad = doc.createElement('div')
+  upperPad.setAttribute('aria-hidden', 'true')
+  upperPad.setAttribute('data-sundome-upper-pad', 'top')
+  upperPad.style.cssText = 'min-height:0;width:100%;flex:2 1 0px'
+  const lowerPad = doc.createElement('div')
+  lowerPad.setAttribute('aria-hidden', 'true')
+  lowerPad.setAttribute('data-sundome-upper-pad', 'bottom')
+  lowerPad.style.cssText = 'min-height:0;width:100%;flex:1 1 0px'
+  wrap.append(upperPad)
   if (value?.toneBefore) {
     const before = doc.createElement('p')
     before.textContent = value.toneBefore
@@ -973,7 +983,7 @@ function renderPip() {
   pauseButton.style.cssText = `${base};border:1px solid rgba(255,255,255,.4);background:transparent;color:#fff`
   pauseButton.addEventListener('click', () => (paused.value ? resume() : pause()))
   actions.append(edgeButton, pauseButton)
-  wrap.append(actions)
+  wrap.append(actions, lowerPad)
   doc.body.append(wrap)
 }
 /** 提示卡里点「打开小窗」。 */
