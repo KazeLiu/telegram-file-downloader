@@ -2,7 +2,7 @@
 // 句式对齐参考站：`10 分钟 · 普通 · 抽签 · 指令 81 种 · 语音播报 指令`。
 import { maleCommands } from './commands.ts'
 import {
-  difficultyLabels, finaleLabels, instructionLengthLabels, modeLabels, permitRate, restModeLabels, toneLabels, toneOrder,
+  difficultyLabels, extendLengthLabels, finaleLabels, instructionLengthLabels, modeLabels, permitRate, restModeLabels, toneLabels, toneOrder,
 } from './engine.ts'
 import type { EdgeSettings } from './settings.ts'
 
@@ -16,6 +16,7 @@ export function settingsSummary(settings: EdgeSettings) {
   parts.push(settings.durationRandom ? '随机时长' : `${settings.minutes} 分钟`)
   parts.push(difficultyLabels[settings.difficulty])
   parts.push(finaleLabels[settings.finale])
+  if (settings.finale === 'overtime') parts.push(extendLengthLabels[settings.extendLen])
   parts.push(`指令 ${enabledCommandCount(settings)} 种`)
   parts.push(`许可率 ${Math.round(permitRate(settings.difficulty, 0, settings.tune.chance) * 100)}%`)
   if (settings.instructionLength !== 'standard') parts.push(instructionLengthLabels[settings.instructionLength])

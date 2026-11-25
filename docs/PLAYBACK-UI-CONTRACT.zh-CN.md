@@ -52,7 +52,7 @@ defineProps<{
   landscapeAvailable: boolean
   volumeOpen: boolean
   fullscreen: boolean
-  note: string             // 加时 / 第 N 轮，非空时替代「第 N 条指令」
+  note: string             // 「加时第 N 次 · 时间增加了 m:ss」/「第 N 轮」，非空时替代「第 N 条指令」
 }>()
 defineEmits<{
   'toggle-crop': []
@@ -147,6 +147,7 @@ defineProps<{
   held: number
   commands: number
   rounds: number
+  extends?: number         // 加时次数；>0 时多显示一行「加时 N 次后获得许可」
 }>()
 defineEmits<{ again: []; exit: [] }>()
 ```

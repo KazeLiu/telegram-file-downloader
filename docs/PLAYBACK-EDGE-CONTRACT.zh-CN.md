@@ -75,7 +75,7 @@ interface DifficultyProfile {
 | `categories` | `{ edge, tease, pose, pain }: boolean` | edge/tease/pose `true`，pain `false` |
 | `tune` | `{ chance: 10–100 \| null, stop: 0–60 \| null, mix: {go,slow,stop} \| null }` | 全 `null` |
 | `allowRuin` | boolean（拿到许可也按松手射精收场） | `false` |
-| `overtimeRounds` | 0–9 整数 | 3 |
+| `extendLen` | `'short' \| 'normal' \| 'shrink'`（加时赛的加时长度） | `'normal'` |
 | `rewardSeconds` | 5/10/20/30/45/60 | 10 |
 | `rest` | `{ mode: 'random' \| 'fixed', seconds, min, max }`，3–120 | `random / 12 / 8–16` |
 | `hand` | `'right' \| 'left'`（左手会把口令里的左右手对调） | `'right'` |
@@ -189,7 +189,13 @@ export function varyBpm(
 
 - `permitRate` = `min(1, 基础概率(或 tune.chance/100) + min(0.2, 0.05 × 忍住次数))`，即每次 +5%、累计最多 +20%、封顶 100%。
 - `decideFinale`：`always` / `continuous` → `success`；`never` → `fail`；`ruin` → `ruin`；
-  `draw` / `overtime` → `random() < permitRate(...)`；`allowRuin` 为真时 `success` 改判 `ruin`。
+  `draw` → `random() < permitRate(...)`；`allowRuin` 为真时 `success` 改判 `ruin`。
+  `overtime` 不走这里：它在 `settle()` 里先按 `extendChance(permitRate(...), extends)` 判定，
+  没中才加时（见下）。
+- `extendChance(chance, times)` = `times >= 5 ? 1 : min(1, chance + 0.15 × times)`，即每次加时 +15%，
+  **第 5 次加时必中**。
+- `extendMs(length, times, random)`：`short` 固定 1–3 分钟、`normal` 固定 2–5 分钟；
+  `shrink` 按第几次递减（1 次 5–10、2 次 3–5、3 次 2–3、4 次起 1 分钟）。
 - `pickMode`：**第一段强制 `go`**；默认不连续出 `stop`（`stopAfterStop` 的难度除外）；
   自己调里 `stop` 占比 > 45% 时放开连出。
 - `buildTimeline`：整局时间线**一开始就全部预生成**，按 `shareOf` 加权抽模式；
@@ -289,8 +295,11 @@ export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
 - `hold()` 之后进入冷却段（时长取 `restSeconds(rest)`），冷却期间 `frame().mode` 恒为 `stop`、
   文案换成 `cooldownText`、`taskProgress` 走冷却进度。
 - 时间到 → `settle()`：`success` 与 `ruin` **都进 `allow` 阶段**（奖励屏），后者 `ruined = true`；
-  `overtime` 结局未中奖且 `round <= overtimeRounds` 时加时（`totalMs += max(60s, totalMs/4)`、
-  重建时间线、`note = '加时 N'`）；否则 `finish('deny')`。
+  否则 `finish('deny')`。
+- `overtime` 结局：`settle()` 里先按 `extendChance(permitRate(...), extends)` 判定这一次能否直接给许可，
+  中了就进许可窗口，没中则 `extend()`——`extends += 1`、`totalMs = elapsed + extendMs(extendLen, extends)`、
+  立刻插一条 6 秒红色指令（文案取自 `extendLines`，`note = '加时第 N 次 · 时间增加了 m:ss'`），
+  其余时段用新的随机种子重建时间线。**加时赛永远不会以 `deny` 收场**。
 - 许可窗口走完 `closeWindow()`：`continuous` 结局开下一轮（`round++`、`elapsed = 0`、重建时间线、
   `note = '第 N 轮'`），否则 `finish('allow')`；若 `ruined` 则 outcome 记为 `'ruin'`。
 

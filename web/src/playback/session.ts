@@ -1,5 +1,6 @@
 import {
-  bindCommands, buildTimeline, commandPool, decideFinale, dropOverlongCommands, filterByCategories, mulberry32, permitRate,
+  bindCommands, buildTimeline, commandPool, decideFinale, dropOverlongCommands, extendChance, extendLineSeconds, extendLines,
+  extendMs, filterByCategories, formatClock, mulberry32, permitRate,
   pickToneLine, randomSeed, restSeconds, taskAt, toneAfterForCommand, toneForTask,
   type EdgeCommand, type EdgeMode, type Task, type ToneKind, varyBpm } from './engine.ts'
 import type { EdgeSettings } from './settings.ts'
@@ -92,6 +93,8 @@ export class EdgeSession {
   tasks: Task[] = []
   phase: SessionPhase = 'run'
   round = 1
+  /** 已经加时了几次（加时赛专用，决定下一次的时长与许可率） */
+  extends = 0
   elapsed = 0
   totalMs = 0
   held = 0
@@ -240,28 +243,63 @@ export class EdgeSession {
 
   private settle() {
     const settings = this.settings
+    // 加时赛：先按「基础许可率 + 每次加时 15%」判定这一次能不能直接给许可，没中才继续加时。
+    if (settings.finale === 'overtime') {
+      const chance = permitRate(settings.difficulty, this.held, settings.tune.chance)
+      if (this.random() < extendChance(chance, this.extends)) {
+        this.enterAllow(settings.allowRuin)
+        return
+      }
+      this.extend()
+      return
+    }
     const verdict = decideFinale(settings.finale, settings.difficulty, this.held, this.random, settings.tune.chance, settings.allowRuin)
     // 松手射精也是一种「拿到许可」：可以射，但射出的瞬间要松手。
     // 参考站这一支同样进奖励屏，只是文案换成可以射／松手。
     if (verdict === 'ruin' || verdict === 'success') {
-      this.phase = 'allow'
-      this.ruined = verdict === 'ruin'
-      this.windowLeft = Math.max(1, Math.round(settings.rewardSeconds))
-      this.coolingEnd = 0
-      this.note = ''
-      return
-    }
-    // 加时赛：没拿到许可就往后再放一段时间重抽，次数用完就判负。
-    if (settings.finale === 'overtime' && this.round <= settings.overtimeRounds) {
-      this.round += 1
-      this.totalMs += Math.max(60_000, Math.round(this.totalMs / 4))
-      this.tasks = makeTimeline(settings, this.pool, randomSeed(), this.totalMs, this.nipplePool, this.glansPool)
-      this.toneCache.clear()
-      this.note = `加时 ${this.round - 1}`
-      this.coolingEnd = 0
+      this.enterAllow(verdict === 'ruin')
       return
     }
     this.finish('deny')
+  }
+
+  /** 进许可窗口；松手射精时窗口结束后仍按 'ruin' 收场。 */
+  private enterAllow(ruined: boolean) {
+    this.phase = 'allow'
+    this.ruined = ruined
+    this.windowLeft = Math.max(1, Math.round(this.settings.rewardSeconds))
+    this.coolingEnd = 0
+    this.note = ''
+  }
+
+  /**
+   * 加时：在当前时刻之后再加 extendMs 的时长，并立刻插一条 6 秒的红色指令（对齐参考实现）。
+   * 加时长度按「第几次加时」决定，所以每次都要重新算一遍总时长。
+   */
+  private extend() {
+    const settings = this.settings
+    this.extends += 1
+    const start = this.elapsed
+    const span = extendMs(settings.extendLen, this.extends, this.random)
+    this.totalMs = start + span
+    const line = extendLines[Math.floor(this.random() * extendLines.length)] ?? extendLines[0]!
+    const head: Task = {
+      index: 0,
+      at: start,
+      seconds: extendLineSeconds,
+      mode: 'stop',
+      command: { text: line, mode: 'stop', category: 'basic', seconds: extendLineSeconds },
+      edge: false,
+      focus: null
+    }
+    const headMs = extendLineSeconds * 1000
+    const restMs = Math.max(0, this.totalMs - (start + headMs))
+    const tail = restMs > 0 ? makeTimeline(settings, this.pool, randomSeed(), restMs, this.nipplePool, this.glansPool) : []
+    this.tasks = [head, ...tail.map(task => ({ ...task, index: task.index + 1, at: start + headMs + task.at }))]
+    this.toneCache.clear()
+    this.note = `加时第 ${this.extends} 次 · 时间增加了 ${formatClock(span)}`
+    this.coolingStart = 0
+    this.coolingEnd = 0
   }
 
   /** 许可窗口走完：连续模式开下一轮，否则算成功收场。 */

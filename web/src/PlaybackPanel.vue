@@ -1057,6 +1057,7 @@ onBeforeUnmount(() => {
       :held="held"
       :commands="commandCount"
       :rounds="frame?.round ?? round"
+      :extends="session?.extends ?? 0"
       @again="restart"
       @exit="backToLists"
     />

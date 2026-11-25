@@ -1,9 +1,9 @@
 // 寸止玩法的全局设置：对齐参考实现的 settings 结构（去掉联机与语音播报）。
 // 与播放列表分离：列表负责「放哪些媒体」，设置负责「怎么玩」。
 import {
-  bpmRandomMax, bpmRandomMin, brightnessMin, customCommandLimit, customCommandTextLimit, restMax, restMin,
+  bpmRandomMax, bpmRandomMin, brightnessMin, customCommandLimit, customCommandTextLimit, extendLengthOrder, restMax, restMin,
   textOpacityMin, textScaleMin, videoVolumeMax,
-  type Categories, type CustomCommand, type Difficulty, type Finale, type Hand, type InstructionLength,
+  type Categories, type CustomCommand, type Difficulty, type ExtendLength, type Finale, type Hand, type InstructionLength,
   toneAfterOrder, toneOrder, type Mix, type RedBeat, type RestMode, type ToneAfter, type ToneKind, type Tune
 } from './engine.ts'
 import { mirrorPlaces, type MirrorPlace } from './mirror.ts'
@@ -26,7 +26,8 @@ export interface EdgeSettings {
   categories: Categories
   tune: Tune
   allowRuin: boolean
-  overtimeRounds: number
+  /** 加时赛的加时长度：短 / 普通 / 越来越短 */
+  extendLen: ExtendLength
   rewardSeconds: number
   rest: EdgeRest
   hand: Hand
@@ -96,7 +97,7 @@ export const defaultEdgeSettings: EdgeSettings = {
   categories: { ...allCategories },
   tune: { chance: null, stop: null, mix: null },
   allowRuin: false,
-  overtimeRounds: 3,
+  extendLen: 'normal',
   rewardSeconds: 10,
   rest: { mode: 'random', seconds: 12, min: 8, max: 16 },
   hand: 'right',
@@ -136,6 +137,7 @@ export const defaultEdgeSettings: EdgeSettings = {
 const difficulties: Difficulty[] = ['easy', 'normal', 'hard', 'hell']
 const finales: Finale[] = ['draw', 'always', 'never', 'ruin', 'continuous', 'overtime']
 const lengths: InstructionLength[] = ['standard', 'long', 'veryLong']
+const extendLengths: ExtendLength[] = [...extendLengthOrder]
 const hands: Hand[] = ['right', 'left']
 const redBeats: RedBeat[] = ['heartbeat', 'both', 'metronome']
 const restModes: RestMode[] = ['random', 'fixed']
@@ -278,7 +280,7 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
       mix: readMix(tune.mix)
     },
     allowRuin: boolOr(raw.allowRuin, defaultEdgeSettings.allowRuin),
-    overtimeRounds: clampNumber(raw.overtimeRounds, 1, 10, defaultEdgeSettings.overtimeRounds),
+    extendLen: pickValue(raw.extendLen, extendLengths, defaultEdgeSettings.extendLen),
     rewardSeconds: clampNumber(raw.rewardSeconds, 5, 60, defaultEdgeSettings.rewardSeconds),
     rest: readRest(raw.rest),
     hand: pickValue(raw.hand, hands, defaultEdgeSettings.hand),

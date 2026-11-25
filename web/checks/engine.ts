@@ -8,6 +8,7 @@ import {
   varyBpm,
   adjustMix, beatVolumeMax, bindCommands, buildTimeline, categoryOrder, commandPool, customCommandLimit,
   customCommandTextLimit, decideFinale, difficulties, difficultyOrder, durationChoices, durationMax, durationMin,
+  extendChance, extendLengthOrder, extendLineSeconds, extendLines, extendMs,
   filterByCategories, finaleOrder, finalHoldMs, formatClock, instructionLengthOrder, mixOf, modeColors, modeLabels,
   modeOrder, mulberry32, permitMaxGain, permitRate, permitStep, pickCommandAt, pickIndex, pickMode, planFocus,
   presets, presetOrder, randomBpm, randomSeed, redBeatOrder, restFixedChoices, restMax, restMin, restRangeChoices,
@@ -153,6 +154,26 @@ assert.equal(decideFinale('draw', 'normal', 4, fixed(0.91)), 'fail')
 assert.equal(decideFinale('overtime', 'normal', 0, fixed(0.5)), 'success')
 assert.equal(decideFinale('overtime', 'normal', 0, fixed(0.5), null, true), 'ruin', '加时赛允许松手')
 assert.equal(decideFinale('overtime', 'normal', 0, fixed(0.9)), 'fail')
+
+// —— 加时赛：许可率每次 +15%、第 5 次必中；时长按第几次决定 ——
+assert.deepEqual(extendLengthOrder, ['short', 'normal', 'shrink'])
+assert.equal(extendLineSeconds, 6)
+assert.equal(extendLines.length, 4)
+assertClose(extendChance(0.7, 0), 0.7)
+assertClose(extendChance(0.7, 1), 0.85)
+assertClose(extendChance(0.7, 2), 1)
+assertClose(extendChance(0.3, 1), 0.45)
+assert.equal(extendChance(0.3, 5), 1, '第 5 次加时必中')
+assert.equal(extendChance(0.3, 9), 1)
+assert.equal(extendMs('short', 1, zeros), 60_000)
+assert.equal(extendMs('short', 4, nines), 180_000)
+assert.equal(extendMs('normal', 1, zeros), 120_000, '普通加时 2～5 分钟')
+assert.equal(extendMs('normal', 4, nines), 300_000)
+assert.equal(extendMs('shrink', 1, zeros), 300_000, '越来越短：第一次 5～10 分钟')
+assert.equal(extendMs('shrink', 1, nines), 600_000)
+assert.equal(extendMs('shrink', 2, zeros), 180_000)
+assert.equal(extendMs('shrink', 3, zeros), 120_000)
+assert.equal(extendMs('shrink', 4, zeros), 60_000)
 
 // —— restSeconds / randomBpm / planFocus / pickIndex ——
 assert.equal(restSeconds({ mode: 'fixed', seconds: 12, min: 8, max: 16 }, zeros), 12)
@@ -442,6 +463,34 @@ assert.ok(randomDuration.totalMs >= 5 * 60_000 && randomDuration.totalMs <= 20 *
 assert.equal(randomDuration.totalMs % 60_000, 0, '随机时长按整分钟取')
 const fixedDuration = new EdgeSession({ ...defaults, seed: 7, minutes: 90, durationRandom: false })
 assert.equal(fixedDuration.totalMs, 90 * 60_000, '没开随机就用设定分钟数')
+
+// 加时赛：没抽中不会以禁止收场，而是加时（先插一条 6 秒红色指令），最多 5 次后必给许可。
+const extendRun = new EdgeSession({
+  ...defaults, seed: 3, minutes: 1, difficulty: 'hell', finale: 'overtime', extendLen: 'normal', rewardSeconds: 5
+})
+let lastExtends = 0
+let sawExtendHead = false
+let sawExtendNote = false
+for (let index = 0; index < 4000 && !extendRun.finished; index += 1) {
+  const beforeTotal = extendRun.totalMs
+  extendRun.tick(1000)
+  if (extendRun.extends > lastExtends) {
+    lastExtends = extendRun.extends
+    const head = extendRun.tasks[0]!
+    assert.equal(head.mode, 'stop', '加时抽出的指令是红色')
+    assert.equal(head.seconds, extendLineSeconds, '加时指令固定 6 秒')
+    assert.ok(extendLines.includes(head.command?.text ?? ''), '加时文案取自 lines')
+    assert.equal(head.at, beforeTotal, '加时从原来的结束时刻接着走')
+    assert.ok(extendRun.totalMs > beforeTotal, '加时后总时长变长')
+    sawExtendHead = true
+    if (extendRun.note.startsWith('加时第')) sawExtendNote = true
+  }
+}
+assert.ok(sawExtendHead, '困难难度下应当至少加时一次')
+assert.ok(sawExtendNote, '加时时要写明第几次')
+assert.ok(lastExtends <= 5, '最多加时 5 次')
+assert.notEqual(extendRun.outcome, 'deny', '加时赛不会以禁止结束')
+assert.equal(extendRun.finished, true)
 
 // —— 口吻：按第几条指令轮流、前后各自随机、寸止指令不加后置 ——
 assert.deepEqual(toneOrder, ['strong', 'tease', 'abuse', 'sweet', 'feet'])

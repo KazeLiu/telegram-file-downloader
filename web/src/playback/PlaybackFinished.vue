@@ -12,6 +12,8 @@ const props = defineProps<{
   held: number
   commands: number
   rounds: number
+  /** 加时赛加了几次（0 表示没有加时；>0 时多显示一行「加时 N 次后获得许可」） */
+  extends?: number
 }>()
 
 const emit = defineEmits<{ again: []; exit: [] }>()
@@ -88,6 +90,9 @@ const facts = computed(() => [
   >
     <p class="sd-eyebrow">{{ copy.eyebrow }}</p>
     <h2 class="sd-title">{{ copy.title }}</h2>
+    <p v-if="(props.extends ?? 0) > 0" class="sd-extend-result" data-sundome-extend-result>
+      加时 {{ props.extends }} 次后获得许可
+    </p>
     <p class="sd-body" data-sundome-done-body>{{ copy.body }}</p>
     <dl class="sd-facts">
       <div v-for="fact in facts" :key="fact.label" data-sundome-done-stat>
@@ -121,6 +126,7 @@ const facts = computed(() => [
   margin: 24px 0 0; max-width: 32rem; font-size: 16px; line-height: 1.7;
   color: rgba(255, 255, 255, .88); text-wrap: balance; word-break: auto-phrase;
 }
+.sd-extend-result { margin: 8px 0 0; font-size: 14px; font-weight: 700; color: #ffd0dc; }
 .sd-facts { display: flex; gap: 24px; margin: 24px 0 0; padding: 0; }
 .sd-facts > div {
   display: flex; flex-direction: column; gap: 4px; padding: 10px 20px;

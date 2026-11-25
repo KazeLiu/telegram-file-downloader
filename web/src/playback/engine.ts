@@ -7,6 +7,7 @@ export type { EdgeCommand, EdgeMode }
 export type Difficulty = 'easy' | 'normal' | 'hard' | 'hell'
 export type Finale = 'draw' | 'always' | 'never' | 'ruin' | 'continuous' | 'overtime'
 export type InstructionLength = 'standard' | 'long' | 'veryLong'
+export type ExtendLength = 'short' | 'normal' | 'shrink'
 export type RestMode = 'random' | 'fixed'
 export type ToneKind = 'strong' | 'tease' | 'abuse' | 'sweet' | 'feet'
 export type ToneAfter = 'never' | 'half' | 'always'
@@ -80,7 +81,7 @@ export const finaleHints: Record<Finale, string> = {
   never: '时间到也禁止。一次都不能射',
   ruin: '可以射，但射出的瞬间松手，不碰任其流出',
   continuous: '射完不结束。接着来下一轮，想停就停',
-  overtime: '时间到后再加一段。加时里拿到许可就算成功'
+  overtime: '没抽中也不会以禁止结束，而是加时，直到获得许可（每加时一次概率 +15%，加时 5 次后必定许可）'
 }
 
 export const rewardChoices = [5, 10, 20, 30, 45, 60]
@@ -112,6 +113,41 @@ export const instructionLengthLabels: Record<InstructionLength, string> = {
   long: '较长（约 1～2 分钟）',
   veryLong: '很长（约 2～5 分钟）'
 }
+export const extendLengthOrder: ExtendLength[] = ['short', 'normal', 'shrink']
+export const extendLengthLabels: Record<ExtendLength, string> = {
+  short: '短（1～3 分钟）',
+  normal: '普通（2～5 分钟）',
+  shrink: '越来越短（5～10 分钟→1 分钟）'
+}
+/** 加时抽出的那条指令固定 6 秒。 */
+export const extendLineSeconds = 6
+/** 加时文案：时间到没抽中时轮流播报，超时（按到时间）用 timeout。 */
+export const extendLines = ['想高潮？还不行。再忍一会儿。', '求也没用，还不给。继续。', '没有许可。加时。', '不行。再忍一下。']
+export const extendTimeoutText = '时间到了。继续忍着。'
+export const extendAddedText = '时间增加了'
+
+/** 加时赛每次加时的许可率：基础值 + 每次加时 +15%，第 5 次必中。 */
+export function extendChance(chance: number, times: number) {
+  if (times >= 5) return 1
+  return Math.min(1, chance + 0.15 * times)
+}
+
+/** 加时时长（毫秒）：短固定 1～3 分钟，普通固定 2～5 分钟，越来越短则按第几次递减。 */
+export function extendMs(length: ExtendLength, times: number, random: Random) {
+  const [low, high] = length === 'short'
+    ? [1, 3]
+    : length === 'normal'
+      ? [2, 5]
+      : times <= 1
+        ? [5, 10]
+        : times === 2
+          ? [3, 5]
+          : times === 3
+            ? [2, 3]
+            : [1, 1]
+  return Math.round((low + (high - low) * random()) * 60_000)
+}
+
 export const restModeOrder: RestMode[] = ['random', 'fixed']
 export const restModeLabels: Record<RestMode, string> = { random: '随机', fixed: '固定' }
 export const toneOrder: ToneKind[] = ['strong', 'tease', 'abuse', 'sweet', 'feet']

@@ -7,7 +7,7 @@ import {
   adjustMix, beatVolumeMax, bpmRandomMax, bpmRandomMin, brightnessMin, categoryHints, categoryLabels, categoryOrder,
   textOpacityMin, textScaleMin,
   customCommandLimit, customCommandTextLimit, difficultyHints, difficultyLabels, difficultyOrder,
-  durationMax, durationMin, finaleHints, finaleLabels, finaleOrder, instructionLengthLabels,
+  durationMax, durationMin, extendLengthLabels, extendLengthOrder, finaleHints, finaleLabels, finaleOrder, instructionLengthLabels,
   instructionLengthOrder, mixOf, modeLabels, modeOrder, presets, presetLabels, presetOrder,
   redBeatLabels, redBeatOrder, restFixedChoices, restModeLabels, restModeOrder, restRangeChoices,
   rewardChoices, toneAfterLabels, toneAfterOrder, difficulties, permitRate,
@@ -80,7 +80,7 @@ function resetGroup() {
     item.finale = base.finale
     item.tune = { chance: null, stop: null, mix: null }
     item.allowRuin = base.allowRuin
-    item.overtimeRounds = base.overtimeRounds
+    item.extendLen = base.extendLen
     item.rewardSeconds = base.rewardSeconds
     item.rest = { ...base.rest }
     item.nipple = { ...base.nipple }
@@ -352,6 +352,12 @@ void secondsLabel
           <button v-for="key in finaleOrder" :key="key" type="button" class="chip" :aria-pressed="settings.finale === key" @click="settings.finale = key">{{ finaleLabels[key] }}</button>
         </div>
         <p class="muted">{{ finaleHints[settings.finale] }}</p>
+        <template v-if="settings.finale === 'overtime'">
+          <h5 class="field-label">加时长度</h5>
+          <div class="chips">
+            <button v-for="key in extendLengthOrder" :key="key" type="button" class="chip" :data-sundome-extend-len="key" :aria-pressed="settings.extendLen === key" @click="settings.extendLen = key">{{ extendLengthLabels[key] }}</button>
+          </div>
+        </template>
         <label class="toggle"><input :checked="settings.allowRuin" type="checkbox" @change="settings.allowRuin = ($event.target as HTMLInputElement).checked" />落选时以「松手射精」结束</label>
 
         <h5 class="field-label">允许射精的时间 / 忍住后等待</h5>
