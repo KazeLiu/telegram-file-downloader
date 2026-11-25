@@ -1,7 +1,8 @@
 // 寸止玩法的全局设置：对齐参考实现的 settings 结构（去掉联机、语音播报与道具模式）。
 // 与播放列表分离：列表负责「放哪些媒体」，设置负责「怎么玩」。
 import {
-  bpmRandomMax, bpmRandomMin, brightnessMin, customCommandLimit, customCommandTextLimit, restMax, restMin, videoVolumeMax,
+  bpmRandomMax, bpmRandomMin, brightnessMin, customCommandLimit, customCommandTextLimit, restMax, restMin,
+  textOpacityMin, textScaleMin, videoVolumeMax,
   type Categories, type CustomCommand, type Difficulty, type Finale, type Hand, type InstructionLength,
   toneAfterOrder, toneOrder, type Mix, type RedBeat, type RestMode, type ToneAfter, type ToneKind, type Tune
 } from './engine.ts'
@@ -51,6 +52,14 @@ export interface EdgeSettings {
   keepVideoOnStop: boolean
   /** 每换一条指令就换一个视频 */
   switchVideoPerCommand: boolean
+  /** 视频/图片铺法：cover=铺满屏幕，contain=显示完整画面（上下留黑边） */
+  fit: 'cover' | 'contain'
+  /** contain 时的画面位置 */
+  pos: 'top' | 'center' | 'bottom'
+  /** 指令文字不透明度（30–100） */
+  textOpacity: number
+  /** 指令文字大小（60–100） */
+  textScale: number
   /** 按“忍住了”之后的等待时间也继续播放视频 */
   keepVideoWhileCooling: boolean
   /** 视频声音：关 / 只在最后（获得许可时）/ 一直开 */
@@ -99,6 +108,10 @@ export const defaultEdgeSettings: EdgeSettings = {
   keepVideoOnStop: false,
   switchVideoPerCommand: false,
   keepVideoWhileCooling: true,
+  fit: 'cover',
+  pos: 'center',
+  textOpacity: 100,
+  textScale: 100,
   videoSound: 'end',
   skipIntro: false,
   tones: { strong: false, tease: false, abuse: false, sweet: false, feet: false },
@@ -112,6 +125,8 @@ const hands: Hand[] = ['right', 'left']
 const redBeats: RedBeat[] = ['heartbeat', 'both', 'metronome']
 const restModes: RestMode[] = ['random', 'fixed']
 const videoSounds: EdgeSettings['videoSound'][] = ['off', 'end', 'always']
+const fits: EdgeSettings['fit'][] = ['cover', 'contain']
+const positions: EdgeSettings['pos'][] = ['top', 'center', 'bottom']
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
@@ -252,6 +267,10 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     keepVideoOnStop: boolOr(raw.keepVideoOnStop, defaultEdgeSettings.keepVideoOnStop),
     switchVideoPerCommand: boolOr(raw.switchVideoPerCommand, defaultEdgeSettings.switchVideoPerCommand),
     keepVideoWhileCooling: boolOr(raw.keepVideoWhileCooling, defaultEdgeSettings.keepVideoWhileCooling),
+    fit: pickValue(raw.fit, fits, defaultEdgeSettings.fit),
+    pos: pickValue(raw.pos, positions, defaultEdgeSettings.pos),
+    textOpacity: clampNumber(raw.textOpacity, textOpacityMin, 100, defaultEdgeSettings.textOpacity),
+    textScale: clampNumber(raw.textScale, textScaleMin, 140, defaultEdgeSettings.textScale),
     videoSound: pickValue(raw.videoSound, videoSounds, defaultEdgeSettings.videoSound),
     skipIntro: boolOr(raw.skipIntro, defaultEdgeSettings.skipIntro),
     tones: readTones(raw.tones),

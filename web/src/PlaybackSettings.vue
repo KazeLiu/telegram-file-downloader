@@ -5,6 +5,7 @@ import type { Playlist } from './playback'
 import { settingsSummary } from './playback/summary'
 import {
   adjustMix, beatVolumeMax, bpmRandomMax, bpmRandomMin, brightnessMin, categoryHints, categoryLabels, categoryOrder,
+  textOpacityMin, textScaleMin,
   customCommandLimit, customCommandTextLimit, difficultyHints, difficultyLabels, difficultyOrder,
   durationMax, durationMin, finaleHints, finaleLabels, finaleOrder, instructionLengthLabels,
   instructionLengthOrder, mixOf, modeLabels, modeOrder, presets, presetLabels, presetOrder,
@@ -90,6 +91,10 @@ function resetGroup() {
     item.keepVideoOnStop = base.keepVideoOnStop
     item.switchVideoPerCommand = base.switchVideoPerCommand
     item.keepVideoWhileCooling = base.keepVideoWhileCooling
+    item.fit = base.fit
+    item.pos = base.pos
+    item.textOpacity = base.textOpacity
+    item.textScale = base.textScale
     item.videoSound = base.videoSound
     item.skipIntro = base.skipIntro
   } else if (selected.value === 'sound') {
@@ -199,6 +204,12 @@ function enableAllCommands() { settings.value.disabled.splice(0) }
 
 // 视频·图片组只在不播放时出现：播放中改图库/顺序需要重新取队列，必须回列表。
 const media = computed(() => props.media)
+
+const positionChoices: { value: EdgeSettings['pos']; label: string }[] = [
+  { value: 'top', label: '上' },
+  { value: 'center', label: '中' },
+  { value: 'bottom', label: '下' },
+]
 
 const videoSoundChoices: { value: EdgeSettings['videoSound']; label: string }[] = [
   { value: 'off', label: '关' },
@@ -412,6 +423,25 @@ void secondsLabel
           <p class="muted">开＝按「忍住了」后松手等待时视频不停。关＝这段等待时间暂停并变暗。其他红色指令按「红色期间也播放」的设置执行。</p>
           <label class="toggle"><input :checked="settings.switchVideoPerCommand" type="checkbox" @change="settings.switchVideoPerCommand = ($event.target as HTMLInputElement).checked" />每换一条指令就换一个视频</label>
           <p class="muted">开＝每换一条指令就切到下一个视频。关＝一个视频播完再换（和以前一样）。</p>
+          <div class="field">
+            <span class="field-label">视频大小</span>
+            <div class="chips">
+              <button class="chip" :class="{ on: settings.fit === 'cover' }" type="button" @click="settings.fit = 'cover'">铺满屏幕</button>
+              <button class="chip" :class="{ on: settings.fit === 'contain' }" type="button" @click="settings.fit = 'contain'">显示完整画面（不裁切）</button>
+            </div>
+            <p class="muted">关=铺满屏幕（竖屏时左右被裁）。开=显示完整视频（上下留黑边）。</p>
+          </div>
+          <div v-if="settings.fit === 'contain'" class="field">
+            <span class="field-label">显示位置</span>
+            <div class="chips">
+              <button v-for="item in positionChoices" :key="item.value" class="chip" :class="{ on: settings.pos === item.value }" type="button" @click="settings.pos = item.value">{{ item.label }}</button>
+            </div>
+            <p class="muted">选「上」时指令显示在下方，选「下」时指令显示在上方（不会与视频重叠）。</p>
+          </div>
+          <label>指令文字不透明度 · {{ settings.textOpacity }}%<input :value="settings.textOpacity" type="range" :min="textOpacityMin" max="100" step="5" @input="settings.textOpacity = Number(($event.target as HTMLInputElement).value)" /></label>
+          <p class="muted">视频上方的文字和周围暗色光晕的浓度。调低后能透过文字看到视频（{{ textOpacityMin }}～100%）。</p>
+          <label>指令文字大小 · {{ settings.textScale }}%<input :value="settings.textScale" type="range" :min="textScaleMin" max="140" step="5" @input="settings.textScale = Number(($event.target as HTMLInputElement).value)" /></label>
+          <p class="muted">把视频上方的指令、口白和补充一起缩小（{{ textScaleMin }}～140%）。</p>
           <div class="field">
             <span class="field-label">视频声音</span>
             <div class="chips">

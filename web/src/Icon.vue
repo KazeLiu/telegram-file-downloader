@@ -38,6 +38,7 @@ const paths: Record<string, string> = {
   volume: 'M4 9h3l4-3v12l-4-3H4z M16 8a5 5 0 0 1 0 8 M19 5a9 9 0 0 1 0 14',
   rotate: 'M4 10a8 8 0 1 1 1 6 M4 4v6h6',
   stop: 'M7 7h10v10H7z',
+  position: 'M3 3h18v18H3z M6 9.5h12v5H6z',
   spark: 'M12 3l2.2 6.3L21 12l-6.8 2.7L12 21l-2.2-6.3L3 12l6.8-2.7z',
 }
 </script>

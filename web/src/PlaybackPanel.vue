@@ -46,7 +46,14 @@ const round = ref(1)
 const held = ref(0)
 const zoomLevel = ref(1)
 const fullscreenOn = ref(false)
-const noCrop = ref(true)
+/** 铺法跟随设置：cover=铺满屏幕，contain=显示完整画面。 */
+const noCrop = computed(() => settings.value.fit === 'contain')
+function toggleCrop() { settings.value.fit = settings.value.fit === 'contain' ? 'cover' : 'contain' }
+/** contain 时的画面位置（上/中/下）。 */
+function cyclePosition() {
+  const order: Array<'top' | 'center' | 'bottom'> = ['center', 'top', 'bottom']
+  settings.value.pos = order[(order.indexOf(settings.value.pos) + 1) % order.length] ?? 'center'
+}
 const volumeOpen = ref(false)
 const landscapeAvailable = ref(false)
 const guideOpen = ref(false)
@@ -127,8 +134,8 @@ const windowTotal = computed(() => Math.max(1, Math.round(session.value?.setting
 /** 这次许可是不是「松手射精」。 */
 const ruined = computed(() => session.value?.ruined ?? finishedReason.value === 'ruin')
 
-const textOpacity = ref(100)
-const textScale = ref(100)
+const textOpacity = computed(() => settings.value.textOpacity)
+const textScale = computed(() => settings.value.textScale)
 const dimLevel = computed(() => settings.value.brightness)
 /** 红色（不许碰）且没开「红色也播放视频」时，画面额外压暗一档（参考站行为）。 */
 const videoDimmed = computed(() => {
@@ -355,7 +362,6 @@ function beginSession() {
   held.value = 0
   zoomLevel.value = 1
   imageElapsed.value = 0
-  noCrop.value = true
   lastMode = frame.value.mode
   previousTick = performance.now()
   nextBeat = 0
@@ -594,8 +600,8 @@ async function landscape() {
 function updateVolume(payload: { key: 'mediaVolume' | 'beatVolume' | 'textOpacity' | 'textScale'; value: number }) {
   const value = Math.round(payload.value)
   if (!Number.isFinite(value)) return
-  if (payload.key === 'textOpacity') textOpacity.value = Math.min(100, Math.max(textOpacityMin, value))
-  else if (payload.key === 'textScale') textScale.value = Math.min(140, Math.max(textScaleMin, value))
+  if (payload.key === 'textOpacity') settings.value.textOpacity = Math.min(100, Math.max(textOpacityMin, value))
+  else if (payload.key === 'textScale') settings.value.textScale = Math.min(140, Math.max(textScaleMin, value))
   else if (payload.key === 'mediaVolume') {
     settings.value.mediaVolume = Math.min(100, Math.max(0, value))
     if (video.value) video.value.volume = settings.value.mediaVolume / 100
@@ -644,10 +650,10 @@ function visibilityChanged() {
   if (!document.hidden) requestAnimationFrame(recordDisplayedImage)
 }
 function adjustTextOpacity(delta: number) {
-  textOpacity.value = Math.min(100, Math.max(textOpacityMin, textOpacity.value + delta))
+  settings.value.textOpacity = Math.min(100, Math.max(textOpacityMin, textOpacity.value + delta))
 }
 function adjustTextScale(delta: number) {
-  textScale.value = Math.min(140, Math.max(textScaleMin, textScale.value + delta))
+  settings.value.textScale = Math.min(140, Math.max(textScaleMin, textScale.value + delta))
 }
 
 watch(current, () => { void loadCurrentImage() })
@@ -779,13 +785,13 @@ onBeforeUnmount(() => {
             >
               <div class="image-canvas" :style="{ width: `${zoomLevel * 100}%`, height: `${zoomLevel * 100}%` }">
                 <img v-if="imageSource" :key="mediaKey(current)" :src="imageSource" :alt="current.name"
-                  :style="{ filter: `brightness(${brightnessPercent}%)`, objectFit: noCrop ? 'contain' : 'cover' }"
+                  :style="{ filter: `brightness(${brightnessPercent}%)`, objectFit: noCrop ? 'contain' : 'cover', objectPosition: noCrop ? `center ${settings.pos}` : 'center' }"
                   draggable="false" @load="imageLoaded" @error="mediaFailed" />
               </div>
             </div>
             <video
               v-else-if="current" :key="mediaKey(current)" ref="video" :src="mediaUrl(current)"
-              :style="{ filter: `brightness(${brightnessPercent}%)`, objectFit: noCrop ? 'contain' : 'cover' }"
+              :style="{ filter: `brightness(${brightnessPercent}%)`, objectFit: noCrop ? 'contain' : 'cover', objectPosition: noCrop ? `center ${settings.pos}` : 'center' }"
               playsinline preload="metadata" :muted="videoMuted"
               @volumechange="videoVolumeChanged" @loadedmetadata="videoLoaded"
               @canplay="videoReady" @play="videoStarted" @playing="videoPlaying" @waiting="videoReady"
@@ -803,12 +809,14 @@ onBeforeUnmount(() => {
             :playing="screen === 'playing'"
             :held="held"
             :no-crop="noCrop"
+            :align="settings.pos"
             :pip-available="pipAvailable"
             :landscape-available="landscapeAvailable"
             :volume-open="volumeOpen"
             :fullscreen="fullscreenOn"
             :note="note"
-            @toggle-crop="noCrop = !noCrop"
+            @toggle-crop="toggleCrop"
+            @cycle-position="cyclePosition"
             @pip="pip"
             @volume="volumeOpen = !volumeOpen"
             @landscape="landscape"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // 顶栏：左边第几条指令 + 忍住次数，中间剩余时间，右边一排圆形/胶囊按钮。
+import { computed } from 'vue'
 import Icon from '../Icon.vue'
 import type { PlaybackPosition } from './types.ts'
 
@@ -12,6 +13,7 @@ const props = defineProps<{
   playing: boolean
   held: number
   noCrop: boolean
+  align: 'top' | 'center' | 'bottom'
   pipAvailable: boolean
   landscapeAvailable: boolean
   volumeOpen: boolean
@@ -19,8 +21,11 @@ const props = defineProps<{
   note: string
 }>()
 
+const positionLabel = computed(() => ({ top: '上', center: '中', bottom: '下' } as Record<string, string>)[props.align] ?? '中')
+
 const emit = defineEmits<{
   'toggle-crop': []
+  'cycle-position': []
   'pip': []
   'volume': []
   'landscape': []
@@ -40,6 +45,9 @@ const emit = defineEmits<{
     <div class="sd-buttons">
       <button class="sd-icon" type="button" :title="noCrop ? '铺满屏幕' : '完整显示'" :aria-label="noCrop ? '铺满屏幕' : '完整显示'" @click="emit('toggle-crop')">
         <Icon :name="noCrop ? 'expand' : 'shrink'" :size="14" />
+      </button>
+      <button v-if="noCrop" class="sd-icon" type="button" data-sundome-pos-toggle :data-pos="align" :title="`显示位置：${positionLabel}`" :aria-label="`显示位置：${positionLabel}`" @click="emit('cycle-position')">
+        <Icon name="position" :size="14" />
       </button>
       <button v-if="pipAvailable" class="sd-icon" type="button" title="悬浮窗" aria-label="悬浮窗" @click="emit('pip')">
         <Icon name="pip" :size="14" />
