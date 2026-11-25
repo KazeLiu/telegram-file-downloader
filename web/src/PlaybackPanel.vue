@@ -1123,7 +1123,7 @@ onBeforeUnmount(() => {
   <div class="playback-panel">
     <p v-if="setupModel.storageError" class="notice error" role="alert">{{ setupModel.storageError }}<button v-if="setupModel.storageBlocked" class="text-button" @click="resetPreferences">重置播放设置</button><button v-else class="text-button" @click="persist">重新保存</button></p>
 
-    <form v-if="screen === 'setup'" class="playlist-editor" novalidate @submit.prevent="start">
+    <form v-if="screen === 'setup'" class="playlist-editor" data-sundome="setup" novalidate @submit.prevent="start">
       <div class="playlist-picker">
         <label>播放列表<select v-model="preferences.selected" :disabled="setupModel.starting">
           <option v-for="item in preferences.playlists" :key="item.id" :value="item.id">{{ item.name }}</option>
@@ -1133,8 +1133,8 @@ onBeforeUnmount(() => {
       </div>
       <template v-if="playlist">
         <div class="setup-summary">
-          <div><strong>准备开始</strong><p>{{ summary }}</p></div>
-          <button class="primary" :disabled="setupModel.loading || setupModel.starting || !playlist.roots.length">
+          <div><strong>准备开始</strong><p data-sundome-summary>{{ summary }}</p></div>
+          <button class="primary" data-sundome-start-quick :disabled="setupModel.loading || setupModel.starting || !playlist.roots.length">
             <Icon :name="setupModel.starting ? 'loader' : 'play'" :size="18" />{{ setupModel.starting ? '正在读取媒体…' : '开始' }}
           </button>
           <button v-if="setupModel.starting" type="button" class="secondary" @click="queueRequest.abort()">取消读取</button>
@@ -1172,7 +1172,7 @@ onBeforeUnmount(() => {
         <p v-if="setupModel.error" class="notice error" role="alert">{{ setupModel.error }}</p>
         <div class="playback-start">
           <span class="muted">已选 {{ playlist.roots.length }} 个图库</span>
-          <button class="primary" :disabled="setupModel.loading || setupModel.starting || !playlist.roots.length">
+          <button class="primary" data-sundome-start :disabled="setupModel.loading || setupModel.starting || !playlist.roots.length">
             <Icon :name="setupModel.starting ? 'loader' : 'play'" :size="18" />{{ setupModel.starting ? '正在读取媒体…' : '开始' }}
           </button>
         </div>
