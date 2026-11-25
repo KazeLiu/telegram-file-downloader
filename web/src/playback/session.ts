@@ -1,6 +1,6 @@
 import {
   bindCommands, buildTimeline, commandPool, decideFinale, dropOverlongCommands, extendChance, extendLineSeconds, extendLines,
-  extendMs, filterByCategories, formatClock, mulberry32, permitRate,
+  extendMs, filterByCategories, formatClock, mulberry32, multiRoundSeconds, multiRounds, multiWindowSeconds, permitRate,
   pickToneLine, randomSeed, restSeconds, taskAt, toneAfterForCommand, toneForTask,
   type EdgeCommand, type EdgeMode, type Task, type ToneKind, varyBpm } from './engine.ts'
 import type { EdgeSettings } from './settings.ts'
@@ -40,6 +40,12 @@ export interface SessionFrame {
   permit: number
   /** 许可窗口剩余秒（仅在 allow 阶段有意义） */
   windowLeft: number
+  /** 许可窗口总秒数（连续结局是 100 秒，其余取设置里的 rewardSeconds） */
+  windowTotal: number
+  /** 这次许可是连续（多少次都行）结局 */
+  multi: boolean
+  /** 连续结局里现在播到第几条「再来一次」（1 起） */
+  multiRound: number
   /** 提示语（加时 / 新一轮） */
   note: string
   /** 口吻短句：放在指令前的一句 */
@@ -99,6 +105,10 @@ export class EdgeSession {
   totalMs = 0
   held = 0
   windowLeft = 0
+  /** 许可窗口总秒数（连续结局是 100 秒，其余取设置里的 rewardSeconds）。 */
+  windowTotal = 0
+  /** 这次许可属于「连续（多少次都行）」：奖励屏换成多轮文案。 */
+  multi = false
   outcome: SessionOutcome | null = null
   /** 这次许可属于「松手射精」：文案与结算都换成松手那一套。 */
   ruined = false
@@ -196,6 +206,9 @@ export class EdgeSession {
       held: this.held,
       permit: this.permit,
       windowLeft: this.windowLeft,
+      windowTotal: this.windowTotal,
+      multi: this.multi,
+      multiRound: this.multiRound,
       note: this.note,
       tone: cooling ? ('normal' as const) : tone.tone,
       toneBefore: cooling ? '' : tone.before,
@@ -267,9 +280,19 @@ export class EdgeSession {
   private enterAllow(ruined: boolean) {
     this.phase = 'allow'
     this.ruined = ruined
-    this.windowLeft = Math.max(1, Math.round(this.settings.rewardSeconds))
+    // 连续（多少次都行）：许可窗口固定 100 秒，里面每 25 秒换一条「再来一次」。
+    this.multi = this.settings.finale === 'continuous'
+    this.windowTotal = this.multi ? multiWindowSeconds : Math.max(1, Math.round(this.settings.rewardSeconds))
+    this.windowLeft = this.windowTotal
     this.coolingEnd = 0
     this.note = ''
+  }
+
+  /** 连续结局里现在播到第几条「再来一次」（1 起，最多 4 条）。 */
+  get multiRound() {
+    if (!this.multi || this.windowTotal <= 0) return 1
+    const used = Math.max(0, this.windowTotal - this.windowLeft)
+    return Math.min(multiRounds, Math.floor(used / multiRoundSeconds) + 1)
   }
 
   /**
@@ -302,21 +325,8 @@ export class EdgeSession {
     this.coolingEnd = 0
   }
 
-  /** 许可窗口走完：连续模式开下一轮，否则算成功收场。 */
+  /** 许可窗口走完：按成功收场（连续结局的 100 秒走完也算成功）。 */
   private closeWindow() {
-    if (this.settings.finale === 'continuous') {
-      this.round += 1
-      this.elapsed = 0
-      this.windowLeft = 0
-      this.totalMs = Math.max(60_000, Math.round(this.settings.minutes * 60_000))
-      this.tasks = makeTimeline(this.settings, this.pool, randomSeed(), this.totalMs, this.nipplePool, this.glansPool)
-      this.toneCache.clear()
-      this.coolingStart = 0
-      this.coolingEnd = 0
-      this.phase = 'run'
-      this.note = `第 ${this.round} 轮`
-      return
-    }
     this.finish('allow')
   }
 
@@ -324,6 +334,7 @@ export class EdgeSession {
     this.phase = 'done'
     this.outcome = outcome === 'allow' && this.ruined ? 'ruin' : outcome
     this.windowLeft = 0
+    this.multi = false
     this.coolingStart = 0
     this.coolingEnd = 0
   }

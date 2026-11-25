@@ -300,8 +300,11 @@ export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
   中了就进许可窗口，没中则 `extend()`——`extends += 1`、`totalMs = elapsed + extendMs(extendLen, extends)`、
   立刻插一条 6 秒红色指令（文案取自 `extendLines`，`note = '加时第 N 次 · 时间增加了 m:ss'`），
   其余时段用新的随机种子重建时间线。**加时赛永远不会以 `deny` 收场**。
-- 许可窗口走完 `closeWindow()`：`continuous` 结局开下一轮（`round++`、`elapsed = 0`、重建时间线、
-  `note = '第 N 轮'`），否则 `finish('allow')`；若 `ruined` 则 outcome 记为 `'ruin'`。
+- 许可窗口走完 `closeWindow()`：一律 `finish('allow')`（`ruined` 则 outcome 记为 `'ruin'`）。
+  **连续（多少次都行）结局不再重复开下一轮**——它把许可窗口固定成 100 秒
+  （`multiWindowSeconds`），窗口里每 25 秒切到下一条「再来一次」文案（`multiRound` 1→4），
+  窗口走完按成功收场。参考实现的口径：`rewardSeconds(multi) = 100`、
+  `round = min(MULTI_ROUNDS - 1, floor(已用秒 / MULTI_ROUND_SECONDS))`。
 
 ## 音效：`web/src/playback/sound.ts`
 

@@ -128,8 +128,19 @@ defineProps<{
   ruined: boolean          // 松手射精（橙）还是普通许可（粉）
   windowLeft: number       // 剩余秒
   windowTotal: number
+  multi?: boolean          // 连续（多少次都行）结局：换成多轮文案
+  round?: number           // 连续结局里现在播到第几次（1 起，最多 4）
 }>()
 ```
+
+- 根节点 `data-sundome="reward"`、`:data-result="ruined ? 'ruin' : 'allow'"`、
+  `:data-sundome-multi="multi ? 'true' : 'false'"`、`:data-sundome-reward-seconds="Math.round(windowTotal)"`。
+- 眉标 `Ruined`／`Permission`（12px、`letter-spacing: .35em`）、标题 `clamp(44px, 13vw, 96px)` 斜体 800、
+  正文 18px、倒计时条 `12px` 高 `max-width: 28rem`（内条白色，`width: (1-已用) × 100%`）、剩余秒 14px。
+- `multi` 为真时不显示普通正文，改为 `data-sundome-multi-round`（`第{n}次 / 4`，14px/`letter-spacing: .2em`）
+  与 `data-sundome-multi-line`（20px／≥640px 24px，按 `round` 取 `multiLines[(round-1) % 4]`）。
+  文案常量在 `engine.ts`：`multiTitle = '可以射。多少次都行'`、`multiLines`（4 条）、
+  `multiRoundLabel(round)`、`multiWindowSeconds = 100`、`multiRoundSeconds = 25`、`multiRounds = 4`。
 
 - 根 `data-sundome="reward"`，`:data-result="ruined ? 'ruin' : 'allow'"`，`position: fixed; inset: 0; z-index: 95`。
 - 背景：`ruined` → `radial-gradient(ellipse at 50% 30%, #c86a2a 0%, #6b2f0f 55%, #2a1206 100%)`，否则 `radial-gradient(ellipse at 50% 30%, #ff4d6d 0%, #a4123a 55%, #3a0612 100%)`。
@@ -161,6 +172,7 @@ defineEmits<{ again: []; exit: []; penalty: [] }>()
 - 三格统计（`data-sundome-done-stat`）：时间 / 指令（`N次`）/ 忍住（`N次`）；中途结束时第一格改叫「坚持时间」。
 - 中途结束额外三行：破纪录提示（`data-sundome-lost-best`）、「中途结束 N 次 · 最长坚持 m:ss（只存在这台设备里）」（`data-sundome-lost-record`）、惩罚说明（`data-sundome-lost-penalty-note`）；动作区多一个「带惩罚再来一局」（`data-sundome-lost-penalty`，emit `penalty`），会把下一局结局改成「必定禁止」后立刻重开。
 - 动作区 `data-sundome-done-actions` 内还有「再来一次」（`data-sundome-again`）与「返回播放列表」。
+- 连续（多少次都行）结局：成功时正文换成「如果一直到最后都没停手，就算成功。」（props 的 `multi`）。
 - 按钮均需 `min-height: 0`（同上，覆盖全局 44px）。
 
 ## PlaybackVolumePopover.vue

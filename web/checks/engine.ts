@@ -9,6 +9,7 @@ import {
   adjustMix, beatVolumeMax, bindCommands, buildTimeline, categoryOrder, commandPool, customCommandLimit,
   customCommandTextLimit, decideFinale, difficulties, difficultyOrder, durationChoices, durationMax, durationMin,
   extendChance, extendLengthOrder, extendLineSeconds, extendLines, extendMs,
+  multiDoneBody, multiEndText, multiLines, multiRoundLabel, multiRoundSeconds, multiRounds, multiTitle, multiWindowSeconds,
   filterByCategories, finaleOrder, finalHoldMs, formatClock, instructionLengthOrder, mixOf, modeColors, modeColorsDark, modeLabels,
   modeOrder, mulberry32, permitMaxGain, permitRate, permitStep, pickCommandAt, pickIndex, pickMode, planFocus,
   presets, presetOrder, randomBpm, randomSeed, redBeatOrder, restFixedChoices, restMax, restMin, restRangeChoices,
@@ -176,6 +177,17 @@ assert.equal(extendMs('shrink', 1, nines), 600_000)
 assert.equal(extendMs('shrink', 2, zeros), 180_000)
 assert.equal(extendMs('shrink', 3, zeros), 120_000)
 assert.equal(extendMs('shrink', 4, zeros), 60_000)
+
+// 连续（多少次都行）：许可窗口固定 100 秒，每 25 秒换一条「再来一次」，最多 4 条。
+assert.equal(multiRounds, 4)
+assert.equal(multiRoundSeconds, 25)
+assert.equal(multiWindowSeconds, 100)
+assert.equal(multiLines.length, 4)
+assert.equal(multiTitle, '可以射。多少次都行')
+assert.equal(multiEndText, '结束')
+assert.equal(multiDoneBody, '如果一直到最后都没停手，就算成功。')
+assert.equal(multiRoundLabel(1), '第1次 / 4')
+assert.equal(multiRoundLabel(4, 4), '第4次 / 4')
 
 // —— restSeconds / randomBpm / planFocus / pickIndex ——
 assert.equal(restSeconds({ mode: 'fixed', seconds: 12, min: 8, max: 16 }, zeros), 12)
@@ -465,6 +477,24 @@ assert.ok(randomDuration.totalMs >= 5 * 60_000 && randomDuration.totalMs <= 20 *
 assert.equal(randomDuration.totalMs % 60_000, 0, '随机时长按整分钟取')
 const fixedDuration = new EdgeSession({ ...defaults, seed: 7, minutes: 90, durationRandom: false })
 assert.equal(fixedDuration.totalMs, 90 * 60_000, '没开随机就用设定分钟数')
+
+// 连续（多少次都行）：许可窗口固定 100 秒，里面每 25 秒切到下一条「再来一次」，最多 4 条；
+// 100 秒走完按成功收场（不再自动开下一轮）。
+const multi = new EdgeSession({ ...defaults, seed: 11, minutes: 1, finale: 'continuous', rewardSeconds: 5 })
+for (let index = 0; index < 61; index += 1) multi.tick(1000)
+assert.equal(multi.phase, 'allow', '连续结局也先弹许可屏')
+assert.equal(multi.multi, true, '连续结局的许可屏走多轮文案')
+assert.equal(multi.windowTotal, multiWindowSeconds, '连续结局的窗口固定 100 秒')
+assert.equal(multi.multiRound, 1, '刚进窗口是第 1 次')
+for (let index = 0; index < 25; index += 1) multi.tick(1000)
+assert.equal(multi.multiRound, 2, '过 25 秒切到第 2 次')
+for (let index = 0; index < 25; index += 1) multi.tick(1000)
+assert.equal(multi.multiRound, 3, '再过 25 秒切到第 3 次')
+for (let index = 0; index < 25; index += 1) multi.tick(1000)
+assert.equal(multi.multiRound, multiRounds, '第 75 秒切到第 4 次（最多 4 条）')
+for (let index = 0; index < 100; index += 1) multi.tick(1000)
+assert.equal(multi.finished, true, '100 秒走完就收场')
+assert.equal(multi.outcome, 'allow', '连续结局窗口走完算成功')
 
 // 加时赛：没抽中不会以禁止收场，而是加时（先插一条 6 秒红色指令），最多 5 次后必给许可。
 const extendRun = new EdgeSession({

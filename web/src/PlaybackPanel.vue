@@ -154,9 +154,18 @@ const canHold = computed(() => screen.value === 'playing' && !paused.value && !e
 const finishedPercent = computed(() => (totalMs.value > 0 ? Math.min(100, Math.round((elapsedMs.value / totalMs.value) * 100)) : 0))
 const commandCount = computed(() => (frame.value?.task ? frame.value.task.index + 1 : 0))
 /** 许可窗口总长（秒），用于奖励屏倒计时条。 */
-const windowTotal = computed(() => Math.max(1, Math.round(session.value?.settings.rewardSeconds ?? settings.value.rewardSeconds)))
+const windowTotal = computed(() => {
+  if (frame.value?.multi) return Math.max(1, Math.round(frame.value.windowTotal || 0))
+  return Math.max(1, Math.round(session.value?.settings.rewardSeconds ?? settings.value.rewardSeconds))
+})
+/** 连续（多少次都行）结局：奖励屏换成多轮文案。 */
+const multi = computed(() => Boolean(frame.value?.multi) && allowed.value)
+/** 连续结局现在播到第几次「再来一次」。 */
+const multiRound = computed(() => Math.max(1, Math.round(frame.value?.multiRound ?? 1)))
 /** 这次许可是不是「松手射精」。 */
 const ruined = computed(() => session.value?.ruined ?? finishedReason.value === 'ruin')
+/** 这一局是不是连续（多少次都行）结局——结算屏在成功时换成多轮正文。 */
+const finishedMulti = computed(() => settings.value.finale === 'continuous')
 
 const textOpacity = computed(() => settings.value.textOpacity)
 const textScale = computed(() => settings.value.textScale)
@@ -1096,6 +1105,7 @@ onBeforeUnmount(() => {
       :lost-count="lostRecord.count"
       :lost-best="clockTime(lostRecord.bestMs)"
       :lost-best-now="lostBestNow"
+      :multi="finishedMulti"
       @again="restart"
       @exit="backToLists"
       @penalty="penaltyRestart"
@@ -1208,6 +1218,8 @@ onBeforeUnmount(() => {
         :ruined="ruined"
         :window-left="windowLeft"
         :window-total="windowTotal"
+        :multi="multi"
+        :round="multiRound"
       />
 
       <div class="runtime-controls">

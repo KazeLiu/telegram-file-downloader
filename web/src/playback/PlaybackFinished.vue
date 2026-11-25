@@ -20,6 +20,8 @@ const props = defineProps<{
   lostBest?: string
   /** 这一次是不是破了自己的纪录 */
   lostBestNow?: boolean
+  /** 连续（多少次都行）结局：成功时正文换成「如果一直到最后都没停手，就算成功。」 */
+  multi?: boolean
 }>()
 
 const emit = defineEmits<{ again: []; exit: []; penalty: [] }>()
@@ -80,6 +82,13 @@ const background = computed(() => (copy.value.ruin
 /** 三格统计：时间 / 指令 / 忍住，和参考站一致（中途结束第一格叫「坚持时间」）。 */
 const lost = computed(() => props.outcome === 'lost')
 
+/** 连续结局成功时换正文（参考站 doneBodyMulti）。 */
+const body = computed(() => (
+  props.multi && (props.outcome === 'allow' || props.outcome === 'duration')
+    ? '如果一直到最后都没停手，就算成功。'
+    : copy.value.body
+))
+
 const facts = computed(() => [
   { label: lost.value ? '坚持时间' : '时间', value: props.elapsed },
   { label: '指令', value: `${props.commands}次` },
@@ -101,7 +110,7 @@ const facts = computed(() => [
     <p v-if="(props.extends ?? 0) > 0" class="sd-extend-result" data-sundome-extend-result>
       加时 {{ props.extends }} 次后获得许可
     </p>
-    <p class="sd-body" data-sundome-done-body>{{ copy.body }}</p>
+    <p class="sd-body" data-sundome-done-body>{{ body }}</p>
     <p v-if="lost && props.lostBestNow" class="sd-lost-best" data-sundome-lost-best>
       在中途结束的各局里，这次坚持得最久
     </p>

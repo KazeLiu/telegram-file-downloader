@@ -114,6 +114,24 @@ export const permitStep = 0.05
 export const permitMaxGain = 0.2
 export const multiRounds = 4
 export const multiRoundSeconds = 25
+/** 连续结局的奖励屏文案（男生版）：许可后约 100 秒，每 25 秒换一条「再来一次」。 */
+export const multiTitle = '可以射。多少次都行'
+export const multiLines = [
+  '可以射，但手不许停，保持原来的速度。',
+  '再来一次。变敏感了也保持同样的速度。',
+  '不许停。继续到下一次。',
+  '最后一次。彻底结束前不许停。'
+]
+export const multiRoundTemplate = '第{n}次 / {total}'
+export const multiEndText = '结束'
+export const multiDoneBody = '如果一直到最后都没停手，就算成功。'
+/** 连续结局的许可窗口固定 100 秒（参考站的 rewardSeconds(multi) 口径）。 */
+export const multiWindowSeconds = 100
+
+/** 连续结局的轮次文案：第{n}次 / {total}。 */
+export function multiRoundLabel(round: number, total = multiRounds) {
+  return `第${round}次 / ${total}`
+}
 export const instructionLengthOrder: InstructionLength[] = ['standard', 'long', 'veryLong']
 export const instructionLengthLabels: Record<InstructionLength, string> = {
   standard: '标准',
