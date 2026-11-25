@@ -79,6 +79,7 @@ let queueRequest = new AbortController()
 let timer: ReturnType<typeof setInterval>
 let previousTick = 0
 let nextBeat = 0
+let nextHeart = 0
 let disposed = false
 let pendingAdvance = false
 let imageLoad = 0
@@ -197,11 +198,82 @@ function videoLoaded(event: Event) {
   if (event.currentTarget !== video.value) return
   const element = video.value
   if (!element) return
-  if (settings.value.skipIntro && Number.isFinite(element.duration) && element.duration > 4 && element.currentTime < 1) {
-    try { element.currentTime = element.duration * 0.4 } catch { /* 部分格式不允许跳转，忽略 */ }
+  /* 对齐参考站：长视频直接从正文开始；开了「从中间开始」再往后跳一截。 */
+  if (Number.isFinite(element.duration) && element.duration > 25 && element.currentTime < 1) {
+    const target = settings.value.skipIntro && element.duration > 40
+      ? element.duration * (0.3 + 0.2 * Math.random())
+      : Math.min(12, 0.15 * element.duration)
+    try { element.currentTime = target } catch { /* 部分格式不允许跳转，忽略 */ }
   }
   syncVideoSound()
   void playVideo()
+}
+
+/* ---- 双击 / 连点快进：视频右半快进、左半后退，700ms 内同侧累加 ---- */
+const seekFlash = ref<{ side: number; total: number; x: number; y: number; key: number } | null>(null)
+let tapPoint: { time: number; x: number; y: number; side: number } | null = null
+let seekChain: { side: number; until: number; total: number } | null = null
+let seekTimer = 0
+
+function showSeekFlash(side: number, total: number) {
+  const rect = video.value?.getBoundingClientRect()
+  const known = !!rect && rect.width > 0
+  const x = known ? rect.left + rect.width * (side > 0 ? 0.75 : 0.25) : window.innerWidth * (side > 0 ? 0.75 : 0.25)
+  const tall = known && rect.height > window.innerHeight * 0.6
+  const y = known ? rect.top + rect.height * (tall ? 0.15 : 0.5) : window.innerHeight * 0.15
+  seekFlash.value = { side, total, x, y, key: Date.now() }
+  window.clearTimeout(seekTimer)
+  seekTimer = window.setTimeout(() => { seekFlash.value = null }, 850)
+}
+
+function seekBy(seconds: number) {
+  const element = video.value
+  if (!element || !Number.isFinite(element.duration) || element.duration <= 0) return
+  const next = element.currentTime + seconds
+  try { element.currentTime = Math.min(Math.max(0, next), Math.max(0, element.duration - 0.25)) } catch { /* 忽略 */ }
+}
+
+function seekStep(side: 1 | -1) {
+  const now = performance.now()
+  const total = seekChain && seekChain.side === side && now < seekChain.until ? seekChain.total + 10 : 10
+  seekChain = { side, until: now + 700, total }
+  seekBy(side * 10)
+  showSeekFlash(side, total)
+}
+
+function tapSeek(event: PointerEvent) {
+  if (event.pointerType === 'mouse' && event.button !== 0) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('button,a,input,select,textarea,label,summary,[role="button"],[role="slider"],[role="radio"],[data-sundome-no-seek]')) {
+    tapPoint = null
+    return
+  }
+  const rect = video.value?.getBoundingClientRect()
+  if (!rect || rect.width === 0 || event.clientX < rect.left || event.clientX > rect.right
+    || event.clientY < rect.top || event.clientY > rect.bottom) {
+    tapPoint = null
+    return
+  }
+  const side = event.clientX < rect.left + rect.width / 2 ? -1 : 1
+  const now = performance.now()
+  if (seekChain && now < seekChain.until && seekChain.side === side) {
+    seekChain.total += 10
+    seekChain.until = now + 700
+    seekBy(side * 10)
+    showSeekFlash(side, seekChain.total)
+    return
+  }
+  const previous = tapPoint
+  if (previous && now - previous.time < 320 && previous.side === side
+    && Math.hypot(event.clientX - previous.x, event.clientY - previous.y) < 48) {
+    tapPoint = null
+    seekChain = { side, until: now + 700, total: 10 }
+    seekBy(side * 10)
+    showSeekFlash(side, 10)
+    return
+  }
+  seekChain = null
+  tapPoint = { time: now, x: event.clientX, y: event.clientY, side }
 }
 
 watch([videoMuted, videoLevel], syncVideoSound)
@@ -464,23 +536,32 @@ function pulse(now: number) {
   if (currentMode !== lastMode) {
     lastMode = currentMode
     nextBeat = 0
+    nextHeart = 0
   }
+  const heartbeatOn = settings.value.heartbeat
   const redBeat = settings.value.redBeat
-  const useBeat = currentMode === 'stop' ? redBeat !== 'heartbeat' : true
-  const useHeart = currentMode === 'stop' ? redBeat !== 'metronome' : false
-  const bpm = imageBeatMode.value && currentMode !== 'stop' ? imageBeatBpm.value : beatBpm.value || 60
-  // 心跳跟随 BPM：红色带 BPM 且开着时，心跳按指令的 BPM 打；关掉后固定 60。
-  const stopBpm = settings.value.heartbeatSync && useHeart && beatBpm.value ? beatBpm.value : 60
-  const interval = currentMode === 'stop' ? Math.max(400, beatIntervalFor(stopBpm)) : beatIntervalFor(bpm)
-  if (!interval) return
-  if (!nextBeat) { nextBeat = now + interval; return }
-  if (now < nextBeat) return
-  nextBeat = now + interval
-  if (imageBeatMode.value && currentMode !== 'stop') step(1)
+  const touching = frameValue.task?.command?.category === 'nipple'
+  const reward = allowed.value
+  const stopMode = currentMode === 'stop'
+  const beatBpmValue = imageBeatMode.value && !stopMode ? imageBeatBpm.value : beatBpm.value || 0
+  /* 参考站口径：红色带 BPM 且不是乳头指令时才算“红色的节拍”。 */
+  const redWithBpm = stopMode && !touching && beatBpmValue > 0
+  const heartbeatHere = heartbeatOn && (reward || (stopMode && !touching && (!redWithBpm || redBeat !== 'metronome')))
+  const heartInterval = reward ? 630 : redWithBpm ? Math.round(60_000 / beatBpmValue) : 860
+  const metronomeHere = beatBpmValue > 0 && !reward && !(redWithBpm && !(redBeat !== 'heartbeat' || !heartbeatOn))
   const volume = { beatVolume: settings.value.beatVolume, heartbeatVolume: settings.value.heartbeatVolume }
-  if (useHeart && settings.value.heartbeat) void sound.heartbeat(volume)
+  if (heartbeatHere && heartInterval > 0) {
+    if (!nextHeart) nextHeart = now + heartInterval
+    else if (now >= nextHeart) { nextHeart = now + heartInterval; void sound.heartbeat(volume) }
+  } else nextHeart = 0
+  const beatInterval = beatIntervalFor(beatBpmValue)
+  if (!metronomeHere || !beatInterval) { nextBeat = 0; return }
+  if (!nextBeat) { nextBeat = now + beatInterval; return }
+  if (now < nextBeat) return
+  nextBeat = now + beatInterval
+  if (imageBeatMode.value && !stopMode) step(1)
   // 「每拍一张」时即使关掉节拍器也要出声，否则图片不动。
-  if (useBeat && (settings.value.metronome || imageBeatMode.value)) void sound.beat(currentMode === 'slow' ? 'slow' : 'go', volume)
+  if (settings.value.metronome || imageBeatMode.value) void sound.beat(currentMode === 'slow' ? 'slow' : 'go', volume)
 }
 
 function tick() {
@@ -635,8 +716,11 @@ function keydown(event: KeyboardEvent) {
   if (screen.value !== 'playing' || runtimeSettings.value || event.altKey || event.ctrlKey || event.metaKey
     || (event.target as HTMLElement).closest('input,select,textarea,video,[contenteditable]')) return
   if (event.key === 'Escape') { exitRun(); event.preventDefault(); return }
-  if (event.key === 'ArrowLeft') step(-1)
-  else if (event.key === 'ArrowRight') step(1)
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    const forward = event.key === 'ArrowRight'
+    if (current.value?.kind === 'video' && video.value) seekStep(forward ? 1 : -1)
+    else step(forward ? 1 : -1)
+  }
   else if (event.code === 'Space' && !(event.target as HTMLElement).closest('button')) { if (paused.value) void resume(); else pause() }
   else if (event.key.toLowerCase() === 'e') hold()
   else if (event.key.toLowerCase() === 'f') void fullscreen()
@@ -774,7 +858,7 @@ onBeforeUnmount(() => {
     <div v-else ref="playerElement" class="playback-runtime" tabindex="-1">
       <PlaybackOverlay :mode="mode" :dim="dimLevel" :opacity="textOpacity" :scale="textScale">
         <template #media>
-          <div v-show="!runtimeSettings" class="playback-media">
+          <div v-show="!runtimeSettings" class="playback-media" @pointerup="tapSeek">
             <div
               v-if="current?.kind === 'image'"
               ref="imageViewport"
@@ -855,6 +939,14 @@ onBeforeUnmount(() => {
           />
         </template>
       </PlaybackOverlay>
+
+      <div v-if="seekFlash" :key="seekFlash.key" class="seek-flash" :data-sundome-seek-flash="seekFlash.side * seekFlash.total" :style="{ left: `${seekFlash.x}px`, top: `${seekFlash.y}px` }">
+        <span class="seek-flash-pill">
+          <svg v-if="seekFlash.side < 0" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11 6v12l-8.5-6zM21 6v12l-8.5-6z" /></svg>
+          {{ seekFlash.side > 0 ? `+${seekFlash.total}` : `−${seekFlash.total}` }}
+          <svg v-if="seekFlash.side > 0" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 6v12l8.5-6zM3 6v12l8.5-6z" /></svg>
+        </span>
+      </div>
 
       <PlaybackReward
         v-if="allowed"
@@ -947,6 +1039,9 @@ onBeforeUnmount(() => {
 .runtime-chip.liked { color: #f2afc9; }
 .runtime-chip.liked :deep(svg) { fill: currentColor; }
 .runtime-error { position: fixed; left: 50%; top: 50%; z-index: 95; transform: translate(-50%, -50%); max-width: min(520px, 90vw); padding: 18px 20px; border-radius: 16px; background: rgba(12, 8, 10, .94); color: #fff; font-size: 14px; line-height: 1.6; text-align: center; }
+.seek-flash { position: fixed; z-index: 20; transform: translate(-50%, -50%); pointer-events: none; }
+.seek-flash-pill { display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; border-radius: 999px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; animation: seek-flash .85s ease-out forwards; }
+@keyframes seek-flash { 0% { opacity: 0; transform: scale(.9); } 15% { opacity: 1; transform: scale(1); } 70% { opacity: 1; } 100% { opacity: 0; } }
 .runtime-sheet { position: fixed; inset: 0; z-index: 70; overflow-y: auto; background: var(--color-canvas); color: var(--color-ink); padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 48px max(16px, env(safe-area-inset-left)); }
 .runtime-inner { max-width: 920px; margin: 0 auto; }
 .runtime-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; margin-bottom: 24px; }
