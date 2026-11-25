@@ -18,6 +18,7 @@ import { abuseLines, feetLines, strongLines, sweetLines, teaseLines, toneNotes }
 import { maleCommands } from '../src/playback/commands.ts'
 import { defaultEdgeSettings, edgeSchemaVersion, edgeStorageKey, normalizeEdgeSettings, readEdgeSettings, writeEdgeSettings } from '../src/playback/settings.ts'
 import { EdgeSession } from '../src/playback/session.ts'
+import { addSession, emptyStats, normalizeStats, readStats, statsSummary } from '../src/playback/history.ts'
 
 // —— 常量口径 ——
 assert.deepEqual(difficultyOrder, ['easy', 'normal', 'hard', 'hell'])
@@ -459,5 +460,18 @@ const plain = new EdgeSession({ ...defaults, seed: 42, minutes: 1 })
 assert.equal(plain.frame().tone, 'normal')
 assert.equal(plain.frame().toneBefore, '')
 assert.equal(plain.frame().toneAfter, '')
+
+// 本机成绩：只统计成功 / 松手 / 禁止三种结局，分钟数与忍住次数累加。
+assert.deepEqual(emptyStats, { sessions: 0, success: 0, ruin: 0, fail: 0, edges: 0, minutes: 0, longest: 0 })
+const statsOnce = addSession(emptyStats, 'allow', 10, 3)
+assert.deepEqual(statsOnce, { sessions: 1, success: 1, ruin: 0, fail: 0, edges: 3, minutes: 10, longest: 10 })
+assert.deepEqual(addSession(statsOnce, 'deny', 4, 1), { sessions: 2, success: 1, ruin: 0, fail: 1, edges: 4, minutes: 14, longest: 10 })
+assert.equal(addSession(statsOnce, 'ruin', 2, 0).ruin, 1)
+assert.equal(addSession(statsOnce, 'lost', 2, 0).sessions, 2, '中途射了也算一局')
+assert.equal(addSession(statsOnce, 'lost', 2, 0).success, statsOnce.success, '中途射了不算成功')
+assert.equal(statsSummary(emptyStats), '', '没玩过就不显示成绩')
+assert.ok(statsSummary(statsOnce).includes('至今 1 次'), '有成绩时显示局数')
+assert.deepEqual(normalizeStats({ sessions: -3, success: 2.6, longest: 'x' }), { sessions: 0, success: 3, ruin: 0, fail: 0, edges: 0, minutes: 0, longest: 0 })
+assert.deepEqual(readStats('not json'), emptyStats, '坏数据当没玩过')
 
 console.log('edge engine checks passed')

@@ -17,6 +17,7 @@ import {
 import { maleCommands } from './playback/commands'
 import { defaultEdgeSettings, readEdgeSettings } from './playback/settings'
 import { toneNotes } from './playback/tones'
+import { emptyStats, readStats, statsStorageKey, statsSummary } from './playback/history'
 import type { EdgeSettings } from './playback/settings'
 
 const settings = defineModel<EdgeSettings>({ required: true })
@@ -37,6 +38,17 @@ const visible = computed(() => groups.value.filter(group => (search.value.trim()
   : group.id === selected.value) && !(props.runtime && group.id === 'media')))
 const summary = computed(() => settingsSummary(settings.value))
 const activeTones = computed(() => toneOrder.filter(key => settings.value.tones[key]))
+
+/** 本机成绩：只读给设置页顶部那行看，清除要再点一次确认。 */
+const stats = ref(readStats(typeof localStorage === 'undefined' ? null : localStorage.getItem(statsStorageKey)))
+const statsLine = computed(() => statsSummary(stats.value))
+const statsArmed = ref(false)
+function clearStats() {
+  if (!statsArmed.value) { statsArmed.value = true; return }
+  statsArmed.value = false
+  try { localStorage.setItem(statsStorageKey, JSON.stringify(emptyStats)) } catch { /* 存不进去就当没清 */ }
+  stats.value = { ...emptyStats }
+}
 
 function selectGroup(id: string) {
   selected.value = id
@@ -229,6 +241,7 @@ void secondsLabel
       <div class="card-heading">
         <h3 class="card-title">玩法设置</h3>
         <p class="card-summary">{{ summary }}</p>
+        <p v-if="statsLine" class="card-stats" data-sundome-stats>{{ statsLine }}</p>
       </div>
       <button v-if="canReset" type="button" class="text-button card-reset" :title="resetArmed ? '再点一次把本组恢复为默认值' : '只把本组恢复为默认值，其他分组不变'" @click="resetGroup">{{ resetLabel }}</button>
     </header>
@@ -496,6 +509,11 @@ void secondsLabel
         <p class="muted">{{ brightnessMin }}% 最暗，100% ＝ 完全透明不变暗；只影响播放器画面，不改原文件。</p>
         <label class="toggle"><input :checked="settings.mixAudio" type="checkbox" @change="settings.mixAudio = ($event.target as HTMLInputElement).checked" />边听音乐边玩</label>
         <p class="muted">打开后播放器不会抢占系统的音频焦点。</p>
+        <template v-if="statsLine">
+          <h5 class="field-label">本机成绩</h5>
+          <p class="muted" data-sundome-stats-line>{{ statsLine }}</p>
+          <button type="button" class="text-button" data-sundome-stats-clear @click="clearStats">{{ statsArmed ? '确认清除？' : '清除本机成绩' }}</button>
+        </template>
       </template>
     </section>
   </div>
@@ -508,6 +526,7 @@ void secondsLabel
 .card-heading { display: grid; gap: 6px; min-width: 0; }
 .card-title { margin: 0; font-size: 20px; line-height: 1.4; }
 .card-summary { margin: 0; font-size: 14px; line-height: 1.6; color: var(--color-muted); overflow-wrap: anywhere; }
+.card-stats { margin: 0; font-size: 12px; line-height: 1.6; color: var(--color-supporting); overflow-wrap: anywhere; }
 .card-reset { flex-shrink: 0; min-height: 44px; font-size: 14px; }
 .settings-search { max-width: 440px; margin-top: 18px; font-size: 14px; }
 .settings-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 20px; }

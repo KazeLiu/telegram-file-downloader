@@ -20,6 +20,7 @@ import { beatVolumeMax, brightnessMin, formatClock, textOpacityMin, textScaleMin
 import { glansCommands, nippleCommands } from './playback/commands'
 import { EdgeSession, type SessionFrame } from './playback/session'
 import { edgeStorageKey, readEdgeSettings, writeEdgeSettings, type EdgeSettings } from './playback/settings'
+import { addSession, readStats, statsStorageKey, writeStats } from './playback/history'
 import { SoundEngine } from './playback/sound'
 import { loadPlaybackQueue, PlaybackImageBuffer } from './playbackLoader'
 import {
@@ -89,6 +90,7 @@ let pointer: { id: number; x: number; y: number; left: number; top: number; move
 let suppressClick = false
 let lastMode = ''
 let lastTask = -1
+let statsDone = false
 /** 红色（不许碰）时由我们主动暂停视频，避免被 videoPaused 当成用户暂停整局。 */
 let videoHold = false
 
@@ -437,6 +439,7 @@ function beginSession() {
   imageElapsed.value = 0
   lastMode = frame.value.mode
   lastTask = frame.value.task?.index ?? -1
+  statsDone = false
   previousTick = performance.now()
   nextBeat = 0
   void nextTick(() => {
@@ -473,10 +476,23 @@ function finish(reason: FinishReason) {
   imageLoad++; imageBuffer.clear()
   pause()
   buzz([60, 40, 60, 40, 120], 'finish')
+  recordStats(reason)
   finishedReason.value = reason
   screen.value = 'finished'
   error.value = ''
   sound.suspend()
+}
+
+/** 结算时把这一局记进本机成绩：参考站只统计成功、松手、禁止三种结局。 */
+function recordStats(reason: FinishReason) {
+  if (statsDone) return
+  statsDone = true
+  const instance = session.value
+  if (!instance) return
+  let stored: string | null = null
+  try { stored = localStorage.getItem(statsStorageKey) } catch { return }
+  const next = addSession(readStats(stored), reason, instance.minutes, instance.held)
+  writeStats(next)
 }
 
 function advancePending() {
