@@ -25,6 +25,8 @@ export function settingsSummary(settings: EdgeSettings) {
   parts.push(restModeLabels[settings.rest.mode] === '随机' ? rest : rest)
   if (settings.nipple.on) parts.push('只玩乳头')
   if (settings.glans.on) parts.push('只玩龟头')
+  if (settings.toy) parts.push('飞机杯')
+  if (settings.aneros) parts.push('按摩器')
   const tones = toneOrder.filter(key => settings.tones[key])
   if (tones.length) parts.push(`口吻 ${tones.map(key => toneLabels[key]).join('+')}`)
   if (settings.bpmRandom.on) parts.push(`每次变换节奏 ${settings.bpmRandom.min}–${settings.bpmRandom.max}`)

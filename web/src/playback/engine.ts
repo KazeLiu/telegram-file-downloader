@@ -1,6 +1,6 @@
 // 寸止引擎：语义与数值对齐参考实现（go / slow / stop 三相位 + 难度份额 + 预生成任务）。
 // 纯函数、可播种随机，便于校验与复现。
-import { maleCommands, type EdgeCommand, type EdgeMode } from './commands.ts'
+import { anerosCommands, maleCommands, toyCommands, type EdgeCommand, type EdgeMode } from './commands.ts'
 
 export type { EdgeCommand, EdgeMode }
 
@@ -386,16 +386,39 @@ export interface CustomCommand {
   bpm?: number
 }
 
-export function commandPool(disabled: number[], custom: CustomCommand[], hand: Hand, base: EdgeCommand[] = maleCommands) {
+/** 道具模式的开关：飞机杯会把「只能用手」「必须握柱身」的指令剔除，Aneros 追加红色段的夹紧指令。 */
+export interface PoolTools {
+  /** 使用飞机杯 */
+  toy?: boolean
+  /** 使用前列腺按摩器 */
+  aneros?: boolean
+  /** 飞机杯指令池（下标从 1000 起） */
+  toyBase?: EdgeCommand[]
+  /** 前列腺按摩器指令池（下标从 2000 起） */
+  anerosBase?: EdgeCommand[]
+}
+
+export function commandPool(
+  disabled: number[], custom: CustomCommand[], hand: Hand,
+  base: EdgeCommand[] = maleCommands, tools: PoolTools = {},
+) {
   const blocked = new Set(disabled)
-  const pool: EdgeCommand[] = base
-    .map((item, index) => ({ item, index }))
-    .filter(entry => !blocked.has(entry.index))
-    .map(entry => (hand === 'left' ? { ...entry.item, text: swapHands(entry.item.text) } : { ...entry.item }))
+  const dress = (item: EdgeCommand) => (hand === 'left' ? { ...item, text: swapHands(item.text) } : { ...item })
+  const indexed = (list: EdgeCommand[], offset: number) =>
+    list.map((item, index) => ({ index: offset + index, item })).filter(entry => !blocked.has(entry.index))
+  let entries = indexed(base, 0)
+  if (tools.aneros) entries = [...entries, ...indexed(tools.anerosBase ?? anerosCommands, 2000)]
+  if (tools.toy) {
+    // 参考实现：开飞机杯时把「只能用手直接做」与「必须握柱身」的指令整条剔除，再接上飞机杯专属指令。
+    entries = [
+      ...entries.filter(entry => !entry.item.bareHand && !entry.item.shaft),
+      ...indexed(tools.toyBase ?? toyCommands, 1000),
+    ]
+  }
   const extra: EdgeCommand[] = custom
     .map(item => ({ text: item.text.trim(), mode: item.mode, category: 'custom' as const, ...(item.bpm ? { bpm: item.bpm } : {}) }))
     .filter(item => item.text.length > 0)
-  return [...pool, ...extra]
+  return [...entries.map(entry => dress(entry.item)), ...extra]
 }
 
 /** 指令自带秒数超过 30×分钟数时整条剔除（对齐参考实现），免得极长指令吃掉整局；全被剔除时原样返回。 */

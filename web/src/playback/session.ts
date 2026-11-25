@@ -118,7 +118,10 @@ export class EdgeSession {
     this.minutes = minutes
     // 指令池要按本局时长剔除过长的指令，所以放在算出分钟数之后。
     this.pool = dropOverlongCommands(
-      filterByCategories(commandPool(settings.disabled, settings.custom, settings.hand), settings.categories),
+      filterByCategories(
+        commandPool(settings.disabled, settings.custom, settings.hand, undefined, { toy: settings.toy, aneros: settings.aneros }),
+        settings.categories
+      ),
       minutes
     )
     this.totalMs = Math.max(60_000, Math.round(minutes * 60_000))

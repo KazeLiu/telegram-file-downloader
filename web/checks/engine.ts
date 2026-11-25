@@ -15,7 +15,7 @@ import {
   toneAfterForCommand, toneForTask, pickToneLine, toneLabels, toneOrder, type EdgeMode
 } from '../src/playback/engine.ts'
 import { abuseLines, feetLines, strongLines, sweetLines, teaseLines, toneNotes } from '../src/playback/tones.ts'
-import { maleCommands } from '../src/playback/commands.ts'
+import { anerosCommands, maleCommands, toyCommands } from '../src/playback/commands.ts'
 import { defaultEdgeSettings, edgeSchemaVersion, edgeStorageKey, normalizeEdgeSettings, readEdgeSettings, writeEdgeSettings } from '../src/playback/settings.ts'
 import { EdgeSession } from '../src/playback/session.ts'
 import { addSession, emptyStats, normalizeStats, readStats, statsSummary } from '../src/playback/history.ts'
@@ -209,6 +209,20 @@ assert.equal(commandPool([], [], 'right')[0]!.text, maleCommands[0]!.text)
 assert.equal(commandPool([], [], 'left')[0]!.text, swapHands(maleCommands[0]!.text), '左手要整体对调')
 assert.equal(commandPool([], [{ text: '  自定义  ', mode: 'go' }], 'right').at(-1)!.text, '自定义', '自定义口令要去空白')
 assert.equal(commandPool([], [{ text: '   ', mode: 'go' }], 'right').length, maleCommands.length, '空自定义口令被丢弃')
+// —— 道具模式：飞机杯剔除只能用手/必须握柱身的指令，按摩器追加红色段 ——
+const toyPool = commandPool([], [], 'right', maleCommands, { toy: true })
+assert.equal(toyPool.some(item => item.bareHand), false, '开飞机杯后不能留只能用手的指令')
+assert.equal(toyPool.some(item => item.shaft), false, '开飞机杯后不能留必须握柱身的指令')
+assert.equal(toyPool.length, maleCommands.length - 10 + toyCommands.length, '飞机杯把 10 条手用指令换成 20 条专属指令')
+assert.equal(commandPool([], [], 'right', maleCommands, { toy: true })[maleCommands.length - 10]!.text, toyCommands[0]!.text)
+const anerosPool = commandPool([], [], 'right', maleCommands, { aneros: true })
+assert.equal(anerosPool.length, maleCommands.length + anerosCommands.length)
+assert.equal(anerosPool.at(-1)!.text, anerosCommands.at(-1)!.text)
+assert.equal(commandPool([1000], [], 'right', maleCommands, { toy: true }).some(item => item.text === toyCommands[0]!.text), false, '道具指令也要能逐条停用')
+assert.equal(toyCommands.length, 20)
+assert.equal(anerosCommands.length, 6)
+assert.equal(anerosCommands.every(item => item.mode === 'stop'), true, '按摩器指令全是红色段')
+assert.equal(toyCommands.filter(item => item.edge).length, 3, '飞机杯有 3 条寸止指令')
 const filtered = filterByCategories(full, { edge: true, tease: false, pose: false, pain: false })
 assert.ok(filtered.every(item => item.category === 'basic' || item.category === 'edge'), '关掉的分类必须被过滤')
 assert.equal(filterByCategories(full, { edge: true, tease: true, pose: true, pain: true }).length, full.length, '全开时不过滤')

@@ -81,6 +81,8 @@ function resetGroup() {
     item.rest = { ...base.rest }
     item.nipple = { ...base.nipple }
     item.glans = { ...base.glans }
+    item.toy = base.toy
+    item.aneros = base.aneros
   } else if (selected.value === 'command') {
     item.categories = { ...base.categories }
     item.hand = base.hand
@@ -267,6 +269,13 @@ void secondsLabel
           <label class="toggle"><input :checked="settings.glans.on" type="checkbox" @change="settings.glans.on = ($event.target as HTMLInputElement).checked" />只玩龟头</label>
           <label v-if="settings.glans.on">插入段数<input :value="settings.glans.times" type="number" min="1" max="4" @change="settings.glans.times = Math.min(4, Math.max(1, Math.round(Number(($event.target as HTMLInputElement).value) || 1)))" /></label>
         </div>
+
+        <h5 class="field-label">道具模式</h5>
+        <div class="settings-grid">
+          <label class="toggle"><input :checked="settings.toy" type="checkbox" @change="settings.toy = ($event.target as HTMLInputElement).checked" />使用飞机杯</label>
+          <label class="toggle"><input :checked="settings.aneros" type="checkbox" @change="settings.aneros = ($event.target as HTMLInputElement).checked" />我有前列腺按摩器</label>
+        </div>
+        <p class="muted">开飞机杯会混入适合飞机杯的指令，例如套到底后停住、取下等；只能用手直接做的指令不会出现。开按摩器后，红色（不许碰）的指令里会加入夹紧、放松的指令。</p>
 
         <h5 class="field-label">时间</h5>
         <div class="chips">

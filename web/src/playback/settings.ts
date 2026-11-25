@@ -35,6 +35,9 @@ export interface EdgeSettings {
   /** 只玩乳头 / 只玩龟头：整局固定插入几段专属指令 */
   nipple: { on: boolean; times: number }
   glans: { on: boolean; times: number }
+  /** 道具模式：飞机杯（会剔除只能用手的指令）与前列腺按摩器（红色段追加夹紧指令） */
+  toy: boolean
+  aneros: boolean
   redBeat: RedBeat
   heartbeat: boolean
   heartbeatVolume: number
@@ -98,6 +101,8 @@ export const defaultEdgeSettings: EdgeSettings = {
   disabled: [],
   nipple: { on: false, times: 1 },
   glans: { on: false, times: 1 },
+  toy: false,
+  aneros: false,
   redBeat: 'heartbeat',
   heartbeat: true,
   heartbeatVolume: 100,
@@ -269,6 +274,8 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     disabled: readDisabled(raw.disabled),
     nipple: readFocus(raw.nipple, defaultEdgeSettings.nipple),
     glans: readFocus(raw.glans, defaultEdgeSettings.glans),
+    toy: boolOr(raw.toy, defaultEdgeSettings.toy),
+    aneros: boolOr(raw.aneros, defaultEdgeSettings.aneros),
     redBeat: pickValue(raw.redBeat, redBeats, defaultEdgeSettings.redBeat),
     heartbeat: boolOr(raw.heartbeat, defaultEdgeSettings.heartbeat),
     heartbeatVolume: clampNumber(raw.heartbeatVolume, 0, 300, defaultEdgeSettings.heartbeatVolume),
