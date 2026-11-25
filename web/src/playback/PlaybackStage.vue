@@ -69,7 +69,9 @@ const sentences = computed(() => {
       </span>
     </div>
     <p v-if="toneBefore" class="sd-tone sd-tone-before" data-sundome-tone="before">{{ toneBefore }}</p>
-    <p class="sd-command" :class="{ 'sd-command-tight': toneBefore }" data-sundome-command><span v-for="(line, index) in sentences" :key="index" class="sd-sentence">{{ line }}</span></p>
+    <div class="sd-command-text" data-sundome-command-text>
+      <p class="sd-command" :class="{ 'sd-command-tight': toneBefore }" data-sundome-command><span v-for="(line, index) in sentences" :key="index" class="sd-sentence">{{ line }}</span></p>
+    </div>
     <p v-if="toneAfter" class="sd-tone sd-tone-after" data-sundome-tone="after">{{ toneAfter }}</p>
     <p v-if="hint" class="sd-command-hint" data-sundome-hint>{{ hint }}</p>
     <div class="sd-taskbar" data-sundome-task-bar role="progressbar" :aria-valuenow="Math.round(clampedProgress * 100)">
@@ -123,6 +125,7 @@ const sentences = computed(() => {
   animation: sd-beat var(--beat, 1s) ease-in-out infinite;
 }
 .sd-bpm { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: .12em; color: rgba(255, 255, 255, .6); font-variant-numeric: tabular-nums; }
+.sd-command-text { display: flex; flex-direction: column; align-items: center; width: 100%; }
 .sd-command {
   margin: 24px 0 0;
   max-width: 30ch;

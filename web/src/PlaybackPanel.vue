@@ -955,6 +955,13 @@ function penaltyRestart() {
   note.value = ''
   restart()
 }
+function guideAnchor(step: number) {
+  // 引导卡用聚光灯指到该步对应的元素上；找不到就居中展示。
+  const selector = guideSteps[step]?.target
+  if (!selector) return null
+  return document.querySelector(selector)
+}
+
 function closeGuide() {
   guideOpen.value = false
   markGuideSeen()
@@ -1293,7 +1300,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
-    <PlaybackGuide :steps="guideSteps" :open="guideOpen" @close="closeGuide" />
+    <PlaybackGuide :steps="guideSteps" :open="guideOpen" :anchor="guideAnchor" @close="closeGuide" />
   </div>
 </template>
 

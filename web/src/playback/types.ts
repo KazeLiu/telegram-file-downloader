@@ -29,6 +29,8 @@ export const finishTitles: Record<FinishReason, string> = {
 export interface GuideStep {
   title: string
   body: string
+  /** 该步要指向的元素选择器：命中时引导卡会用聚光灯把它挖出来。 */
+  target?: string
 }
 
 /** 运行层顶部的位置信息。 */
