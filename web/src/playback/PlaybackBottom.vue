@@ -34,7 +34,7 @@ const legend = computed(() => modeOrder.map(mode => ({ mode, label: modeLabels[m
         </li>
         <li v-if="!hideTime" class="sd-keys">Space 暂停 · E 忍住 · Esc 退出</li>
       </ul>
-      <button class="sd-skip" type="button" @click="emit('skip')">
+      <button class="sd-skip" type="button" data-sundome-video-skip @click="emit('skip')">
         <Icon name="refresh" :size="12" />换个视频
       </button>
     </div>

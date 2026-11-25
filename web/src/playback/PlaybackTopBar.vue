@@ -49,7 +49,7 @@ const emit = defineEmits<{
       <button v-if="noCrop" class="sd-icon" type="button" data-sundome-pos-toggle :data-pos="align" :title="`显示位置：${positionLabel}`" :aria-label="`显示位置：${positionLabel}`" @click="emit('cycle-position')">
         <Icon name="position" :size="14" />
       </button>
-      <button v-if="pipAvailable" class="sd-icon" type="button" data-sundome-pip-toggle title="悬浮窗" aria-label="悬浮窗" @click="emit('pip')">
+      <button v-if="pipAvailable" class="sd-icon" type="button" data-sundome-pip-toggle data-sundome-pip="1" title="悬浮窗" aria-label="悬浮窗" @click="emit('pip')">
         <Icon name="pip" :size="14" />
       </button>
       <button class="sd-icon" :class="{ on: volumeOpen }" data-sundome-volume-toggle type="button" title="声音" aria-label="声音" @click="emit('volume')">

@@ -132,6 +132,10 @@ const taskProgress = computed(() => frame.value?.taskProgress ?? 0)
 const taskSeconds = computed(() => frame.value?.taskSeconds ?? 0)
 const taskKey = computed(() => frame.value?.task?.index ?? -1)
 const cooling = computed(() => frame.value?.cooling ?? false)
+const taskCategory = computed(() => {
+  if (cooling.value) return 'basic'
+  return frame.value?.task?.command?.category ?? 'basic'
+})
 const allowed = computed(() => frame.value?.phase === 'allow')
 const windowLeft = computed(() => Math.max(0, Math.ceil(frame.value?.windowLeft ?? 0)))
 const totalMs = computed(() => frame.value?.totalMs ?? 0)
@@ -1113,10 +1117,29 @@ onBeforeUnmount(() => {
       @penalty="penaltyRestart"
     />
 
-    <div v-else ref="playerElement" class="playback-runtime" tabindex="-1">
+    <div
+      v-else
+      ref="playerElement"
+      class="playback-runtime"
+      tabindex="-1"
+      data-sundome="play"
+      data-body="male"
+      :data-mode="mode"
+      :data-nipple="settings.focus === 'nipple' ? 'true' : 'false'"
+      :data-glans="settings.focus === 'glans' ? 'true' : 'false'"
+      :data-category="taskCategory"
+      :data-paused="paused ? 'true' : 'false'"
+      :data-cooldown="cooling ? 'true' : 'false'"
+      :data-edges="held"
+      :data-toy="settings.toy ? 'on' : 'off'"
+      :data-task-seconds="taskSeconds"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="'游戏进行中'"
+    >
       <PlaybackOverlay :mode="mode" :dim="dimLevel" :opacity="textOpacity" :scale="textScale">
         <template #media>
-          <div v-show="!runtimeSettings" class="playback-media" @pointerup="tapSeek">
+          <div v-show="!runtimeSettings" class="playback-media" data-sundome-video :data-video-kind="current?.kind ?? 'image'" @pointerup="tapSeek">
             <div
               v-if="current?.kind === 'image'"
               ref="imageViewport"
