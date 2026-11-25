@@ -210,7 +210,7 @@ defineEmits<{ close: [skipped: boolean] }>()
 
 ## guideSteps.ts
 
-导出 `guideSteps: GuideStep[]`（10 步，文案对齐参考站：照着指示做（绿黄红三色）、忍住了、射了、视频快进／快退 10 秒、换个视频、视频大小、悬浮小窗、音量、横屏、暂停・退出）与
+导出 `guideSteps: GuideStep[]`（10 步，文案对齐参考站：照着指示做（绿黄红三色）、忍住了、射了、视频快进／快退 10 秒、换个视频、视频大小、悬浮小窗、音量、横屏、暂停・退出；每一步带 `target` 选择器，引导卡据此定位并聚光灯挖洞（`box-shadow: 0 0 0 9999px rgba(8,5,7,.8)` + 命中时 2px 白边与 18px 光晕））与
 `readGuideSeen()` / `markGuideSeen()`（localStorage 键 `shicun.edge.guide.v2`，读写失败一律当没看过）。
 
 ## sound.ts
