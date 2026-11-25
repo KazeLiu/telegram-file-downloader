@@ -1139,7 +1139,18 @@ onBeforeUnmount(() => {
     >
       <PlaybackOverlay :mode="mode" :dim="dimLevel" :opacity="textOpacity" :scale="textScale">
         <template #media>
-          <div v-show="!runtimeSettings" class="playback-media" data-sundome-video :data-video-kind="current?.kind ?? 'image'" @pointerup="tapSeek">
+          <div
+            v-show="!runtimeSettings"
+            class="playback-media"
+            data-sundome-video
+            :data-video-kind="current?.kind ?? 'image'"
+            :data-fit="settings.fit"
+            :data-pos="noCrop ? settings.pos : 'cover'"
+            data-layout="background"
+            :data-playing="videoDimmed ? 'false' : 'true'"
+            :data-dim="Math.round(dimLevel)"
+            @pointerup="tapSeek"
+          >
             <div
               v-if="current?.kind === 'image'"
               ref="imageViewport"

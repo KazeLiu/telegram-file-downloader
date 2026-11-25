@@ -47,7 +47,7 @@ const mask = computed(() => {
     <div class="sd-glow" :style="{ backgroundImage: glow }" />
     <div class="sd-media">
       <slot name="media" />
-      <div class="sd-mask" :style="{ backgroundColor: `rgba(0, 0, 0, ${mask.toFixed(3)})` }" />
+      <div class="sd-mask" data-sundome-video-shade :style="{ backgroundColor: `rgba(0, 0, 0, ${mask.toFixed(3)})` }" />
     </div>
     <div class="sd-top"><slot name="top" /></div>
     <div class="sd-center" :style="{ '--sd-text-opacity': String(opacity / 100), '--sd-text-scale': String(scale / 100) }">
