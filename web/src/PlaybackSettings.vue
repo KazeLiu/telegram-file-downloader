@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { newPlaylist } from './playback'
 import type { Playlist } from './playback'
 import { settingsSummary } from './playback/summary'
@@ -338,13 +338,45 @@ async function allowMirror() {
     settings.value.mirror.on = false
   }
 }
+/** 逐项搜索：命中的设置项留下，其余隐藏（与参考站的按键搜索一致）。 */
+const root = ref<HTMLElement>()
+const hitCount = ref(-1)
+function applyFind() {
+  const card = root.value
+  if (!card) return
+  const keyword = search.value.trim().toLowerCase()
+  if (!keyword) {
+    card.querySelectorAll<HTMLElement>('[data-sundome-find-item]').forEach(item => { item.hidden = false })
+    hitCount.value = -1
+    return
+  }
+  let hits = 0
+  for (const section of card.querySelectorAll<HTMLElement>('.settings-section')) {
+    let showGroup = false
+    for (const child of Array.from(section.children) as HTMLElement[]) {
+      if (child.classList.contains('section-title')) { child.hidden = false; continue }
+      const text = (child.textContent ?? '').toLowerCase()
+      if (child.tagName === 'H5') {
+        showGroup = text.includes(keyword)
+        child.hidden = !showGroup
+        continue
+      }
+      const show = showGroup || text.includes(keyword)
+      child.hidden = !show
+      if (show) hits += 1
+    }
+  }
+  hitCount.value = hits
+}
+watch([search, visible], () => { void nextTick(applyFind) }, { immediate: true })
+
 const beatsImages = computed(() => !!media.value && media.value.kind === 'image' && media.value.imageTiming === 'beat')
 const secondsLabel = computed(() => readEdgeSettings(null) ? '' : '')
 void secondsLabel
 </script>
 
 <template>
-  <div class="settings-card" :class="{ runtime }">
+  <div ref="root" class="settings-card" :class="{ runtime }">
     <header class="card-head">
       <div class="card-heading">
         <h3 class="card-title">玩法设置</h3>
@@ -368,10 +400,10 @@ void secondsLabel
       </div>
     </header>
     <label class="settings-search">查找设置<input v-model="search" type="search" placeholder="例如：乳头、左手、速度、视频" /></label>
-    <div class="settings-tabs" role="group" aria-label="设置分类" data-sundome-tabs :data-sundome-hits="visible.length">
+    <div class="settings-tabs" role="group" aria-label="设置分类" data-sundome-tabs :data-sundome-hits="hitCount < 0 ? visible.length : hitCount">
       <button v-for="group in groups" :key="group.id" type="button" :aria-pressed="!search && selected === group.id" @click="selectGroup(group.id)">{{ group.label }}</button>
     </div>
-    <p v-if="!visible.length" class="muted" role="status">没有匹配的设置，请换个关键词。</p>
+    <p v-if="!visible.length || (search.trim() && hitCount === 0)" class="muted" role="status" data-sundome-find-none>没有匹配的设置，请换个关键词。</p>
     <section v-for="group in visible" :key="group.id" class="settings-section" :data-sundome-find="group.label" :aria-label="`${group.label}设置`">
       <h4 v-if="search" class="section-title">{{ group.label }}</h4>
 
