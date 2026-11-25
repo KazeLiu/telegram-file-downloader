@@ -284,21 +284,21 @@ function readBpmMap(value: unknown): Record<string, number> {
     if (!/^\d+$/.test(key)) continue
     if (typeof raw !== 'number' || !Number.isFinite(raw)) continue
     const rate = Math.min(300, Math.max(0, Math.round(raw)))
-    if (rate > 0) result[key] = rate
+    result[key] = rate
   }
   return result
 }
 
-/** 容错读入：任何字段坏了都退回默认值，绝不抛错。 */
 /** 常看的网站：只留 http(s)，最多 200 字。 */
-function readPipSite(value: unknown): string {
-  if (typeof value !== 'string') return defaultEdgeSettings.pipSite
+export function safePipSite(value: unknown): string {
+  if (typeof value !== 'string') return ''
   const text = value.trim().slice(0, 200)
-  return /^https?:\/\//i.test(text) ? text : ''
+  if (!/^https?:\/\//i.test(text)) return ''
+  try { return new URL(text).href } catch { return '' }
 }
 
 export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
-  if (!isRecord(raw)) return { ...defaultEdgeSettings, categories: { ...allCategories }, tune: { ...defaultEdgeSettings.tune }, rest: { ...defaultEdgeSettings.rest }, custom: [], disabled: [] }
+  if (!isRecord(raw)) return structuredClone(defaultEdgeSettings)
   const tune = isRecord(raw.tune) ? raw.tune : {}
   return {
     seed: typeof raw.seed === 'number' && Number.isFinite(raw.seed) ? Math.abs(Math.floor(raw.seed)) >>> 0 : 0,
@@ -335,7 +335,7 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     hideRemaining: boolOr(raw.hideRemaining, defaultEdgeSettings.hideRemaining),
     mixAudio: boolOr(raw.mixAudio, defaultEdgeSettings.mixAudio),
     pipOffer: boolOr(raw.pipOffer, defaultEdgeSettings.pipOffer),
-    pipSite: readPipSite(raw.pipSite),
+    pipSite: safePipSite(raw.pipSite),
     bpmRandom: readBpmRandom(raw.bpmRandom),
     bpm: readBpmMap(raw.bpm),
     heartbeatSync: boolOr(raw.heartbeatSync, defaultEdgeSettings.heartbeatSync),

@@ -18,9 +18,9 @@ import type { FinishReason } from './playback/types'
 import { beatVolumeMax, dimMin, formatClock, modeColors, modeColorsDark, modeLabels, textOpacityMin, textScaleMax, textScaleMin } from './playback/engine'
 import { glansCommands, nippleCommands } from './playback/commands'
 import { EdgeSession, type SessionFrame } from './playback/session'
-import { edgeStorageKey, readEdgeSettings, writeEdgeSettings, type EdgeSettings } from './playback/settings'
+import { edgeStorageKey, normalizeEdgeSettings, readEdgeSettings, safePipSite, writeEdgeSettings, type EdgeSettings } from './playback/settings'
 import { addLost, addSession, lostPct, lostStorageKey, readLost, readStats, statsStorageKey, writeLost, writeStats, type LostRecord } from './playback/history'
-import { addDay, daysStorageKey, readDays, writeDays, type EdgeDays } from './playback/days'
+import { addDay, daysStorageKey, readDays, writeDays } from './playback/days'
 import {
   countResult, pushRecord, readRecords, readTally, recordOutcome, recordsStorageKey, tallyStorageKey, writeRecords, writeTally,
   type ResultRecord
@@ -39,9 +39,11 @@ import {
 
 const preferences = reactive<PlaybackPreferences>({ playlists: [], selected: '', favorites: [], shownImages: [] })
 const setupModel = reactive({ galleries: [] as Gallery[], loading: false, starting: false, error: '', storageError: '', storageBlocked: false, ready: false })
-const settings = ref<EdgeSettings>(readEdgeSettings(null) ?? readEdgeSettings(null) as EdgeSettings)
+const settings = ref<EdgeSettings>(readEdgeSettings(null))
 const playlist = computed(() => preferences.playlists.find(item => item.id === preferences.selected))
 const queue = shallowRef<PlaybackMedia[]>([])
+const queueIndex = ref(0)
+const mediaCycle = ref(0)
 const options = ref<Playlist>()
 const session = shallowRef<EdgeSession | null>(null)
 const frame = ref<SessionFrame | null>(null)
@@ -90,45 +92,49 @@ let previousTick = 0
 let nextBeat = 0
 let nextHeart = 0
 let disposed = false
-let pendingAdvance = false
+const pendingAdvance = ref(false)
 let imageLoad = 0
 let availableMedia: PlaybackMedia[] = []
+let queuedImages = 0
 let immersive = false
 let pointer: { id: number; x: number; y: number; left: number; top: number; moved: boolean } | undefined
 let suppressClick = false
 let lastMode = ''
 let lastTask = -1
 let statsDone = false
+let guideSeen = false
 /** 中途结束（射了）的记录：次数与最长坚持，只存本机。 */
 const lostRecord = ref<LostRecord>({ count: 0, bestMs: 0 })
 /** 连续天数：设置页顶部要显示「已连续 N 天」，这里读一次供外部查看。 */
-const days = ref<EdgeDays>(readDays(typeof localStorage === 'undefined' ? null : localStorage.getItem(daysStorageKey)))
 const lostBestNow = ref(false)
-/** 红色（不许碰）时由我们主动暂停视频，避免被 videoPaused 当成用户暂停整局。 */
-let videoHold = false
 /** Document PiP 小窗句柄（关掉后置空）。 */
 let pipWindow: Window | null = null
+let updatePip: (() => void) | undefined
 
-const current = computed(() => queue.value[0] ?? null)
+const current = computed(() => queue.value[queueIndex.value] ?? null)
 const favorite = computed(() => !!current.value && preferences.favorites.includes(mediaKey(current.value)))
-const active = computed(() => screen.value === 'playing' && !paused.value && ready.value && !error.value)
+const active = computed(() => screen.value === 'playing' && !paused.value && !error.value
+  && (allowed.value || (!pendingAdvance.value && (ready.value || (current.value?.kind === 'video' && videoDimmed.value)))))
 /** 悬浮小窗能力：优先用 Document PiP 放我们自己画的迷你播放器，否则退回视频自身的 PiP。 */
 type PipMode = 'doc' | 'video' | null
 function detectPip(): PipMode {
   try {
     if ('documentPictureInPicture' in window) return 'doc'
-    const proto = HTMLVideoElement.prototype as HTMLVideoElement & { webkitSetPresentationMode?: unknown }
-    const ok = (document.pictureInPictureEnabled && 'requestPictureInPicture' in proto) || 'webkitSetPresentationMode' in proto
+    const ok = document.pictureInPictureEnabled && 'requestPictureInPicture' in HTMLVideoElement.prototype
     return ok ? 'video' : null
   } catch { return null }
 }
-const pipMode = computed<PipMode>(() => (current.value?.kind === 'video' ? detectPip() : null))
+const pipMode = computed<PipMode>(() => {
+  if (!current.value) return null
+  const capability = detectPip()
+  return capability === 'doc' || current.value.kind === 'video' ? capability : null
+})
 const pipAvailable = computed(() => pipMode.value !== null)
 /** 开始后提示打开悬浮小窗（参考站的 pip-want）。 */
 const pipOfferOpen = ref(false)
 const pipOfferDone = ref(false)
 const pipSiteLabel = computed(() => {
-  const site = settings.value.pipSite
+  const site = safePipSite(settings.value.pipSite)
   if (!site) return ''
   try { return new URL(site).host || site } catch { return site }
 })
@@ -144,7 +150,7 @@ const imageBeatBpm = computed(() => {
 })
 const taskProgress = computed(() => frame.value?.taskProgress ?? 0)
 const taskSeconds = computed(() => frame.value?.taskSeconds ?? 0)
-const taskKey = computed(() => frame.value?.task?.index ?? -1)
+const taskKey = computed(() => frame.value?.task?.at ?? -1)
 const cooling = computed(() => frame.value?.cooling ?? false)
 const taskCategory = computed(() => {
   if (cooling.value) return 'basic'
@@ -156,7 +162,7 @@ const totalMs = computed(() => frame.value?.totalMs ?? 0)
 const elapsedMs = computed(() => frame.value?.elapsed ?? 0)
 const progressPercent = computed(() => (totalMs.value ? Math.min(1, elapsedMs.value / totalMs.value) : 0))
 // 随机时长结束前不让人知道有多久，所以这种情况下也一并藏起剩余时间。
-const hideClock = computed(() => settings.value.hideRemaining || settings.value.durationRandom)
+const hideClock = computed(() => settings.value.hideRemaining || (session.value?.settings.durationRandom ?? settings.value.durationRandom))
 const remainingText = computed(() => (hideClock.value ? '' : formatClock(Math.max(0, totalMs.value - elapsedMs.value))))
 const summary = computed(() => {
   const item = playlist.value
@@ -166,11 +172,11 @@ const summary = computed(() => {
     item.kind === 'video' ? '' : item.imageCount ? `每轮 ${item.imageCount} 张` : '全部未展示图片',
     settings.value.durationRandom ? '随机时长' : `${settings.value.minutes} 分钟`, settings.value.metronome ? '节拍声开' : '节拍声关'].filter(Boolean).join(' · ')
 })
-const canHold = computed(() => screen.value === 'playing' && !paused.value && !error.value && !allowed.value && !runtimeSettings.value && !cooling.value)
+const canHold = computed(() => active.value && !allowed.value && !runtimeSettings.value && !cooling.value)
 
 /** 结算屏用的两个数：撑过设定时间的百分比、走过多少条指令。 */
 const finishedPercent = computed(() => (totalMs.value > 0 ? Math.min(100, Math.round((elapsedMs.value / totalMs.value) * 100)) : 0))
-const commandCount = computed(() => (frame.value?.task ? frame.value.task.index + 1 : 0))
+const commandCount = computed(() => frame.value ? session.value?.commandCount ?? 0 : 0)
 /** 许可窗口总长（秒），用于奖励屏倒计时条。 */
 const windowTotal = computed(() => {
   if (frame.value?.multi) return Math.max(1, Math.round(frame.value.windowTotal || 0))
@@ -181,11 +187,11 @@ const multi = computed(() => Boolean(frame.value?.multi) && allowed.value)
 /** 连续结局现在播到第几次「再来一次」。 */
 const multiRound = computed(() => Math.max(1, Math.round(frame.value?.multiRound ?? 1)))
 /** 只玩乳头且拿到许可时，奖励屏下方多一句「现在可以摸下面了」。 */
-const allowBelow = computed(() => session.value?.allowBelow ?? '')
+const allowBelow = computed(() => allowed.value ? session.value?.allowBelow ?? '' : '')
 /** 这次许可是不是「松手射精」。 */
 const ruined = computed(() => session.value?.ruined ?? finishedReason.value === 'ruin')
 /** 这一局是不是连续（多少次都行）结局——结算屏在成功时换成多轮正文。 */
-const finishedMulti = computed(() => settings.value.finale === 'continuous')
+const finishedMulti = computed(() => session.value?.settings.finale === 'continuous')
 
 const textOpacity = computed(() => settings.value.textOpacity)
 const textScale = computed(() => settings.value.textScale)
@@ -210,10 +216,10 @@ function syncVideoPhase() {
   const element = video.value
   if (!element) return
   if (videoDimmed.value) {
-    if (!element.paused) { videoHold = true; element.pause() }
+    element.pause()
     return
   }
-  if (videoHold) { videoHold = false; if (!paused.value && !error.value && !runtimeSettings.value) void playVideo() }
+  void playVideo()
 }
 
 /** 十六进制转 rgba：把 modeColors 的色值喂给光晕与进度条。 */
@@ -226,14 +232,14 @@ function persistEdge() {
 watch(settings, persistEdge, { deep: true })
 
 /** 换一条指令就换一个视频（参考站的可选项）。只在当前播放的是视频时生效。 */
-function maybeSwitchVideo(previous: number, next: number) {
+function maybeSwitchVideo(next: number, previous: number) {
   if (!settings.value.switchVideoPerCommand) return
   if (previous < 0 || next <= previous) return
   if (screen.value !== 'playing' || paused.value || error.value || runtimeSettings.value || allowed.value) return
   if (current.value?.kind !== 'video') return
   step(1)
 }
-watch([mode, allowed, cooling], syncVideoPhase)
+watch(videoDimmed, syncVideoPhase)
 
 /** 视频声音：关 / 只在最后（获得许可时）/ 一直开。 */
 const videoMuted = computed(() => {
@@ -256,10 +262,8 @@ function videoLoaded(event: Event) {
   const element = video.value
   if (!element) return
   /* 对齐参考站：长视频直接从正文开始；开了「从中间开始」再往后跳一截。 */
-  if (Number.isFinite(element.duration) && element.duration > 25 && element.currentTime < 1) {
-    const target = settings.value.skipIntro && element.duration > 40
-      ? element.duration * (0.3 + 0.2 * Math.random())
-      : Math.min(12, 0.15 * element.duration)
+  if (settings.value.skipIntro && Number.isFinite(element.duration) && element.duration > 25 && element.currentTime < 1) {
+    const target = element.duration * (0.3 + 0.2 * Math.random())
     try { element.currentTime = target } catch { /* 部分格式不允许跳转，忽略 */ }
   }
   syncVideoSound()
@@ -270,6 +274,7 @@ function videoLoaded(event: Event) {
 const mirrorStream = shallowRef<MediaStream | null>(null)
 const mirrorError = ref<MirrorError | null>(null)
 const mirrorVideo = ref<HTMLVideoElement>()
+let mirrorRequest = 0
 /** 播放视频时镜子固定收到右下角，避免挡住画面。 */
 const mirrorPlace = computed(() => mirrorPlaceFor(settings.value.mirror.place, current.value?.kind === 'video'))
 const mirrorVisible = computed(() => settings.value.mirror.on && screen.value === 'playing' && !paused.value && !mirrorError.value)
@@ -299,6 +304,7 @@ function attachMirror() {
 }
 
 function stopMirror() {
+  mirrorRequest++
   stopStream(mirrorStream.value)
   mirrorStream.value = null
   const element = mirrorVideo.value
@@ -313,19 +319,20 @@ function failMirror(reason: MirrorError) {
 }
 
 async function startMirror() {
-  if (mirrorStream.value) return
+  if (mirrorStream.value || document.hidden) return
   const problem = mirrorSupport()
   if (problem) { failMirror(problem); return }
+  const requestId = ++mirrorRequest
   try {
     const stream = await navigator.mediaDevices.getUserMedia(MIRROR_CONSTRAINTS)
     // 期间可能被关掉（或整局结束），拿到流先检查再挂上
-    if (!settings.value.mirror.on || screen.value !== 'playing') { stopStream(stream); return }
+    if (requestId !== mirrorRequest || disposed || document.hidden || !mirrorVisible.value) { stopStream(stream); return }
     mirrorStream.value = stream
     mirrorError.value = null
     await nextTick()
     attachMirror()
   } catch (error) {
-    failMirror(classifyMirrorError(error))
+    if (requestId === mirrorRequest) failMirror(classifyMirrorError(error))
   }
 }
 
@@ -409,12 +416,9 @@ watch([() => settings.value.mixAudio, () => settings.value.metronome, () => sett
   applyAudioSession(mix, beat || heart)
 })
 
-const scheduleEdge = ref<EdgeSettings>()
-watch(() => playlist.value?.id, () => { /* 保留列表选择 */ })
-
 function warmImages() {
   if (screen.value !== 'playing') return
-  const items = queue.value.filter(item => item.kind === 'image').slice(0, 20)
+  const items = queue.value.slice(queueIndex.value).filter(item => item.kind === 'image').slice(0, 20)
   void imageBuffer.fill(items)
 }
 async function loadCurrentImage() {
@@ -467,7 +471,8 @@ async function uploadConfiguration(event: Event) {
   finally { input.value = '' }
 }
 async function openSettings() {
-  pause(); runtimeSettings.value = true; settingsError.value = ''
+  pause(); volumeOpen.value = false; pipOfferOpen.value = false
+  runtimeSettings.value = true; settingsError.value = ''
   await nextTick(); runtimePanel.value?.focus()
 }
 function closeSettings() {
@@ -508,15 +513,18 @@ function checkGallery(id: string, checked: boolean) {
 
 async function start() {
   if (!playlist.value || setupModel.starting) return
-  if (!readGuideSeen() && !pendingStart.value) { pendingStart.value = true; guideOpen.value = true; return }
+  if (!guideSeen && !readGuideSeen()) { pendingStart.value = true; guideOpen.value = true; return }
   setupModel.error = ''
   const item = playlist.value
   if (!item.roots.length) { setupModel.error = '请至少勾选一个图库。'; return }
+  if (item.roots.some(id => !setupModel.galleries.some(gallery => gallery.id === id))) {
+    setupModel.error = '列表包含已移除的图库，请取消勾选后重新开始。'; return
+  }
   if (!validPlaylist(item)) { setupModel.error = '请填写列表名称，并检查图片间隔（1–300 秒）、快速节拍（20–300 BPM）等数值是否合法。'; return }
   setupModel.starting = true
   queueRequest.abort(); queueRequest = new AbortController()
   const signal = queueRequest.signal
-  queueLoading.value = true; queueError.value = ''; pendingAdvance = false
+  queueLoading.value = true; queueError.value = ''; pendingAdvance.value = false
   availableMedia = []; imageBuffer.clear(); note.value = ''
   options.value = { ...item, roots: item.roots.slice() }
   imageSeconds.value = item.imageSeconds
@@ -536,11 +544,18 @@ async function start() {
         const cycle = playbackCycle(availableMedia, item, preferences.shownImages)
         if (!done && (cycle.reset || cycle.queue.length < Math.min(20, item.imageCount || 20))) return
         queue.value = cycle.queue; preferences.shownImages = cycle.shownImages
+        queuedImages = cycle.queue.filter(media => media.kind === 'image').length
         runtimeSettings.value = false
         if (cycle.reset) note.value = '未展示图片不足一轮，已开始新的图片周期。'
         beginSession()
       } else if (screen.value === 'playing') {
         const added = orderedMedia(items.filter(media => media.kind !== 'image' || !preferences.shownImages.includes(imageKey(media))), item.order)
+          .filter(media => {
+            if (media.kind !== 'image') return true
+            if (item.imageCount && queuedImages >= item.imageCount) return false
+            queuedImages++
+            return true
+          })
         if (added.length) queue.value = [...queue.value, ...added]
       }
       advancePending()
@@ -553,11 +568,13 @@ async function start() {
   } finally { if (!disposed && signal === queueRequest.signal) { setupModel.starting = false; queueLoading.value = false } }
 }
 
-function beginSession() {
-  const instance = new EdgeSession(settings.value, { nipple: nippleCommands, glans: glansCommands })
+function beginSession(finale = settings.value.finale) {
+  const instance = new EdgeSession(normalizeEdgeSettings({ ...settings.value, finale }), { nipple: nippleCommands, glans: glansCommands })
   session.value = instance
   frame.value = instance.frame()
   screen.value = 'playing'
+  queueIndex.value = 0
+  mediaCycle.value++
   paused.value = document.hidden
   ready.value = false
   error.value = ''
@@ -566,18 +583,21 @@ function beginSession() {
   zoomLevel.value = 1
   imageElapsed.value = 0
   lastMode = frame.value.mode
-  lastTask = frame.value.task?.index ?? -1
+  lastTask = taskKey.value
   statsDone = false
   previousTick = performance.now()
   nextBeat = 0
+  nextHeart = 0
+  volumeOpen.value = false
+  pipOfferOpen.value = false
+  pipOfferDone.value = false
+  lostBestNow.value = false
+  void sound.resume()
   void nextTick(() => {
     playerElement.value?.focus()
     void loadCurrentImage()
     void playVideo()
-    if (settings.value.pipOffer && pipMode.value) {
-      pipOfferOpen.value = true
-      pipOfferDone.value = false
-    }
+    pipOfferOpen.value = settings.value.pipOffer && pipMode.value === 'doc'
   })
 }
 
@@ -585,9 +605,10 @@ function pause() {
   if (screen.value !== 'playing') return
   paused.value = true; video.value?.pause()
   nextBeat = 0
+  nextHeart = 0
 }
 async function resume() {
-  if (screen.value !== 'playing' || error.value || runtimeSettings.value) return
+  if (screen.value !== 'playing' || error.value || runtimeSettings.value || (document.hidden && !pipInUse())) return
   paused.value = false; note.value = ''; previousTick = performance.now()
   advancePending()
   await sound.ensure()
@@ -595,16 +616,17 @@ async function resume() {
 }
 async function playVideo() {
   const element = video.value
-  if (!element || screen.value !== 'playing' || paused.value || error.value) return
+  if (!element || screen.value !== 'playing' || paused.value || error.value || runtimeSettings.value || videoDimmed.value) return
   try { await element.play() }
   catch (problem) {
-    if (disposed || element !== video.value || (problem as Error).name === 'AbortError') return
+    if (disposed || element !== video.value || videoDimmed.value || (problem as Error).name === 'AbortError') return
     pause(); note.value = '视频尚未开始，请点击继续播放；若仍无法播放，请检查浏览器支持的格式。'
   }
 }
 
 function finish(reason: FinishReason) {
-  queueRequest.abort(); queueLoading.value = false; pendingAdvance = false
+  if (screen.value !== 'playing') return
+  queueRequest.abort(); queueLoading.value = false; pendingAdvance.value = false
   imageLoad++; imageBuffer.clear()
   stopMirror()
   pause()
@@ -615,7 +637,17 @@ function finish(reason: FinishReason) {
   finishedReason.value = reason
   screen.value = 'finished'
   error.value = ''
-  sound.suspend()
+  closePip()
+  if (document.fullscreenElement === playerElement.value) void document.exitFullscreen()
+  void sound.suspend()
+}
+
+function stopSession() {
+  const instance = session.value
+  if (!instance) return
+  instance.stop()
+  frame.value = instance.frame()
+  finish(instance.outcome ?? 'manual')
 }
 
 /** 结算时把这一局记进本机成绩：参考站只统计成功、松手、禁止三种结局。 */
@@ -637,7 +669,6 @@ function recordDay() {
   try { stored = localStorage.getItem(daysStorageKey) } catch { return }
   const result = addDay(readDays(stored))
   writeDays(result.next)
-  days.value = result.next
 }
 
 /** 「射了」单独记一档：中途结束次数与最长坚持（对齐参考站的 lost 存储）。 */
@@ -673,41 +704,43 @@ function recordResult(reason: FinishReason) {
     m: instance.minutes,
     c: Math.max(0, commandCount.value),
     e: instance.held,
-    d: settings.value.difficulty,
+    d: instance.settings.difficulty,
     n: counted.nth
   }
   if (reason === 'lost') record.ms = Math.max(0, Math.round(instance.elapsed))
   if (instance.extends > 0) record.x = instance.extends
-  if (settings.value.tune.mix) record.k = true
+  if (instance.settings.tune.mix) record.k = true
   writeRecords(pushRecord(readRecords(storedRecords), record))
 }
 
 function advancePending() {
-  if (!pendingAdvance || screen.value !== 'playing' || runtimeSettings.value
-    || (queueLoading.value && queue.value.length <= 1)) return
+  if (!pendingAdvance.value || screen.value !== 'playing' || runtimeSettings.value
+    || (queueLoading.value && queueIndex.value + 1 >= queue.value.length)) return
   step(1)
 }
 
 function step(delta: number) {
-  if (screen.value !== 'playing' || runtimeSettings.value) return
-  if (pendingAdvance) note.value = ''
-  if (!queue.value.length) return
-  if (delta > 0) {
-    if (queue.value.length > 1) {
-      queue.value = queue.value.slice(1)
-    } else if (queueLoading.value) { pendingAdvance = true; ready.value = false; note.value = '正在补充媒体列表，请稍候…'; return }
-    else if (!options.value?.loop) { finish('queue'); return }
-    else {
-      const cycle = playbackCycle(availableMedia, options.value, preferences.shownImages)
-      queue.value = cycle.queue; preferences.shownImages = cycle.shownImages
-      if (cycle.reset) note.value = '未展示图片不足一轮，已开始新的图片周期。'
+  if (screen.value !== 'playing' || runtimeSettings.value || queueError.value || !options.value || !queue.value.length) return
+  if (pendingAdvance.value) note.value = ''
+  let target = queueIndex.value + delta
+  if (target >= queue.value.length) {
+    if (queueLoading.value) { pendingAdvance.value = true; ready.value = false; note.value = '正在补充媒体列表，请稍候…'; return }
+    if (!options.value.loop) {
+      pendingAdvance.value = false
+      if (!allowed.value) finish('queue')
+      return
     }
-  } else {
-    if (!options.value?.loop) return
-    const last = queue.value[queue.value.length - 1]
-    if (last) queue.value = [...queue.value.slice(1), last]
+    const cycle = playbackCycle(availableMedia, options.value, preferences.shownImages)
+    queue.value = cycle.queue; preferences.shownImages = cycle.shownImages
+    target = 0
+    mediaCycle.value++
+    if (cycle.reset) note.value = '未展示图片不足一轮，已开始新的图片周期。'
+  } else if (target < 0) {
+    if (!options.value.loop || queue.value.length === 1) return
+    target = queue.value.length - 1
   }
-  pendingAdvance = false
+  queueIndex.value = target
+  pendingAdvance.value = false
   imageElapsed.value = 0; zoomLevel.value = 1; error.value = ''; ready.value = false
   void nextTick(() => {
     imageViewport.value?.scrollTo(0, 0)
@@ -755,12 +788,12 @@ function pulse(now: number) {
   const touching = frameValue.task?.command?.category === 'nipple'
   const reward = allowed.value
   const stopMode = currentMode === 'stop'
-  const beatBpmValue = imageBeatMode.value && !stopMode ? imageBeatBpm.value : beatBpm.value || 0
+  const beatBpmValue = frameValue.cooling ? 0 : imageBeatMode.value && !stopMode ? imageBeatBpm.value : beatBpm.value
   /* 参考站口径：红色带 BPM 且不是乳头指令时才算“红色的节拍”。 */
   const redWithBpm = stopMode && !touching && beatBpmValue > 0
   const heartbeatHere = heartbeatOn && (reward || (stopMode && !touching && (!redWithBpm || redBeat !== 'metronome')))
-  const heartInterval = reward ? 630 : redWithBpm ? Math.round(60_000 / beatBpmValue) : 860
-  const metronomeHere = beatBpmValue > 0 && !reward && !(redWithBpm && !(redBeat !== 'heartbeat' || !heartbeatOn))
+  const heartInterval = reward ? 630 : redWithBpm && settings.value.heartbeatSync ? Math.round(60_000 / beatBpmValue) : 860
+  const metronomeHere = beatBpmValue > 0 && !reward && !(redWithBpm && redBeat === 'heartbeat' && heartbeatOn)
   const volume = { beatVolume: settings.value.beatVolume, heartbeatVolume: settings.value.heartbeatVolume }
   if (heartbeatHere && heartInterval > 0) {
     if (!nextHeart) nextHeart = now + heartInterval
@@ -779,15 +812,16 @@ function pulse(now: number) {
 function tick() {
   const now = performance.now(), delta = now - previousTick
   previousTick = now
-  if (screen.value !== 'playing' || !session.value) return
-  if (paused.value) return
+  if (!active.value || !session.value) return
   session.value.tick(delta)
   frame.value = session.value.frame()
   held.value = session.value.held
   /* 参考站口径：每换一条指令振一次，「不许碰」更久。 */
-  const tickTask = frame.value.task?.index ?? -1
+  const tickTask = taskKey.value
   if (tickTask !== lastTask) {
     lastTask = tickTask
+    nextBeat = 0
+    nextHeart = 0
     if (tickTask >= 0 && !frame.value.cooling) buzz(frame.value.mode === 'stop' ? [90, 60, 90] : 40, 'command')
   }
   if (session.value.phase === 'done') {
@@ -796,8 +830,7 @@ function tick() {
     return
   }
   pulse(now)
-  if (pipWindow) renderPip()
-  if (!imageBeatMode.value && current.value?.kind === 'image' && imageSeconds.value > 0) {
+  if (!allowed.value && !imageBeatMode.value && current.value?.kind === 'image' && imageSeconds.value > 0) {
     imageElapsed.value += delta
     if (imageElapsed.value >= imageSeconds.value * 1000) step(1)
   }
@@ -821,26 +854,21 @@ function recordDisplayedImage() {
 }
 function videoStarted(event: Event) {
   if (event.currentTarget !== video.value) return
-  if (screen.value !== 'playing' || document.hidden || runtimeSettings.value) { video.value?.pause(); return }
-  if (paused.value) { paused.value = false; note.value = ''; previousTick = performance.now() }
+  if (screen.value !== 'playing' || (document.hidden && !pipInUse()) || runtimeSettings.value || paused.value || videoDimmed.value) video.value?.pause()
 }
 function videoPlaying(event: Event) {
   if (event.currentTarget !== video.value) return
-  if (screen.value !== 'playing' || document.hidden || paused.value) video.value?.pause()
+  if (screen.value !== 'playing' || (document.hidden && !pipInUse()) || paused.value || videoDimmed.value) video.value?.pause()
   else ready.value = true
 }
 function videoPaused(event: Event) {
-  if (event.currentTarget !== video.value || video.value?.ended) return
+  if (event.currentTarget !== video.value || video.value?.ended || !video.value?.paused) return
   // 红色相位由 syncVideoPhase 主动暂停时不算用户暂停整局。
-  if (videoHold) return
+  if (videoDimmed.value) return
   pause()
 }
 function videoReady(event: Event) {
   if (event.currentTarget === video.value) { ready.value = event.type === 'canplay'; if (ready.value) warmImages() }
-}
-function videoVolumeChanged(event: Event) {
-  if (event.currentTarget !== video.value) return
-  settings.value.mediaVolume = Math.round(video.value.volume * 100)
 }
 function retryMedia() {
   error.value = ''; ready.value = false
@@ -885,8 +913,19 @@ async function fullscreen() {
   } catch { note.value = '无法进入全屏，请检查浏览器权限。' }
 }
 function fullscreenChanged() { fullscreenOn.value = document.fullscreenElement === playerElement.value }
+function pipInUse() {
+  return Boolean(pipWindow && !pipWindow.closed)
+    || Boolean(video.value && document.pictureInPictureElement === video.value)
+}
+function closePip() {
+  const win = pipWindow
+  pipWindow = null
+  updatePip = undefined
+  win?.close()
+}
+
 async function pip() {
-  if (pipMode.value === 'doc') { await openDocPip(); return }
+  if (pipMode.value === 'doc') return openDocPip()
   const element = video.value
   if (!element || !document.pictureInPictureEnabled) { note.value = '当前浏览器不支持视频悬浮小窗。'; return }
   try {
@@ -897,28 +936,35 @@ async function pip() {
 /** Document PiP：把当前指令投到一个独立小窗里，可以一边看别的应用一边继续。 */
 async function openDocPip() {
   const api = (window as Window & { documentPictureInPicture?: { window?: Window | null; requestWindow?: (options?: { width?: number; height?: number }) => Promise<Window> } }).documentPictureInPicture
-  if (!api?.requestWindow) { note.value = '当前浏览器不支持悬浮小窗。'; return }
-  if (api.window) { api.window.close(); pipWindow = null; return }
+  if (!api?.requestWindow) { note.value = '当前浏览器不支持悬浮小窗。'; return false }
+  if (api.window) { closePip(); return false }
+  const instance = session.value
   try {
     const win = await api.requestWindow({ width: 340, height: 250 })
+    if (disposed || screen.value !== 'playing' || session.value !== instance) { win.close(); return false }
     pipWindow = win
     win.document.documentElement.lang = document.documentElement.lang || 'zh-CN'
     win.document.title = '寸止游戏'
     const body = win.document.body
     body.style.margin = '0'
     body.style.background = '#000'
-    renderPip()
-    win.addEventListener('pagehide', () => { pipWindow = null })
-  } catch { note.value = '无法打开悬浮小窗，请检查浏览器权限。' }
+    mountPip(win.document)
+    updatePip?.()
+    win.addEventListener('pagehide', () => {
+      if (pipWindow !== win) return
+      pipWindow = null
+      updatePip = undefined
+      if (document.hidden) visibilityChanged()
+    }, { once: true })
+    return true
+  } catch {
+    closePip()
+    note.value = '无法打开悬浮小窗，请检查浏览器权限。'
+    return false
+  }
 }
 /** 把当前帧画进 Document PiP 小窗（指令 + 模式 + 剩余时间 + 忍耐/暂停）。 */
-function renderPip() {
-  const win = pipWindow
-  if (!win) return
-  const doc = win.document
-  const value = frame.value
-  const color = modeColors[mode.value] ?? '#fff'
-  doc.body.innerHTML = ''
+function mountPip(doc: Document) {
   const wrap = doc.createElement('div')
   wrap.setAttribute('data-sundome-pip-view', '')
   wrap.style.cssText = 'position:fixed;inset:0;display:flex;flex-direction:column;gap:8px;padding:12px 14px;box-sizing:border-box;background:#0a0708;color:#fff;font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Noto Sans SC",sans-serif'
@@ -926,16 +972,11 @@ function renderPip() {
   head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px'
   const pill = doc.createElement('span')
   pill.setAttribute('data-sundome-pip-mode', '')
-  pill.textContent = modeLabels[mode.value] ?? ''
-  pill.style.cssText = `border:2px solid ${color};color:${color};border-radius:999px;padding:2px 10px;font-size:13px;font-weight:700;letter-spacing:.15em;white-space:nowrap`
-  head.append(pill)
-  if (!settings.value.hideRemaining) {
-    const clock = doc.createElement('span')
-    clock.setAttribute('data-sundome-pip-clock', '')
-    clock.textContent = remainingText.value
-    clock.style.cssText = 'font-size:22px;font-weight:700;font-variant-numeric:tabular-nums'
-    head.append(clock)
-  }
+  pill.style.cssText = 'border:2px solid currentColor;border-radius:999px;padding:2px 10px;font-size:13px;font-weight:700;letter-spacing:.15em;white-space:nowrap'
+  const clock = doc.createElement('span')
+  clock.setAttribute('data-sundome-pip-clock', '')
+  clock.style.cssText = 'font-size:22px;font-weight:700;font-variant-numeric:tabular-nums'
+  head.append(pill, clock)
   const center = doc.createElement('div')
   center.style.cssText = 'flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center'
   // 小窗里的弹性留白（对齐参考站的 data-sundome-upper-pad）：上方 2 份、下方 1 份。
@@ -948,23 +989,14 @@ function renderPip() {
   lowerPad.setAttribute('data-sundome-upper-pad', 'bottom')
   lowerPad.style.cssText = 'min-height:0;width:100%;flex:1 1 0px'
   wrap.append(upperPad)
-  if (value?.toneBefore) {
-    const before = doc.createElement('p')
-    before.textContent = value.toneBefore
-    before.style.cssText = 'margin:0;font-size:15px;font-weight:700;opacity:.85'
-    center.append(before)
-  }
+  const before = doc.createElement('p')
+  before.style.cssText = 'margin:0;font-size:15px;font-weight:700;opacity:.85'
   const text = doc.createElement('p')
   text.setAttribute('data-sundome-pip-text', '')
-  text.textContent = value?.text ?? ''
   text.style.cssText = 'margin:0;font-size:clamp(18px,8vw,40px);font-weight:800;line-height:1.2;text-wrap:balance;overflow-wrap:anywhere'
-  center.append(text)
-  if (value?.toneAfter) {
-    const after = doc.createElement('p')
-    after.textContent = value.toneAfter
-    after.style.cssText = 'margin:0;font-size:14px;font-weight:700;opacity:.8'
-    center.append(after)
-  }
+  const after = doc.createElement('p')
+  after.style.cssText = 'margin:0;font-size:14px;font-weight:700;opacity:.8'
+  center.append(before, text, after)
   wrap.append(head, center)
   const actions = doc.createElement('div')
   actions.style.cssText = 'display:flex;justify-content:center;gap:8px;padding-top:8px'
@@ -972,27 +1004,39 @@ function renderPip() {
   const edgeButton = doc.createElement('button')
   edgeButton.type = 'button'
   edgeButton.setAttribute('data-sundome-pip-edge', '')
-  edgeButton.textContent = value?.cooling ? '等它平息' : '忍住了'
-  edgeButton.disabled = !canHold.value
-  edgeButton.style.cssText = `${base};border:2px solid ${canHold.value ? 'rgba(255,255,255,.6)' : 'rgba(255,255,255,.2)'};background:transparent;color:${canHold.value ? '#fff' : 'rgba(255,255,255,.3)'}`
-  edgeButton.addEventListener('click', () => hold())
+  edgeButton.style.cssText = `${base};border:2px solid currentColor;background:transparent;color:#fff`
+  edgeButton.addEventListener('click', () => allowed.value ? stopSession() : hold())
   const pauseButton = doc.createElement('button')
   pauseButton.type = 'button'
   pauseButton.setAttribute('data-sundome-pip-pause', '')
-  pauseButton.textContent = paused.value ? '继续' : '暂停'
   pauseButton.style.cssText = `${base};border:1px solid rgba(255,255,255,.4);background:transparent;color:#fff`
   pauseButton.addEventListener('click', () => (paused.value ? resume() : pause()))
   actions.append(edgeButton, pauseButton)
   wrap.append(actions, lowerPad)
   doc.body.append(wrap)
+  updatePip = () => {
+    const value = frame.value
+    pill.style.color = allowed.value ? '#fff' : modeColors[mode.value]
+    pill.textContent = allowed.value ? '许可' : modeLabels[mode.value]
+    clock.textContent = allowed.value ? `${windowLeft.value} 秒` : remainingText.value
+    before.textContent = allowed.value ? '' : value?.toneBefore ?? ''
+    before.hidden = !before.textContent
+    text.textContent = allowed.value ? (ruined.value ? '松手收场' : '许可倒计时') : commandText.value
+    after.textContent = allowed.value ? '' : value?.toneAfter ?? ''
+    after.hidden = !after.textContent
+    edgeButton.textContent = allowed.value ? '结束' : cooling.value ? '等它平息' : '忍住了'
+    edgeButton.disabled = !allowed.value && !canHold.value
+    edgeButton.style.opacity = edgeButton.disabled ? '.4' : '1'
+    pauseButton.textContent = paused.value ? '继续' : '暂停'
+  }
 }
+watch([remainingText, commandText, frame, canHold, paused], () => updatePip?.())
 /** 提示卡里点「打开小窗」。 */
 async function openPipFromOffer() {
-  await pip()
-  pipOfferDone.value = true
+  pipOfferDone.value = await openDocPip()
 }
 function openPipSite() {
-  const site = settings.value.pipSite
+  const site = safePipSite(settings.value.pipSite)
   if (!site) return
   window.open(site, '_blank', 'noopener')
 }
@@ -1016,10 +1060,12 @@ function updateVolume(payload: { key: 'mediaVolume' | 'beatVolume' | 'textOpacit
   } else settings.value.beatVolume = Math.min(beatVolumeMax, Math.max(0, value))
 }
 function backToLists() {
-  queueRequest.abort(); queueLoading.value = false; pendingAdvance = false; imageLoad++; imageBuffer.clear()
+  queueRequest.abort(); queueLoading.value = false; pendingAdvance.value = false; imageLoad++; imageBuffer.clear()
   stopMirror()
+  closePip()
   pause(); screen.value = 'setup'; runtimeSettings.value = false; queue.value = []; availableMedia = []
   error.value = ''; note.value = ''; session.value = null; frame.value = null; held.value = 0
+  void sound.suspend()
   if (document.fullscreenElement === playerElement.value) void document.exitFullscreen()
 }
 function exitRun() {
@@ -1027,22 +1073,20 @@ function exitRun() {
   if (!confirm('结束本次播放并返回播放列表？')) return
   backToLists()
 }
-function restart() {
+function restart(finale = settings.value.finale) {
   if (!options.value) { backToLists(); return }
   imageBuffer.clear(); imageLoad++
   stopMirror()
   lostBestNow.value = false
   const cycle = playbackCycle(availableMedia, options.value, preferences.shownImages)
   queue.value = cycle.queue; preferences.shownImages = cycle.shownImages
-  beginSession()
+  beginSession(finale)
 }
 
 /** 「带惩罚再来一局」：把下一局的结局改成「必定禁止」，然后立刻重开。 */
 function penaltyRestart() {
-  settings.value.finale = 'never'
-  persistEdge()
   note.value = ''
-  restart()
+  restart('never')
 }
 function guideAnchor(step: number) {
   // 引导卡用聚光灯指到该步对应的元素上；找不到就居中展示。
@@ -1053,13 +1097,18 @@ function guideAnchor(step: number) {
 
 function closeGuide() {
   guideOpen.value = false
+  guideSeen = true
   markGuideSeen()
   if (pendingStart.value) { pendingStart.value = false; void nextTick(() => { void start() }); return }
   playerElement.value?.focus()
 }
 function keydown(event: KeyboardEvent) {
-  if (screen.value !== 'playing' || runtimeSettings.value || event.altKey || event.ctrlKey || event.metaKey
+  if (screen.value !== 'playing' || runtimeSettings.value || guideOpen.value || event.altKey || event.ctrlKey || event.metaKey
     || (event.target as HTMLElement).closest('input,select,textarea,video,[contenteditable]')) return
+  if (allowed.value) {
+    if (event.key === 'Escape') { stopSession(); event.preventDefault() }
+    return
+  }
   if (event.key === 'Escape') { exitRun(); event.preventDefault(); return }
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
     const forward = event.key === 'ArrowRight'
@@ -1073,10 +1122,15 @@ function keydown(event: KeyboardEvent) {
   event.preventDefault()
 }
 function visibilityChanged() {
-  if (document.hidden && screen.value === 'playing' && !paused.value) {
-    pause(); note.value = '页面已转入后台，播放已暂停。'
+  if (document.hidden) {
+    stopMirror()
+    if (screen.value === 'playing' && !paused.value && !pipInUse()) {
+      pause(); note.value = '页面已转入后台，播放已暂停。'
+    }
+  } else {
+    if (mirrorVisible.value) void startMirror()
+    requestAnimationFrame(recordDisplayedImage)
   }
-  if (!document.hidden) requestAnimationFrame(recordDisplayedImage)
 }
 function adjustTextOpacity(delta: number) {
   settings.value.textOpacity = Math.min(100, Math.max(textOpacityMin, textOpacity.value + delta))
@@ -1085,7 +1139,6 @@ function adjustTextScale(delta: number) {
   settings.value.textScale = Math.min(textScaleMax, Math.max(textScaleMin, textScale.value + delta))
 }
 
-watch(current, () => { void loadCurrentImage() })
 watch(() => queue.value.length, () => { if (ready.value) warmImages() })
 watch(() => screen.value, value => {
   const next = value === 'playing'
@@ -1124,8 +1177,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposed = true; request.abort(); queueRequest.abort(); imageLoad++; imageBuffer.clear(); clearInterval(timer); pause()
   stopMirror()
-  try { pipWindow?.close() } catch {}
-  pipWindow = null
+  closePip()
+  window.clearTimeout(seekTimer)
   document.documentElement.classList.remove('playback-immersive')
   sound.close()
   document.removeEventListener('keydown', keydown)
@@ -1173,7 +1226,7 @@ onBeforeUnmount(() => {
             </label>
           </div>
           <p class="gallery-help muted">包含子目录。其他图库可在小米云相册中绑定本地目录后选择。</p>
-          <div class="playback-settings"><PlaybackSettings v-model="settings" /></div>
+          <div class="playback-settings"><PlaybackSettings v-model="settings" :media="playlist" /></div>
           <details class="configuration-management"><summary>配置管理</summary>
             <p class="muted">导出只包含播放参数，不包含原文件、图库路径、喜欢或已展示记录；导入后需重新选择图库。</p>
             <div class="configuration-actions">
@@ -1198,7 +1251,7 @@ onBeforeUnmount(() => {
       v-else-if="screen === 'finished'"
       :outcome="finishedReason"
       :elapsed="clockTime(elapsedMs)"
-      :duration-minutes="settings.minutes"
+      :duration-minutes="session?.minutes ?? settings.minutes"
       :percent="finishedPercent"
       :held="held"
       :commands="commandCount"
@@ -1233,7 +1286,7 @@ onBeforeUnmount(() => {
       aria-modal="true"
       :aria-label="'游戏进行中'"
     >
-      <PlaybackOverlay :mode="mode" :dim="dimLevel" :opacity="textOpacity" :scale="textScale">
+      <PlaybackOverlay :mode="mode" :dim="dimLevel" :opacity="textOpacity" :scale="textScale" :inert="allowed || guideOpen || runtimeSettings">
         <template #media>
           <div
             v-show="!runtimeSettings"
@@ -1263,10 +1316,10 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <video
-              v-else-if="current" :key="mediaKey(current)" ref="video" :src="mediaUrl(current)"
+              v-else-if="current" :key="`${mediaCycle}:${mediaKey(current)}`" ref="video" :src="mediaUrl(current)"
               :style="{ objectFit: noCrop ? 'contain' : 'cover', objectPosition: noCrop ? `center ${settings.pos}` : 'center' }"
               playsinline preload="metadata" :muted="videoMuted"
-              @volumechange="videoVolumeChanged" @loadedmetadata="videoLoaded"
+              @loadedmetadata="videoLoaded" @leavepictureinpicture="visibilityChanged"
               @canplay="videoReady" @play="videoStarted" @playing="videoPlaying" @waiting="videoReady"
               @pause="videoPaused" @ended="$event.currentTarget === video && step(1)" @error="mediaFailed"
             />
@@ -1311,7 +1364,7 @@ onBeforeUnmount(() => {
           :mode="mode"
           :text="commandText"
           :hint="commandHint"
-          :bpm="paused ? 0 : beatBpm"
+          :bpm="active && !cooling ? (imageBeatMode && mode !== 'stop' ? imageBeatBpm : beatBpm) : 0"
           :progress="taskProgress"
           :task-seconds="taskSeconds"
           :task-key="taskKey"
@@ -1355,9 +1408,12 @@ onBeforeUnmount(() => {
         :multi="multi"
         :round="multiRound"
         :allow-below="allowBelow"
+        :paused="paused"
+        @toggle-pause="paused ? resume() : pause()"
+        @finish="stopSession"
       />
 
-      <div v-if="pipOfferOpen" class="pip-offer" data-sundome-pip-section="on" role="dialog" aria-modal="true">
+      <div v-if="pipOfferOpen && !allowed" class="pip-offer" data-sundome-pip-section="on">
         <p class="pip-offer-title">边看别的视频边玩</p>
         <p class="pip-offer-lead">{{ pipOfferDone ? '小窗已打开。现在去打开你想看的网站吧。' : '把指令放进悬浮小窗。在别的网站看视频时，也能照着指令继续。' }}</p>
         <div class="pip-offer-actions">
@@ -1368,7 +1424,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="runtime-controls">
+      <div class="runtime-controls" :inert="allowed || guideOpen || runtimeSettings">
         <button class="runtime-chip" type="button" title="换一项" @click="step(1)"><Icon name="chevron" :size="14" /></button>
         <button class="runtime-chip" :class="{ liked: favorite }" type="button" :aria-pressed="favorite" title="喜欢" @click="toggleFavorite"><Icon name="heart" :size="14" /></button>
         <button class="runtime-chip" type="button" title="调大字号" @click="adjustTextScale(10)">A+</button>
@@ -1376,11 +1432,11 @@ onBeforeUnmount(() => {
         <button class="runtime-chip" type="button" title="文字更清楚" @click="adjustTextOpacity(10)">◐+</button>
         <button class="runtime-chip" type="button" title="文字更透" @click="adjustTextOpacity(-10)">◐−</button>
         <button ref="settingsButton" class="runtime-chip" type="button" title="播放设置" @click="openSettings"><Icon name="settings" :size="14" /></button>
-        <button class="runtime-chip" type="button" title="结束" @click="finish('manual')">结束</button>
+        <button class="runtime-chip" type="button" title="结束" @click="stopSession">结束</button>
       </div>
 
       <PlaybackVolumePopover
-        v-if="volumeOpen"
+        v-if="volumeOpen && !allowed && !guideOpen"
         :media-volume="settings.mediaVolume"
         :beat-volume="settings.beatVolume"
         :beat-volume-max="beatVolumeMax"
@@ -1393,7 +1449,7 @@ onBeforeUnmount(() => {
         @update="updateVolume"
       />
 
-      <p v-if="error" class="runtime-error" role="alert">{{ error }}<button class="text-button" @click="retryMedia">重新加载</button></p>
+      <p v-if="error" class="runtime-error" role="alert">{{ error }}<button v-if="queueError" class="text-button" @click="backToLists">返回列表</button><button v-else class="text-button" @click="retryMedia">重新加载</button></p>
 
       <section v-if="runtimeSettings" ref="runtimePanel" class="runtime-sheet" tabindex="-1" aria-label="播放中设置">
         <div class="runtime-inner">
@@ -1455,7 +1511,7 @@ onBeforeUnmount(() => {
 .image-viewport.zoomed { overflow: auto; touch-action: none; cursor: grab; }
 .image-canvas { display: grid; place-items: center; }
 .image-canvas img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.playback-media video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.playback-media > video:not(.mirror-video) { display: block; width: 100%; height: 100%; object-fit: contain; }
 .runtime-controls { position: fixed; left: 50%; bottom: max(64px, calc(env(safe-area-inset-bottom) + 56px)); z-index: 30; display: flex; gap: 6px; transform: translateX(-50%); padding: 6px; border-radius: 999px; background: rgba(10, 7, 8, .55); backdrop-filter: blur(8px); }
 .runtime-chip { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; min-height: 30px; padding: 0 9px; border: 1px solid rgba(255, 255, 255, .22); border-radius: 999px; background: transparent; color: rgba(255, 255, 255, .82); font-size: 11px; font-weight: 600; cursor: pointer; }
 .runtime-chip:hover { background: rgba(255, 255, 255, .14); }

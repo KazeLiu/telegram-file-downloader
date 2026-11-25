@@ -2,7 +2,7 @@
 // 许可屏：时间到、抽签成功后盖满整屏的渐变色屏（参考站叫 reward）。
 // 松手射精用橙色系，其余用粉色系；中间是倒计时条与剩余秒数。
 // 连续（多少次都行）结局换成「可以射。多少次都行」＋每 25 秒一条「再来一次」。
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { multiLines, multiRoundLabel, multiRounds, multiTitle } from './engine'
 
 const props = defineProps<{
@@ -15,7 +15,11 @@ const props = defineProps<{
   round?: number
   /** 只玩乳头且拿到许可时，多一句「现在可以摸下面了」。 */
   allowBelow?: string
+  paused: boolean
 }>()
+const emit = defineEmits<{ 'toggle-pause': []; finish: [] }>()
+const pauseButton = ref<HTMLButtonElement>()
+onMounted(() => pauseButton.value?.focus())
 
 /** 已经用掉的比例 0–1。 */
 const used = computed(() => {
@@ -40,8 +44,8 @@ const title = computed(() => {
 })
 
 const background = computed(() => (props.ruined
-  ? 'radial-gradient(ellipse at 50% 30%, #c86a2a 0%, #6b2f0f 55%, #2a1206 100%)'
-  : 'radial-gradient(ellipse at 50% 30%, #ff4d6d 0%, #a4123a 55%, #3a0612 100%)'))
+  ? 'radial-gradient(ellipse at 50% 30%, #813a16c9 0%, #6b2f0fa8 55%, #2a1206e8 100%)'
+  : 'radial-gradient(ellipse at 50% 30%, #ac2446c9 0%, #a4123aa8 55%, #3a0612e8 100%)'))
 </script>
 
 <template>
@@ -63,6 +67,10 @@ const background = computed(() => (props.ruined
       <div class="sd-bar-fill" :style="{ width: `${(1 - used) * 100}%` }" />
     </div>
     <p class="sd-remain" data-sundome-reward-seconds>剩余 {{ remaining }} 秒</p>
+    <div class="sd-reward-actions">
+      <button ref="pauseButton" type="button" @click="emit('toggle-pause')">{{ paused ? '继续' : '暂停' }}</button>
+      <button type="button" @click="emit('finish')">结束</button>
+    </div>
   </div>
 </template>
 
@@ -111,6 +119,8 @@ const background = computed(() => (props.ruined
   position: relative; z-index: 10; margin: 12px 0 0;
   font-size: 14px; color: rgba(255, 255, 255, .7); font-variant-numeric: tabular-nums;
 }
+.sd-reward-actions { display: flex; gap: 8px; margin-top: 16px; }
+.sd-reward-actions button { min-height: 44px; padding-inline: 18px; border: 1px solid #fff8; border-radius: 999px; background: #0006; color: #fff; }
 @media (min-width: 640px) {
   .sd-multi-line { font-size: 24px; }
 }

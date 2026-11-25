@@ -357,7 +357,7 @@ export function decideFinale(finale: Finale, difficulty: Difficulty, held: numbe
   if (finale === 'never') return 'fail'
   if (finale === 'ruin') return 'ruin'
   if (finale === 'overtime') return random() < permitRate(difficulty, held, chance) ? (allowRuin ? 'ruin' : 'success') : 'fail'
-  return random() < permitRate(difficulty, held, chance) ? 'success' : 'fail'
+  return random() < permitRate(difficulty, held, chance) ? 'success' : allowRuin ? 'ruin' : 'fail'
 }
 
 /** 休息时长：固定档位或区间随机。 */
@@ -432,8 +432,7 @@ export function pickMode(options: PickOptions): EdgeMode | null {
 export function pickCommandAt(mode: EdgeMode, random: Random, previous: EdgeCommand | null, pool: EdgeCommand[]): EdgeCommand | null {
   const sameMode = pool.filter(item => item.mode === mode)
   const different = sameMode.filter(item => item.text !== previous?.text)
-  const candidates = different.length ? different : sameMode.length ? sameMode : pool.filter(item => item.text !== previous?.text)
-  return pickIndex(candidates.length ? candidates : pool, random)
+  return pickIndex(different.length ? different : sameMode, random)
 }
 
 /** 把惯用手换成另一只手。必须一次扫完，否则「左手→右手→左手」会换回原样。 */
@@ -542,6 +541,11 @@ export interface TimelineOptions {
   modes?: EdgeMode[]
   nipple?: { times: number }
   glans?: { times: number }
+  pools?: { main: EdgeCommand[]; nipple: EdgeCommand[]; glans: EdgeCommand[] }
+}
+
+function pickTaskCommand(index: number, mode: EdgeMode, pool: EdgeCommand[], previous: EdgeCommand | null) {
+  return pickCommandAt(mode, mulberry32((index + 1) * 0x9e3779b1), previous, pool)
 }
 
 /**
@@ -558,6 +562,7 @@ export function buildTimeline(options: TimelineOptions): Task[] {
   let cursor = 0
   let previous: EdgeMode | null = null
   let previousFocus: 'nipple' | 'glans' | null = null
+  let previousCommand: EdgeCommand | null = null
   while (cursor < total) {
     let mode: EdgeMode
     let seconds: number
@@ -578,12 +583,16 @@ export function buildTimeline(options: TimelineOptions): Task[] {
       mode = pickMode({ previous, isFirst: tasks.length === 0, difficulty: options.difficulty, tune: options.tune, modes, random }) ?? modes[0]!
       seconds = taskSeconds(options.difficulty, mode, random, options.length)
     }
-    let span = seconds * 1000
+    const index = tasks.length
+    const pool = focus ? options.pools?.[focus] : options.pools?.main
+    const command: EdgeCommand | null = pool ? pickTaskCommand(index, mode, pool, previousCommand) : null
+    let span = (command?.seconds ?? seconds) * 1000
     if (total - (cursor + span) < finalHoldMs) span = total - cursor
-    tasks.push({ index: tasks.length, at: cursor, seconds: span / 1000, mode, command: null, edge: false, focus })
+    tasks.push({ index, at: cursor, seconds: span / 1000, mode, command, edge: !!command?.edge, focus })
     cursor += span
     previous = mode
     previousFocus = focus
+    previousCommand = command
   }
   return tasks
 }
@@ -592,12 +601,8 @@ export function buildTimeline(options: TimelineOptions): Task[] {
 export function bindCommands(tasks: Task[], pool: EdgeCommand[], nipplePool: EdgeCommand[] = [], glansPool: EdgeCommand[] = []) {
   let previous: EdgeCommand | null = null
   for (const task of tasks) {
-    const random = mulberry32((task.index + 1) * 0x9e3779b1)
-    const picked: EdgeCommand | null = task.focus === 'nipple' && nipplePool.length
-      ? pickCommandAt('stop', random, previous, nipplePool)
-      : task.focus === 'glans' && glansPool.length
-        ? pickCommandAt('slow', random, previous, glansPool)
-        : pickCommandAt(task.mode, random, previous, pool)
+    const source = task.focus === 'nipple' && nipplePool.length ? nipplePool : task.focus === 'glans' && glansPool.length ? glansPool : pool
+    const picked = pickTaskCommand(task.index, task.mode, source, previous)
     if (picked && typeof picked.seconds === 'number' && picked.seconds !== task.seconds) {
       const delta = (picked.seconds - task.seconds) * 1000
       task.seconds = picked.seconds

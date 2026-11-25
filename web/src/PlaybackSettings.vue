@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { newPlaylist } from './playback'
+import { computed, ref, watch } from 'vue'
+import { newPlaylist, readPlaybackStorage } from './playback'
 import type { Playlist } from './playback'
 import { commandPoolNotice, settingsSummary } from './playback/summary'
 import {
@@ -16,7 +16,7 @@ import {
   type Difficulty, type EdgeMode,
 } from './playback/engine'
 import { maleCommands } from './playback/commands'
-import { defaultEdgeSettings, readEdgeSettings } from './playback/settings'
+import { defaultEdgeSettings } from './playback/settings'
 import { toneNotes } from './playback/tones'
 import { focusAreas, focusLabels, focusLegend, focusNotes, focusSectionsOff } from './playback/focus'
 import {
@@ -36,27 +36,25 @@ const selected = ref('play')
 const search = ref('')
 // 分组顺序对齐参考站：玩法 / 指令 / 视频·图片 / 声音 / 其他。
 const groups = computed(() => [
-  { id: 'play', label: '玩法', keywords: '推荐 第一次 标准 慢慢来 时间 分钟 随机 难度 简单 普通 困难 地狱 许可率 自己调 混合 可以撸 慢慢来 不许碰 结局 抽签 必定 松手 连续 加时 允许射精 秒 等待 随机 固定 指令时长 较长 很长 乳头 龟头 整局 单部位 一个部位 focus' },
-  { id: 'command', label: '指令', keywords: '分类 寸止 挑逗 姿势 羞耻 轻度疼痛 惯用手 左右手 自定义 口令 启停 禁用 口吻 强势 挑逗 羞辱 温柔 足控 短句' },
-  { id: 'media', label: '视频·图片', keywords: '视频 图片 混合 仅图片 仅视频 顺序 随机 文件名 每轮 数量 间隔 切图 BPM 循环 喜欢 收藏' },
-  { id: 'sound', label: '声音', keywords: '节拍 音量 心跳 红 媒体 视频 音量 变暗 混音' },
-  { id: 'other', label: '其他', keywords: '隐藏 剩余 时间 进度 画面 亮度 变暗 混音 镜子 摄像头 前置 相机 mirror' },
-])
-const visible = computed(() => groups.value.filter(group => (search.value.trim()
-  ? `${group.label} ${group.keywords}`.toLowerCase().includes(search.value.trim().toLowerCase())
-  : group.id === selected.value) && !(props.runtime && group.id === 'media')))
+  { id: 'play', label: '玩法' },
+  { id: 'command', label: '指令' },
+  { id: 'media', label: '视频·图片' },
+  { id: 'sound', label: '声音' },
+  { id: 'other', label: '其他' },
+].filter(group => !props.runtime || group.id !== 'media'))
+const visible = computed(() => search.value.trim() ? groups.value : groups.value.filter(group => group.id === selected.value))
 const summary = computed(() => settingsSummary(settings.value))
 const poolNotice = computed(() => commandPoolNotice(settings.value))
 const activeTones = computed(() => toneOrder.filter(key => settings.value.tones[key]))
 const activeToneCount = computed(() => activeTones.value.length)
 
 /** 本机成绩：只读给设置页顶部那行看，清除要再点一次确认。 */
-const stats = ref(readStats(typeof localStorage === 'undefined' ? null : localStorage.getItem(statsStorageKey)))
+const stats = ref(readStats(readPlaybackStorage(statsStorageKey)))
 const statsLine = computed(() => statsSummary(stats.value))
 /** 「射了」的记录：中途结束次数与最长坚持（只存在本机）。 */
-const lost = ref(readLost(typeof localStorage === 'undefined' ? null : localStorage.getItem(lostStorageKey)))
+const lost = ref(readLost(readPlaybackStorage(lostStorageKey)))
 /** 连续天数：顶部那几行「已连续 N 天 · 下一个目标」。 */
-const days = ref(readDays(typeof localStorage === 'undefined' ? null : localStorage.getItem(daysStorageKey)))
+const days = ref(readDays(readPlaybackStorage(daysStorageKey)))
 const dayLines = computed(() => daysSummary(days.value))
 const lostLine = computed(() => (lost.value.count
   ? `中途结束 ${lost.value.count} 次 · 最长坚持 ${formatClock(lost.value.bestMs)}（只存在这台设备里）`
@@ -65,8 +63,7 @@ const history = ref<InstanceType<typeof PlaybackHistory>>()
 const historyOpen = ref(false)
 /** 累计局数（顶部「记录 N」按钮上的数字）：只读一次，打开弹窗时再刷新。 */
 function historyNumber() {
-  if (typeof localStorage === 'undefined') return 0
-  return readTally(localStorage.getItem(tallyStorageKey)).n
+  return readTally(readPlaybackStorage(tallyStorageKey)).n
 }
 const historyCount = ref(historyNumber())
 function openHistory() {
@@ -113,7 +110,7 @@ function askResetAll() {
 function resetAll() {
   allArmed.value = false
   const keep = settings.value.custom.map(item => ({ ...item }))
-  Object.assign(settings.value, { ...defaultEdgeSettings, custom: keep, seed: settings.value.seed, tune: { chance: null, stop: null, mix: null } })
+  Object.assign(settings.value, structuredClone(defaultEdgeSettings), { custom: keep, seed: settings.value.seed })
   resetDone.value = true
 }
 
@@ -148,7 +145,6 @@ function resetGroup() {
   } else if (selected.value === 'command') {
     item.categories = { ...base.categories }
     item.hand = base.hand
-    item.custom.splice(0, item.custom.length)
     item.disabled.splice(0, item.disabled.length)
     item.tones = { ...base.tones }
     item.toneLine = { ...base.toneLine }
@@ -365,33 +361,40 @@ function applyFind() {
   if (!card) return
   const keyword = search.value.trim().toLowerCase()
   if (!keyword) {
-    card.querySelectorAll<HTMLElement>('[data-sundome-find-item]').forEach(item => { item.hidden = false })
+    card.querySelectorAll<HTMLElement>('.settings-section, .settings-section > *').forEach(item => { item.hidden = false })
     hitCount.value = -1
     return
   }
   let hits = 0
   for (const section of card.querySelectorAll<HTMLElement>('.settings-section')) {
-    let showGroup = false
+    const groupMatches = (section.dataset.sundomeFind ?? '').toLowerCase().includes(keyword)
+    let heading: HTMLElement | undefined
+    let headingMatches = false
+    let sectionHits = 0
     for (const child of Array.from(section.children) as HTMLElement[]) {
-      if (child.classList.contains('section-title')) { child.hidden = false; continue }
+      if (child.classList.contains('section-title')) continue
       const text = (child.textContent ?? '').toLowerCase()
       if (child.tagName === 'H5') {
-        showGroup = text.includes(keyword)
-        child.hidden = !showGroup
+        heading = child
+        headingMatches = groupMatches || text.includes(keyword)
+        child.hidden = !headingMatches
         continue
       }
-      const show = showGroup || text.includes(keyword)
+      const show = groupMatches || headingMatches || text.includes(keyword)
       child.hidden = !show
-      if (show) hits += 1
+      if (show) {
+        sectionHits++
+        if (heading) heading.hidden = false
+      }
     }
+    section.hidden = sectionHits === 0
+    hits += sectionHits
   }
   hitCount.value = hits
 }
-watch([search, visible], () => { void nextTick(applyFind) }, { immediate: true })
+watch([search, visible, settings], applyFind, { deep: true, flush: 'post' })
 
 const beatsImages = computed(() => !!media.value && media.value.kind === 'image' && media.value.imageTiming === 'beat')
-const secondsLabel = computed(() => readEdgeSettings(null) ? '' : '')
-void secondsLabel
 </script>
 
 <template>
@@ -781,7 +784,7 @@ void secondsLabel
         </template>
       </template>
     </section>
-    <PlaybackHistory ref="history" :open="historyOpen" @close="historyOpen = false" />
+    <PlaybackHistory ref="history" :open="historyOpen" @close="historyOpen = false; historyCount = historyNumber()" />
   </div>
 </template>
 
@@ -827,6 +830,7 @@ void secondsLabel
 .settings-tabs button { min-height: 44px; padding: 8px 20px; border-radius: 999px; border: 1px solid var(--color-hairline); background: var(--color-pearl); }
 .settings-tabs button[aria-pressed="true"] { background: var(--color-selection); border-color: var(--color-primary); color: var(--color-primary); font-weight: 600; }
 .settings-section + .settings-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--color-hairline); }
+.settings-section[hidden], .settings-section > [hidden] { display: none; }
 .section-title { margin: 0 0 16px; font-size: 16px; color: var(--color-muted); }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .toggle { display: flex; flex-direction: row; align-items: center; gap: 10px; min-height: 44px; margin-block: 12px; }

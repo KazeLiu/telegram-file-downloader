@@ -32,7 +32,7 @@ export interface PlaybackPreferences {
   shownImages: string[]
 }
 
-// 存储键沿用 v1：改键会让既有本机数据变成孤儿数据；版本号写在数据的 schemaVersion 字段里。
+// 存储键沿用 v1，版本号写在数据的 schemaVersion 字段里。
 export const playbackStorageKey = 'shicun.playback.v1'
 export const playbackSchemaVersion = 4
 export const playbackConfigFormat = 'shicun.playback.config.v4'
@@ -41,6 +41,10 @@ export const legacyPlaybackConfigFormats: readonly string[] = [
 ]
 // 已展示记录上限：按最早的记录淘汰，避免长时间使用顶满 localStorage 配额。
 export const shownImagesLimit = 20000
+
+export function readPlaybackStorage(key: string) {
+  try { return typeof localStorage === 'undefined' ? null : localStorage.getItem(key) } catch { return null }
+}
 
 const kinds: MediaKind[] = ['image', 'video', 'mixed']
 const orders: Playlist['order'][] = ['sequential', 'shuffle']

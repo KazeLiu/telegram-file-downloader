@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 历史成绩弹窗：最近 30 局的详细记录 + 累计次数 + 集章，对齐参考站的记录面板。
 import { computed, nextTick, ref } from 'vue'
-import { clockTime } from '../playback'
+import { clockTime, readPlaybackStorage } from '../playback'
 import { difficultyLabels, formatClock } from './engine'
 import {
   emptyTally, readRecords, readTally, recordEyebrows, recordLabels, recordOrder, recordTitles, recordTime, stamps,
@@ -17,8 +17,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{ close: [] }>()
 
-const records = ref<ResultRecord[]>(readRecords(typeof localStorage === 'undefined' ? null : localStorage.getItem(recordsStorageKey)))
-const tally = ref(readTally(typeof localStorage === 'undefined' ? null : localStorage.getItem(tallyStorageKey)))
+const records = ref<ResultRecord[]>([])
+const tally = ref(readTally(null))
 reload()
 
 const detail = ref<number | null>(null)
@@ -30,13 +30,12 @@ const current = computed(() => (detail.value === null ? null : records.value.fin
 const breakdown = computed(() => recordOrder.filter(key => tally.value.r[key] > 0))
 
 function reload() {
-  if (typeof localStorage === 'undefined') return
-  records.value = readRecords(localStorage.getItem(recordsStorageKey))
-  tally.value = readTally(localStorage.getItem(tallyStorageKey))
+  records.value = readRecords(readPlaybackStorage(recordsStorageKey))
+  tally.value = readTally(readPlaybackStorage(tallyStorageKey))
   // 第一次用新结构：把旧版的成绩与「射了」记录折成累计次数，避免显示成 0 局。
   if (!tally.value.seeded && !tally.value.n) {
-    const stats = readStats(localStorage.getItem(statsStorageKey))
-    const lost = readLost(localStorage.getItem(lostStorageKey))
+    const stats = readStats(readPlaybackStorage(statsStorageKey))
+    const lost = readLost(readPlaybackStorage(lostStorageKey))
     const migrated = tallyFromStats(tally.value, stats.sessions, stats.success, stats.ruin, stats.fail, lost.count)
     if (migrated.n > 0) {
       tally.value = migrated

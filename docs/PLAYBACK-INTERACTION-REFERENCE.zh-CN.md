@@ -297,4 +297,3 @@
 | 校验脚本 | `web/checks/engine.ts`、`web/checks/playback.ts` 等九个 |
 
 接手者应优先保持：已有播放列表可读（v1–v3 自动升到 v4）、按时间/按 BPM 两种切图可用、暂停不重置会话、读取失败可恢复、退出后声音停止、`settings` 与 `playlist` 互不改写。
-

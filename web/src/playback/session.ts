@@ -1,5 +1,5 @@
 import {
-  bindCommands, buildTimeline, commandPool, decideFinale, dropOverlongCommands, extendChance, extendLineSeconds, extendLines,
+  buildTimeline, commandPool, decideFinale, dropOverlongCommands, extendChance, extendLineSeconds, extendLines,
   extendMs, filterByCategories, formatClock, mulberry32, multiRoundSeconds, multiRounds, multiWindowSeconds, permitRate,
   pickToneLine, randomSeed, restSeconds, taskAt, toneAfterForCommand, toneForTask,
   type EdgeCommand, type EdgeMode, type Task, type ToneKind, varyBpm } from './engine.ts'
@@ -76,18 +76,19 @@ function makeTimeline(
     difficulty: settings.difficulty,
     tune: settings.tune,
     length: settings.instructionLength,
-    nipple: settings.focus === 'none' && settings.nipple.on ? { times: settings.nipple.times } : undefined,
-    glans: settings.focus === 'none' && settings.glans.on ? { times: settings.glans.times } : undefined,
+    modes: [...new Set(pool.map(command => command.mode))],
+    nipple: settings.focus === 'none' && settings.nipple.on && nipple.length ? { times: settings.nipple.times } : undefined,
+    glans: settings.focus === 'none' && settings.glans.on && glans.length ? { times: settings.glans.times } : undefined,
+    pools: { main: pool, nipple, glans },
   })
-  const bound = bindCommands(tasks, pool, nipple, glans)
   // 每次变换节奏：开启后每条绿黄指令的 BPM 在范围内重新随机（同一条始终稳定）。
   if (settings.bpmRandom.on) {
-    for (const task of bound) {
+    for (const task of tasks) {
       const random = mulberry32((seed ^ Math.imul(task.index + 1, 0x9e3779b1)) >>> 0)
       task.command = varyBpm(task.command, settings.bpmRandom, random)
     }
   }
-  return bound
+  return tasks
 }
 
 export class EdgeSession {
@@ -103,6 +104,7 @@ export class EdgeSession {
   round = 1
   /** 已经加时了几次（加时赛专用，决定下一次的时长与许可率） */
   extends = 0
+  private previousCommands = 0
   elapsed = 0
   totalMs = 0
   held = 0
@@ -156,7 +158,9 @@ export class EdgeSession {
 
   get remainingMs() { return Math.max(0, this.totalMs - this.elapsed) }
 
-  get task() { return taskAt(this.tasks, this.elapsed) }
+  get task() { return taskAt(this.tasks, Math.min(this.elapsed, this.totalMs - 1)) }
+
+  get commandCount() { return this.previousCommands + (this.task?.index ?? -1) + 1 }
 
   get cooling() { return this.phase === 'run' && this.elapsed < this.coolingEnd }
 
@@ -247,7 +251,7 @@ export class EdgeSession {
 
   /** 忍住了：次数 +1，并立刻切到「等它平息」。 */
   hold() {
-    if (this.phase !== 'run') return false
+    if (this.phase !== 'run' || this.cooling) return false
     this.held += 1
     this.coolingStart = this.elapsed
     this.coolingEnd = this.elapsed + restSeconds(this.settings.rest, this.random) * 1000
@@ -315,6 +319,7 @@ export class EdgeSession {
   private extend() {
     const settings = this.settings
     this.extends += 1
+    this.previousCommands += this.tasks.length
     const start = this.elapsed
     const span = extendMs(settings.extendLen, this.extends, this.random)
     this.totalMs = start + span
@@ -330,7 +335,7 @@ export class EdgeSession {
     }
     const headMs = extendLineSeconds * 1000
     const restMs = Math.max(0, this.totalMs - (start + headMs))
-    const tail = restMs > 0 ? makeTimeline(settings, this.pool, randomSeed(), restMs, this.nipplePool, this.glansPool) : []
+    const tail = restMs > 0 ? makeTimeline(settings, this.pool, Math.floor(this.random() * 0x100000000), restMs, this.nipplePool, this.glansPool) : []
     this.tasks = [head, ...tail.map(task => ({ ...task, index: task.index + 1, at: start + headMs + task.at }))]
     this.toneCache.clear()
     this.note = `加时第 ${this.extends} 次 · 时间增加了 ${formatClock(span)}`
