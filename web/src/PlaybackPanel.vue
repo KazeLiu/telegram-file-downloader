@@ -1188,6 +1188,7 @@ onBeforeUnmount(() => {
             :volume-open="volumeOpen"
             :fullscreen="fullscreenOn"
             :note="note"
+            :extend-count="session?.extends ?? 0"
             @toggle-crop="toggleCrop"
             @cycle-position="cyclePosition"
             @pip="pip"

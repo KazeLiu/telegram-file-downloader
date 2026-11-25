@@ -19,6 +19,8 @@ const props = defineProps<{
   volumeOpen: boolean
   fullscreen: boolean
   note: string
+  /** 加时赛已加时的次数：>0 时左上的标签换成「加时第 N 次」，与参考站一致。 */
+  extendCount?: number
 }>()
 
 const positionLabel = computed(() => ({ top: '上', center: '中', bottom: '下' } as Record<string, string>)[props.align] ?? '中')
@@ -38,7 +40,8 @@ const emit = defineEmits<{
 <template>
   <div class="sd-topbar">
     <div class="sd-left">
-      <span class="sd-count" data-sundome-count>{{ note || (position.index + 1 ? `第 ${position.index + 1} 条指令` : '准备中') }}</span>
+      <span v-if="(extendCount ?? 0) > 0" class="sd-count sd-count-extend" data-sundome-count :data-sundome-extend-round="extendCount">加时第 {{ extendCount }} 次</span>
+      <span v-else class="sd-count" data-sundome-count>{{ note || (position.index + 1 ? `第 ${position.index + 1} 条指令` : '准备中') }}</span>
       <span v-if="held" class="sd-held">忍住 {{ held }}</span>
     </div>
     <span v-if="!hideTime && remaining" class="sd-clock" data-sundome-clock>{{ remaining }}</span>
@@ -77,6 +80,8 @@ const emit = defineEmits<{
 }
 .sd-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
 .sd-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 800; font-style: italic; color: rgba(255, 255, 255, .7); }
+/* 加时赛的轮次标签：参考站用正体白字，比普通计数更醒目。 */
+.sd-count-extend { font-style: normal; color: #fff; }
 .sd-held { flex: none; font-style: normal; color: rgba(255, 255, 255, .5); }
 .sd-clock { flex: none; font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .sd-buttons { display: flex; flex: none; align-items: center; gap: 6px; }
