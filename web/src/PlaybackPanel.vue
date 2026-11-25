@@ -15,7 +15,7 @@ import PlaybackTopBar from './playback/PlaybackTopBar.vue'
 import PlaybackVolumePopover from './playback/PlaybackVolumePopover.vue'
 import { guideSteps, markGuideSeen, readGuideSeen } from './playback/guideSteps'
 import type { FinishReason } from './playback/types'
-import { beatVolumeMax, brightnessMin, formatClock, textOpacityMin, textScaleMin } from './playback/engine'
+import { beatVolumeMax, brightnessMin, formatClock, modeColors, modeLabels, textOpacityMin, textScaleMin } from './playback/engine'
 // brightnessMin 仍用于设置面板的变暗下限；播放层音量面板已改用文字浓度/大小（与参考站一致）。
 import { glansCommands, nippleCommands } from './playback/commands'
 import { EdgeSession, type SessionFrame } from './playback/session'
@@ -93,11 +93,24 @@ let lastTask = -1
 let statsDone = false
 /** 红色（不许碰）时由我们主动暂停视频，避免被 videoPaused 当成用户暂停整局。 */
 let videoHold = false
+/** Document PiP 小窗句柄（关掉后置空）。 */
+let pipWindow: Window | null = null
 
 const current = computed(() => queue.value[0] ?? null)
 const favorite = computed(() => !!current.value && preferences.favorites.includes(mediaKey(current.value)))
 const active = computed(() => screen.value === 'playing' && !paused.value && ready.value && !error.value)
-const pipAvailable = computed(() => current.value?.kind === 'video' && 'pictureInPictureEnabled' in document)
+/** 悬浮小窗能力：优先用 Document PiP 放我们自己画的迷你播放器，否则退回视频自身的 PiP。 */
+type PipMode = 'doc' | 'video' | null
+function detectPip(): PipMode {
+  try {
+    if ('documentPictureInPicture' in window) return 'doc'
+    const proto = HTMLVideoElement.prototype as HTMLVideoElement & { webkitSetPresentationMode?: unknown }
+    const ok = (document.pictureInPictureEnabled && 'requestPictureInPicture' in proto) || 'webkitSetPresentationMode' in proto
+    return ok ? 'video' : null
+  } catch { return null }
+}
+const pipMode = computed<PipMode>(() => (current.value?.kind === 'video' ? detectPip() : null))
+const pipAvailable = computed(() => pipMode.value !== null)
 const mode = computed(() => frame.value?.mode ?? 'stop')
 const commandText = computed(() => frame.value?.text ?? '')
 const commandHint = computed(() => frame.value?.hint ?? '')
@@ -609,6 +622,7 @@ function tick() {
     return
   }
   pulse(now)
+  if (pipWindow) renderPip()
   if (!imageBeatMode.value && current.value?.kind === 'image' && imageSeconds.value > 0) {
     imageElapsed.value += delta
     if (imageElapsed.value >= imageSeconds.value * 1000) step(1)
@@ -698,12 +712,95 @@ async function fullscreen() {
 }
 function fullscreenChanged() { fullscreenOn.value = document.fullscreenElement === playerElement.value }
 async function pip() {
+  if (pipMode.value === 'doc') { await openDocPip(); return }
   const element = video.value
   if (!element || !document.pictureInPictureEnabled) { note.value = '当前浏览器不支持视频悬浮小窗。'; return }
   try {
     if (document.pictureInPictureElement) await document.exitPictureInPicture()
     else await element.requestPictureInPicture()
   } catch { note.value = '无法打开悬浮小窗，请检查浏览器权限。' }
+}
+/** Document PiP：把当前指令投到一个独立小窗里，可以一边看别的应用一边继续。 */
+async function openDocPip() {
+  const api = (window as Window & { documentPictureInPicture?: { window?: Window | null; requestWindow?: (options?: { width?: number; height?: number }) => Promise<Window> } }).documentPictureInPicture
+  if (!api?.requestWindow) { note.value = '当前浏览器不支持悬浮小窗。'; return }
+  if (api.window) { api.window.close(); pipWindow = null; return }
+  try {
+    const win = await api.requestWindow({ width: 340, height: 250 })
+    pipWindow = win
+    win.document.documentElement.lang = document.documentElement.lang || 'zh-CN'
+    win.document.title = '寸止游戏'
+    const body = win.document.body
+    body.style.margin = '0'
+    body.style.background = '#000'
+    renderPip()
+    win.addEventListener('pagehide', () => { pipWindow = null })
+  } catch { note.value = '无法打开悬浮小窗，请检查浏览器权限。' }
+}
+/** 把当前帧画进 Document PiP 小窗（指令 + 模式 + 剩余时间 + 忍耐/暂停）。 */
+function renderPip() {
+  const win = pipWindow
+  if (!win) return
+  const doc = win.document
+  const value = frame.value
+  const color = modeColors[mode.value] ?? '#fff'
+  doc.body.innerHTML = ''
+  const wrap = doc.createElement('div')
+  wrap.setAttribute('data-sundome-pip-view', '')
+  wrap.style.cssText = 'position:fixed;inset:0;display:flex;flex-direction:column;gap:8px;padding:12px 14px;box-sizing:border-box;background:#0a0708;color:#fff;font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Noto Sans SC",sans-serif'
+  const head = doc.createElement('div')
+  head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px'
+  const pill = doc.createElement('span')
+  pill.setAttribute('data-sundome-pip-mode', '')
+  pill.textContent = modeLabels[mode.value] ?? ''
+  pill.style.cssText = `border:2px solid ${color};color:${color};border-radius:999px;padding:2px 10px;font-size:13px;font-weight:700;letter-spacing:.15em;white-space:nowrap`
+  head.append(pill)
+  if (!settings.value.hideRemaining) {
+    const clock = doc.createElement('span')
+    clock.setAttribute('data-sundome-pip-clock', '')
+    clock.textContent = remainingText.value
+    clock.style.cssText = 'font-size:22px;font-weight:700;font-variant-numeric:tabular-nums'
+    head.append(clock)
+  }
+  const center = doc.createElement('div')
+  center.style.cssText = 'flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center'
+  if (value?.toneBefore) {
+    const before = doc.createElement('p')
+    before.textContent = value.toneBefore
+    before.style.cssText = 'margin:0;font-size:15px;font-weight:700;opacity:.85'
+    center.append(before)
+  }
+  const text = doc.createElement('p')
+  text.setAttribute('data-sundome-pip-text', '')
+  text.textContent = value?.text ?? ''
+  text.style.cssText = 'margin:0;font-size:clamp(18px,8vw,40px);font-weight:800;line-height:1.2;text-wrap:balance;overflow-wrap:anywhere'
+  center.append(text)
+  if (value?.toneAfter) {
+    const after = doc.createElement('p')
+    after.textContent = value.toneAfter
+    after.style.cssText = 'margin:0;font-size:14px;font-weight:700;opacity:.8'
+    center.append(after)
+  }
+  wrap.append(head, center)
+  const actions = doc.createElement('div')
+  actions.style.cssText = 'display:flex;justify-content:center;gap:8px;padding-top:8px'
+  const base = 'flex:1 1 auto;font:inherit;font-size:13px;font-weight:700;border-radius:999px;padding:7px 12px;cursor:pointer;white-space:nowrap'
+  const edgeButton = doc.createElement('button')
+  edgeButton.type = 'button'
+  edgeButton.setAttribute('data-sundome-pip-edge', '')
+  edgeButton.textContent = value?.cooling ? '等它平息' : '忍住了'
+  edgeButton.disabled = !canHold.value
+  edgeButton.style.cssText = `${base};border:2px solid ${canHold.value ? 'rgba(255,255,255,.6)' : 'rgba(255,255,255,.2)'};background:transparent;color:${canHold.value ? '#fff' : 'rgba(255,255,255,.3)'}`
+  edgeButton.addEventListener('click', () => hold())
+  const pauseButton = doc.createElement('button')
+  pauseButton.type = 'button'
+  pauseButton.setAttribute('data-sundome-pip-pause', '')
+  pauseButton.textContent = paused.value ? '继续' : '暂停'
+  pauseButton.style.cssText = `${base};border:1px solid rgba(255,255,255,.4);background:transparent;color:#fff`
+  pauseButton.addEventListener('click', () => (paused.value ? resume() : pause()))
+  actions.append(edgeButton, pauseButton)
+  wrap.append(actions)
+  doc.body.append(wrap)
 }
 async function landscape() {
   const orientation = window.screen.orientation as (ScreenOrientation & { lock?: (value: string) => Promise<void> }) | undefined
@@ -805,6 +902,8 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true; request.abort(); queueRequest.abort(); imageLoad++; imageBuffer.clear(); clearInterval(timer); pause()
+  try { pipWindow?.close() } catch {}
+  pipWindow = null
   document.documentElement.classList.remove('playback-immersive')
   sound.close()
   document.removeEventListener('keydown', keydown)
