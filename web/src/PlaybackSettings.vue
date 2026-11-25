@@ -177,6 +177,8 @@ function resetGroup() {
     item.vibrateOn = { ...base.vibrateOn }
   } else {
     item.hideRemaining = base.hideRemaining
+    item.pipOffer = base.pipOffer
+    item.pipSite = base.pipSite
     item.brightness = base.brightness
     item.mixAudio = base.mixAudio
     item.mirror = { ...base.mirror }
@@ -635,6 +637,16 @@ void secondsLabel
         <label>视频变暗 · {{ settings.brightness }}%<input :value="settings.brightness" type="range" :min="brightnessMin" max="100" step="5" @input="settings.brightness = Number(($event.target as HTMLInputElement).value)" /></label>
         <p class="muted">{{ brightnessMin }}% 最暗，100% ＝ 完全透明不变暗；只影响播放器画面，不改原文件。</p>
         <label class="toggle"><input :checked="settings.mixAudio" type="checkbox" @change="settings.mixAudio = ($event.target as HTMLInputElement).checked" />边听音乐边玩</label>
+        <div class="pip-card" :data-sundome-pip-section="settings.pipOffer ? 'on' : 'off'">
+          <p class="pip-title">边看别的视频边玩</p>
+          <p class="pip-lead">把指令放进悬浮小窗。在别的网站看视频时，也能照着指令继续。</p>
+          <label class="toggle"><input :checked="settings.pipOffer" type="checkbox" @change="settings.pipOffer = ($event.target as HTMLInputElement).checked" />开始后提示我打开小窗</label>
+          <label class="field">
+            <span>常看的网站（选填）</span>
+            <input :value="settings.pipSite" type="url" placeholder="https://" @input="settings.pipSite = ($event.target as HTMLInputElement).value" />
+          </label>
+          <p class="muted">只保存在这台设备上。打开小窗后，点一下就能跳过去。</p>
+        </div>
         <p class="muted">打开后播放器不会抢占系统的音频焦点。</p>
         <h5 class="field-label">{{ mirrorText.legend }}</h5>
         <label class="toggle"><input :checked="settings.mirror.on" type="checkbox" @change="toggleMirror" />{{ mirrorText.label }}</label>
@@ -753,5 +765,42 @@ input[type="range"] { padding: 0; min-height: 44px; accent-color: var(--color-pr
   .card-title { font-size: 18px; }
   .card-reset { align-self: flex-start; }
   .settings-search { max-width: none; }
+}
+.pip-card {
+  margin-top: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 14px;
+  background: var(--color-parchment);
+}
+.pip-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.pip-lead {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-muted);
+}
+.pip-card .field {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+.pip-card .field span {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+.pip-card .field input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 10px;
+  background: var(--color-pearl);
+  font-size: 13px;
+  color: var(--color-ink);
 }
 </style>

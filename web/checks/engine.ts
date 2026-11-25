@@ -771,6 +771,15 @@ assert.ok(mirrorText.consentYes.includes('允许'), '同意文案要说明会打
   const stamp = new Date(2026, 10, 25, 10, 32).getTime()
   assert.equal(recordTime(stamp), '2026/11/25 10:32')
   // 文案齐备
+  // 悬浮小窗提示（pipOffer / pipSite）
+  assert.equal(defaults.pipOffer, true)
+  assert.equal(defaults.pipSite, '')
+  assert.equal(normalizeEdgeSettings({ pipOffer: false }).pipOffer, false)
+  assert.equal(normalizeEdgeSettings({ pipSite: ' https://example.com/watch ' }).pipSite, 'https://example.com/watch')
+  assert.equal(normalizeEdgeSettings({ pipSite: 'example.com' }).pipSite, '')
+  assert.equal(normalizeEdgeSettings({ pipSite: 'javascript:alert(1)' }).pipSite, '')
+  assert.equal(normalizeEdgeSettings({ pipSite: 42 }).pipSite, '')
+  assert.equal(normalizeEdgeSettings({ pipSite: `https://a.test/${'x'.repeat(300)}` }).pipSite.length, 200)
   assert.equal(recordsText.title, '历史成绩')
   assert.equal(recordsText.empty, '还没有详细记录。从下一局开始保存。')
   // 存取往返

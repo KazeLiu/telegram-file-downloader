@@ -52,6 +52,10 @@ export interface EdgeSettings {
   brightness: number
   hideRemaining: boolean
   mixAudio: boolean
+  /** 开始后是否提示打开悬浮小窗（参考站的 pip-want，只影响提示）。 */
+  pipOffer: boolean
+  /** 常看的网站（选填，只存本机）；打开小窗后可以一键跳过去。 */
+  pipSite: string
   /** 每次变换节奏：绿黄指令的 BPM 在范围内每次重新随机 */
   bpmRandom: { on: boolean; min: number; max: number }
   /** 心跳跟随 BPM：关掉后红色带 BPM 时心跳仍保持固定节奏 */
@@ -120,6 +124,8 @@ export const defaultEdgeSettings: EdgeSettings = {
   brightness: 55,
   hideRemaining: false,
   mixAudio: false,
+  pipOffer: true,
+  pipSite: '',
   bpmRandom: { on: false, min: 60, max: 160 },
   heartbeatSync: true,
   vibrate: true,
@@ -267,6 +273,13 @@ function readBpmRandom(value: unknown): EdgeSettings['bpmRandom'] {
 }
 
 /** 容错读入：任何字段坏了都退回默认值，绝不抛错。 */
+/** 常看的网站：只留 http(s)，最多 200 字。 */
+function readPipSite(value: unknown): string {
+  if (typeof value !== 'string') return defaultEdgeSettings.pipSite
+  const text = value.trim().slice(0, 200)
+  return /^https?:\/\//i.test(text) ? text : ''
+}
+
 export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
   if (!isRecord(raw)) return { ...defaultEdgeSettings, categories: { ...allCategories }, tune: { ...defaultEdgeSettings.tune }, rest: { ...defaultEdgeSettings.rest }, custom: [], disabled: [] }
   const tune = isRecord(raw.tune) ? raw.tune : {}
@@ -304,6 +317,8 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     brightness: clampNumber(raw.brightness, brightnessMin, 100, defaultEdgeSettings.brightness),
     hideRemaining: boolOr(raw.hideRemaining, defaultEdgeSettings.hideRemaining),
     mixAudio: boolOr(raw.mixAudio, defaultEdgeSettings.mixAudio),
+    pipOffer: boolOr(raw.pipOffer, defaultEdgeSettings.pipOffer),
+    pipSite: readPipSite(raw.pipSite),
     bpmRandom: readBpmRandom(raw.bpmRandom),
     heartbeatSync: boolOr(raw.heartbeatSync, defaultEdgeSettings.heartbeatSync),
     vibrate: boolOr(raw.vibrate, defaultEdgeSettings.vibrate),

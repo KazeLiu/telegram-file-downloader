@@ -125,6 +125,14 @@ function detectPip(): PipMode {
 }
 const pipMode = computed<PipMode>(() => (current.value?.kind === 'video' ? detectPip() : null))
 const pipAvailable = computed(() => pipMode.value !== null)
+/** 开始后提示打开悬浮小窗（参考站的 pip-want）。 */
+const pipOfferOpen = ref(false)
+const pipOfferDone = ref(false)
+const pipSiteLabel = computed(() => {
+  const site = settings.value.pipSite
+  if (!site) return ''
+  try { return new URL(site).host || site } catch { return site }
+})
 const mode = computed(() => frame.value?.mode ?? 'stop')
 const commandText = computed(() => frame.value?.text ?? '')
 const commandHint = computed(() => frame.value?.hint ?? '')
@@ -562,6 +570,10 @@ function beginSession() {
     playerElement.value?.focus()
     void loadCurrentImage()
     void playVideo()
+    if (settings.value.pipOffer && pipMode.value) {
+      pipOfferOpen.value = true
+      pipOfferDone.value = false
+    }
   })
 }
 
@@ -960,6 +972,20 @@ function renderPip() {
   wrap.append(actions)
   doc.body.append(wrap)
 }
+/** 提示卡里点「打开小窗」。 */
+async function openPipFromOffer() {
+  await pip()
+  pipOfferDone.value = true
+}
+function openPipSite() {
+  const site = settings.value.pipSite
+  if (!site) return
+  window.open(site, '_blank', 'noopener')
+}
+function closePipOffer() {
+  pipOfferOpen.value = false
+}
+
 async function landscape() {
   const orientation = window.screen.orientation as (ScreenOrientation & { lock?: (value: string) => Promise<void> }) | undefined
   try { await orientation?.lock?.('landscape') } catch { note.value = '当前浏览器不支持锁定横屏，可手动旋转设备。' }
@@ -1315,6 +1341,17 @@ onBeforeUnmount(() => {
         :allow-below="allowBelow"
       />
 
+      <div v-if="pipOfferOpen" class="pip-offer" data-sundome-pip-section="on" role="dialog" aria-modal="true">
+        <p class="pip-offer-title">边看别的视频边玩</p>
+        <p class="pip-offer-lead">{{ pipOfferDone ? '小窗已打开。现在去打开你想看的网站吧。' : '把指令放进悬浮小窗。在别的网站看视频时，也能照着指令继续。' }}</p>
+        <div class="pip-offer-actions">
+          <button v-if="!pipOfferDone" class="pip-offer-cta" type="button" data-sundome-pip-cta @click="openPipFromOffer">打开小窗</button>
+          <button v-else class="pip-offer-cta" type="button" data-sundome-pip-start-now @click="closePipOffer">开始</button>
+          <button v-if="pipOfferDone && settings.pipSite" class="pip-offer-link" type="button" @click="openPipSite">打开 {{ pipSiteLabel }}</button>
+          <button class="pip-offer-dismiss" type="button" @click="closePipOffer">关闭</button>
+        </div>
+      </div>
+
       <div class="runtime-controls">
         <button class="runtime-chip" type="button" title="换一项" @click="step(1)"><Icon name="chevron" :size="14" /></button>
         <button class="runtime-chip" :class="{ liked: favorite }" type="button" :aria-pressed="favorite" title="喜欢" @click="toggleFavorite"><Icon name="heart" :size="14" /></button>
@@ -1425,4 +1462,11 @@ onBeforeUnmount(() => {
   .runtime-controls { bottom: max(56px, calc(env(safe-area-inset-bottom) + 48px)); gap: 4px; }
   .runtime-chip { min-width: 26px; min-height: 26px; padding: 0 7px; font-size: 10px; }
 }
+.pip-offer { position: fixed; left: 50%; bottom: max(120px, calc(env(safe-area-inset-bottom) + 112px)); z-index: 32; width: min(360px, calc(100vw - 32px)); transform: translateX(-50%); padding: 14px 16px; border: 1px solid rgba(255, 255, 255, .18); border-radius: 16px; background: rgba(10, 7, 8, .92); color: #fff; text-align: center; backdrop-filter: blur(10px); }
+.pip-offer-title { margin: 0; font-size: 14px; font-weight: 700; }
+.pip-offer-lead { margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: rgba(255, 255, 255, .72); }
+.pip-offer-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin-top: 12px; }
+.pip-offer-cta { min-height: 0; padding: 8px 20px; border: 0; border-radius: 999px; background: #fff; color: #000; font-size: 13px; font-weight: 700; cursor: pointer; }
+.pip-offer-link { min-height: 0; padding: 6px 12px; border: 1px solid rgba(255, 255, 255, .3); border-radius: 999px; background: rgba(0, 0, 0, .5); color: rgba(255, 255, 255, .9); font-size: 12px; cursor: pointer; }
+.pip-offer-dismiss { min-height: 0; padding: 8px 4px; border: 0; background: none; color: rgba(255, 255, 255, .55); font-size: 13px; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
 </style>
