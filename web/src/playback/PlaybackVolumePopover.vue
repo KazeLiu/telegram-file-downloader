@@ -31,7 +31,7 @@ function onInput(key: VolumeKey, event: Event) {
     <label class="sd-row" data-sundome-volume-row="video">
       <span class="sd-head"><span class="sd-label">视频音量</span><b data-sundome-volume-value="video">{{ mediaVolume }}%</b></span>
       <input type="range" min="0" max="100" step="5" :value="mediaVolume" aria-label="视频音量" :aria-valuetext="`${mediaVolume}%`" data-sundome-volume="video" @input="onInput('mediaVolume', $event)">
-      <span class="sd-note">iPhone、iPad 无法在页面上调整视频音量（机身音量键会同时调整所有声音）。请把节拍声调到100%以上来平衡</span>
+      <span class="sd-note" data-sundome-volume-locked="play">iPhone、iPad 无法在页面上调整视频音量（机身音量键会同时调整所有声音）。请把节拍声调到100%以上来平衡</span>
     </label>
     <label class="sd-row" data-sundome-volume-row="beat">
       <span class="sd-head"><span class="sd-label">节拍声（节拍器）</span><b data-sundome-volume-value="beat">{{ beatPercent }}%</b></span>

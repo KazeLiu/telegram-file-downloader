@@ -426,11 +426,11 @@ void secondsLabel
       <button type="button" class="text-button" data-sundome-reset-no @click="allArmed = false">取消</button>
     </div>
     <label class="settings-search">查找设置<input v-model="search" type="search" data-sundome-settings-search placeholder="例如：乳头、左手、速度、视频" /></label>
-    <div class="settings-tabs" role="group" aria-label="设置分类" data-sundome-tabs :data-sundome-hits="hitCount < 0 ? visible.length : hitCount">
-      <button v-for="group in groups" :key="group.id" type="button" :aria-pressed="!search && selected === group.id" @click="selectGroup(group.id)">{{ group.label }}</button>
+    <div class="settings-tabs" role="tablist" aria-label="设置分类" data-sundome-tabs :data-sundome-hits="hitCount < 0 ? visible.length : hitCount">
+      <button v-for="group in groups" :key="group.id" type="button" role="tab" :id="`settings-tab-${group.id}`" :aria-controls="`settings-panel-${group.id}`" :aria-selected="!search && selected === group.id" :aria-pressed="!search && selected === group.id" @click="selectGroup(group.id)">{{ group.label }}</button>
     </div>
     <p v-if="!visible.length || (search.trim() && hitCount === 0)" class="muted" role="status" data-sundome-find-none>没有匹配的设置，请换个关键词。</p>
-    <section v-for="group in visible" :key="group.id" class="settings-section" :data-sundome-find="group.label" :aria-label="`${group.label}设置`">
+    <section v-for="group in visible" :key="group.id" class="settings-section" role="tabpanel" :id="`settings-panel-${group.id}`" :aria-labelledby="`settings-tab-${group.id}`" :data-sundome-find="group.label" :data-sundome-tab-panel="group.id" :aria-label="`${group.label}设置`">
       <h4 v-if="search" class="section-title">{{ group.label }}</h4>
 
       <template v-if="group.id === 'play'">
