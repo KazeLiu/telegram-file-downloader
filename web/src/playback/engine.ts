@@ -105,7 +105,7 @@ export const bpmRandomMin = 20
 export const bpmRandomMax = 300
 export const beatVolumeMax = 300
 export const videoVolumeMax = 100
-export const brightnessMin = 20
+export const dimMin = 0
 /** 指令文字的不透明度与字号下限（与参考站一致：文字最低 30%、字号最低 60%）。 */
 export const textOpacityMin = 30
 export const textScaleMin = 60
@@ -225,6 +225,9 @@ export const presetNotes: Record<PresetKey, string> = {
 }
 /** 没有任何一档预设命中时的标签。 */
 export const presetNone = '自定义设置'
+
+/** 随机时长说明（与参考站 `RANDOM_TIME_TEXT` 同口径）。 */
+export const randomTimeNote = '会在5～20分钟之间随机决定。结束前不知道有多久（也不显示剩余时间）'
 
 
 export interface Mix {

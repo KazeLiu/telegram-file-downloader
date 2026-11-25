@@ -87,7 +87,7 @@ interface DifficultyProfile {
 | `heartbeat` / `metronome` | boolean | `true` / `true` |
 | `heartbeatVolume` / `beatVolume` | 0–300 整数 | 100 / 100 |
 | `mediaVolume` | 0–100 整数 | 60 |
-| `brightness` | 20–100 整数（20 最暗，100 完全透明） | 55 |
+| `dim` | 0–100 整数（0 完全透明=视频原本亮度，100 最暗 0.45 遮罩；对齐参考站的 `dim`） | 55 |
 | `hideRemaining` | boolean | `false` |
 | `mixAudio` | boolean | `false` |
 | `keepVideoOnStop` | boolean（红色时也继续放视频、不变暗） | `false` |
@@ -148,7 +148,7 @@ export const durationMin = 1 / durationMax = 180
 export const restMin = 3 / restMax = 120
 export const restRangeChoices = [[8,16],[10,40],[20,60]] / restFixedChoices
 export const bpmRandomMin = 20 / bpmRandomMax = 300
-export const beatVolumeMax = 300 / videoVolumeMax = 100 / brightnessMin = 20
+export const beatVolumeMax = 300 / videoVolumeMax = 100 / dimMin = 0
 export const textOpacityMin = 30 / textScaleMin = 60
 export const customCommandLimit = 30 / customCommandTextLimit = 60
 export const finalHoldMs = 5000 / permitStep = 0.05 / permitMaxGain = 0.2
@@ -331,7 +331,7 @@ export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
   白色倒计时条、`剩余 N 秒`）。
 - 音量弹层 `PlaybackVolumePopover` 四行：视频音量 / 节拍声（0–300）/ 指令文字不透明度（30–100）/
   指令文字大小（60–140）。
-- `settings.keepVideoOnStop`：红色且未进许可窗口时暂停视频并把 `brightness × 0.55`；
+- `settings.keepVideoOnStop`：红色且未进许可窗口时暂停视频；遮罩浓度不变，视频本体透明度按 `1 - 0.2 * dim` 降低（对齐参考站）；
   `settings.switchVideoPerCommand`：`taskKey` 前进时切下一个媒体。
 - `FinishReason = 'duration' | 'queue' | 'manual' | 'lost' | 'allow' | 'deny' | 'ruin'`，
   `PlaybackFinished` 按 outcome 出 Finised / Ruined / Denied / Lost 四套文案与三格统计（时间 / 指令 / 忍住）。
@@ -346,7 +346,7 @@ export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
 | 指令 | 分类 `categories`、惯用手 `hand`、口吻 `tones` + `toneLine(show/before/after)`、自定义口令 `custom`（≤30 条 / 60 字）、逐条启停 `disabled`（按 `modeOrder` 分组列 `maleCommands`） |
 | 视频·图片 | 直接绑 `Playlist`：`kind / order / imageCount / imageTiming / imageSeconds / bpm(20–300) / loop / favoritesOnly` + `keepVideoOnStop` + `switchVideoPerCommand` + `keepVideoWhileCooling` + `videoSound` + `skipIntro` + `fit` / `pos` + `textOpacity` / `textScale` |
 | 声音 | `metronome` + `beatVolume(0–300)`、`mediaVolume(0–100)`、`heartbeat` + `heartbeatVolume(0–300)` + `redBeat` + `heartbeatSync`、`bpmRandom(on/min/max)`、`vibrate` + `vibrateOn(command/edge/finish)` |
-| 其他 | `hideRemaining`、`brightness(20–100)`、`mixAudio`、`mirror(on/place)` + 前置摄像头同意卡、连续天数（`shicun.edge.days.v1`）、本机成绩行（`shicun.edge.stats.v1`）、历史成绩入口（`shicun.edge.history.v1` + `shicun.edge.tally.v1`） |
+| 其他 | `hideRemaining`、`dim(0–100)`、`mixAudio`、`mirror(on/place)` + 前置摄像头同意卡、连续天数（`shicun.edge.days.v1`）、本机成绩行（`shicun.edge.stats.v1`）、历史成绩入口（`shicun.edge.history.v1` + `shicun.edge.tally.v1`） |
 
 ### 单部位模式（`web/src/playback/focus.ts`）
 

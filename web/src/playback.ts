@@ -19,7 +19,8 @@ export interface Playlist {
   bpm: number
   mediaVolume: number
   hideTime: boolean
-  brightness: number
+  /** 变暗程度 0–100（0 完全透明，100 最暗 0.45 遮罩；对齐参考站的 dim）。 */
+  dim: number
   favoritesOnly: boolean
 }
 
@@ -46,14 +47,14 @@ const orders: Playlist['order'][] = ['sequential', 'shuffle']
 const timings: ImageTiming[] = ['time', 'beat']
 const ranges = {
   imageSeconds: [1, 300], bpm: [20, 300], imageCount: [0, 100000],
-  mediaVolume: [0, 100], brightness: [20, 100],
+  mediaVolume: [0, 100], dim: [0, 100],
 } as const
 const defaults = {
-  imageSeconds: 8, bpm: 100, imageCount: 0, mediaVolume: 100, brightness: 100,
+  imageSeconds: 8, bpm: 100, imageCount: 0, mediaVolume: 100, dim: 100,
 }
 const addedDefaults = {
   imageTiming: 'time' as ImageTiming,
-  mediaVolume: defaults.mediaVolume, hideTime: false, brightness: defaults.brightness, favoritesOnly: false,
+  mediaVolume: defaults.mediaVolume, hideTime: false, dim: defaults.dim, favoritesOnly: false,
 }
 
 // 列表必须逐份拷贝：直接展开 addedDefaults 会让所有播放列表共用同一组数组。
@@ -119,7 +120,7 @@ function normalizePlaylist(raw: Record<string, unknown>, index: number, issues: 
     bpm: fix('bpm', raw.bpm, repairNumber(raw.bpm, ...ranges.bpm, defaults.bpm)),
     mediaVolume: fix('mediaVolume', raw.mediaVolume, repairNumber(raw.mediaVolume, ...ranges.mediaVolume, defaults.mediaVolume)),
     hideTime: fix('hideTime', raw.hideTime, booleanOr(raw.hideTime, false)),
-    brightness: fix('brightness', raw.brightness, repairNumber(raw.brightness, ...ranges.brightness, defaults.brightness)),
+    dim: fix('dim', raw.dim, repairNumber(raw.dim, ...ranges.dim, defaults.dim)),
     favoritesOnly: fix('favoritesOnly', raw.favoritesOnly, booleanOr(raw.favoritesOnly, false)),
   }
 }
@@ -202,7 +203,7 @@ export function validPlaylist(item: Playlist) {
     && numberIn(item.imageSeconds, ...ranges.imageSeconds) && numberIn(item.bpm, ...ranges.bpm)
     && timings.includes(item.imageTiming) && numberIn(item.imageCount, ...ranges.imageCount)
     && numberIn(item.mediaVolume, ...ranges.mediaVolume) && typeof item.hideTime === 'boolean'
-    && numberIn(item.brightness, ...ranges.brightness)
+    && numberIn(item.dim, ...ranges.dim)
     && typeof item.loop === 'boolean' && typeof item.favoritesOnly === 'boolean'
 }
 

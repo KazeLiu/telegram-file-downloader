@@ -365,7 +365,7 @@ assert.equal(defaults.glans.on, false)
 assert.deepEqual(defaults.categories, { edge: true, tease: true, pose: true, pain: false })
 const normalized = normalizeEdgeSettings({
   minutes: 999, difficulty: 'impossible', finale: 'nope', instructionLength: 'nope', beatVolume: 9999,
-  heartbeatVolume: -5, brightness: 0, mediaVolume: 500, rewardSeconds: 999, hand: 'both',
+  heartbeatVolume: -5, dim: -20, mediaVolume: 500, rewardSeconds: 999, hand: 'both',
   rest: { mode: 'fixed', seconds: 999, min: 200, max: 1 }, disabled: [3, 3, 1, -2], tune: { chance: 5, stop: 90, mix: { go: 50, slow: 30, stop: 30 } }
 })
 assert.equal(normalized.minutes, 180)
@@ -374,7 +374,7 @@ assert.equal(normalized.finale, 'draw')
 assert.equal(normalized.instructionLength, 'standard')
 assert.equal(normalized.beatVolume, 300)
 assert.equal(normalized.heartbeatVolume, 0)
-assert.equal(normalized.brightness, 20)
+assert.equal(normalized.dim, 0)
 assert.equal(normalized.mediaVolume, 100)
 assert.equal(normalized.rewardSeconds, 60)
 assert.equal(normalized.hand, 'right')

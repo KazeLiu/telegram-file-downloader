@@ -4,11 +4,12 @@ import { newPlaylist } from './playback'
 import type { Playlist } from './playback'
 import { commandPoolNotice, settingsSummary } from './playback/summary'
 import {
-  adjustMix, beatVolumeMax, bpmRandomMax, bpmRandomMin, brightnessMin, categoryHints, categoryLabels, categoryOrder,
+  adjustMix, beatVolumeMax, bpmRandomMax, bpmRandomMin, categoryHints, categoryLabels, categoryOrder,
   textOpacityMin, textScaleMin, formatClock,
   customCommandLimit, customCommandTextLimit, difficultyHints, difficultyLabels, difficultyOrder,
   durationMax, durationMin, extendLengthLabels, extendLengthOrder, finaleHints, finaleLabels, finaleOrder, instructionLengthLabels,
   instructionLengthOrder, mixOf, modeLabels, modeOrder, presetLabels, presetNone, presetNotes, presets, presetOrder,
+  randomTimeNote,
   redBeatLabels, redBeatOrder, restFixedChoices, restModeLabels, restModeOrder, restRangeChoices,
   rewardChoices, toneAfterLabels, toneAfterOrder, difficulties, permitRate,
   toneLabels, toneOrder,
@@ -181,7 +182,7 @@ function resetGroup() {
     item.hideRemaining = base.hideRemaining
     item.pipOffer = base.pipOffer
     item.pipSite = base.pipSite
-    item.brightness = base.brightness
+    item.dim = base.dim
     item.mixAudio = base.mixAudio
     item.mirror = { ...base.mirror }
   }
@@ -447,7 +448,7 @@ void secondsLabel
         </div>
         <div class="settings-grid">
           <label>自定义时长（分钟，{{ durationMin }}–{{ durationMax }}）<input :value="settings.minutes" type="number" :min="durationMin" :max="durationMax" @change="setMinutes(Number(($event.target as HTMLInputElement).value))" /></label>
-          <span class="hint-cell muted">随机时长在 5～20 分钟之间，且播放时不显示剩余时间。</span>
+          <span v-if="settings.durationRandom" class="hint-cell muted" data-sundome-random-note>{{ randomTimeNote }}</span>
         </div>
 
         <h5 class="field-label">难度</h5>
@@ -669,12 +670,13 @@ void secondsLabel
         <label class="toggle"><input :checked="settings.heartbeat" type="checkbox" data-sundome-switch="heartbeat" @change="settings.heartbeat = ($event.target as HTMLInputElement).checked" />心跳声（氛围）</label>
         <p class="muted">「不许碰」时播放低沉的心跳声。</p>
         <div v-if="settings.heartbeat" class="settings-grid">
-          <label>心跳音量 · {{ settings.heartbeatVolume }}%<input :value="settings.heartbeatVolume" type="range" min="0" :max="beatVolumeMax" step="5" @input="settings.heartbeatVolume = Number(($event.target as HTMLInputElement).value)" /></label>
+          <label>心跳声音量 · {{ settings.heartbeatVolume }}%<input :value="settings.heartbeatVolume" type="range" min="0" :max="beatVolumeMax" step="5" @input="settings.heartbeatVolume = Number(($event.target as HTMLInputElement).value)" /></label>
           <label>红色时<select :value="settings.redBeat" @change="settings.redBeat = ($event.target as HTMLSelectElement).value as 'heartbeat'">
             <option v-for="key in redBeatOrder" :key="key" :value="key">{{ redBeatLabels[key] }}</option>
           </select></label>
         </div>
         <p class="muted">「不许碰」带 BPM 时用什么声音打拍子。关掉心跳声的话就用节拍器。</p>
+        <p class="muted">心跳声音量 100% 与以前一样，可以和节拍声分开调整（最高 {{ beatVolumeMax }}%）。</p>
         <label class="toggle"><input :checked="settings.heartbeatSync" type="checkbox" data-sundome-switch="heartbeat-sync" @change="settings.heartbeatSync = ($event.target as HTMLInputElement).checked" />心跳跟随 BPM</label>
         <p class="muted">关掉后，即使红色带 BPM，心跳也保持固定节奏。</p>
         <label class="toggle"><input :checked="settings.vibrate" type="checkbox" data-sundome-switch="vibrate" @change="settings.vibrate = ($event.target as HTMLInputElement).checked" />切换时振动</label>
@@ -690,8 +692,8 @@ void secondsLabel
 
       <template v-else>
         <label class="toggle"><input :checked="settings.hideRemaining" type="checkbox" data-sundome-switch="hide-remaining" @change="settings.hideRemaining = ($event.target as HTMLInputElement).checked" />隐藏剩余时间与进度</label>
-        <label>视频变暗 · {{ settings.brightness }}%<input :value="settings.brightness" type="range" :min="brightnessMin" max="100" step="5" @input="settings.brightness = Number(($event.target as HTMLInputElement).value)" /></label>
-        <p class="muted">{{ brightnessMin }}% 最暗，100% ＝ 完全透明不变暗；只影响播放器画面，不改原文件。</p>
+        <label>视频变暗程度 · {{ settings.dim }}%<input :value="settings.dim" type="range" min="0" max="100" step="5" data-sundome-dim @input="settings.dim = Number(($event.target as HTMLInputElement).value)" /></label>
+        <p class="muted">0%＝完全透明，不加暗色遮罩（视频原本的亮度）。100%＝和以前一样。只影响播放器画面，不改原文件。</p>
         <label class="toggle"><input :checked="settings.mixAudio" type="checkbox" data-sundome-switch="mix-audio" @change="settings.mixAudio = ($event.target as HTMLInputElement).checked" />边听音乐边玩</label>
         <div class="pip-card" :data-sundome-pip-section="settings.pipOffer ? 'on' : 'off'">
           <p class="pip-title">边看别的视频边玩</p>

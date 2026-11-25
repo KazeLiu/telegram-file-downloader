@@ -6,6 +6,7 @@ import { modeColors, type EdgeMode } from './engine.ts'
 
 const props = defineProps<{
   mode: EdgeMode
+  /** 变暗程度 0–100：0 完全透明，100 最暗（对齐参考站的 dim）。 */
   dim: number
   opacity: number
   scale: number
@@ -32,12 +33,12 @@ const glow = computed(() => {
   ].join(', ')
 })
 /**
- * 遮罩浓度对齐参考站：无遮罩=原亮度，最暗=rgba(0,0,0,.45)。
- * 我们的 brightness 越小越暗（20 最暗、100 完全透明），参考站是 dim 越大越暗，这里做线性映射。
+ * 遮罩浓度对齐参考站 `data-sundome-video-shade`：`rgba(0,0,0,0.45 * dim/100.toFixed(3))`。
+ * dim 越大越暗，0 = 完全透明（视频原本的亮度），100 = 最暗（0.45）。
  */
 const mask = computed(() => {
   const level = Math.min(100, Math.max(0, props.dim))
-  return Math.min(0.45, (0.45 * (100 - level)) / 80)
+  return Math.min(0.45, (0.45 * level) / 100)
 })
 </script>
 

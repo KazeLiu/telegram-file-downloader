@@ -22,7 +22,7 @@
 ```ts
 defineProps<{
   mode: EdgeMode        // 决定光晕颜色
-  dim: number           // 变暗比例 20–100（100 = 完全透明）
+  dim: number           // 变暗程度 0–100（0 = 完全透明，100 = 0.45 遮罩；对齐参考站）
   opacity: number       // 指令文字不透明度 30–100
   scale: number         // 指令文字大小 60–140
 }>()

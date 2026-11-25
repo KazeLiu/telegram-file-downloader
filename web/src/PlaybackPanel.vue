@@ -15,8 +15,7 @@ import PlaybackTopBar from './playback/PlaybackTopBar.vue'
 import PlaybackVolumePopover from './playback/PlaybackVolumePopover.vue'
 import { guideSteps, markGuideSeen, readGuideSeen } from './playback/guideSteps'
 import type { FinishReason } from './playback/types'
-import { beatVolumeMax, brightnessMin, formatClock, modeColors, modeColorsDark, modeLabels, textOpacityMin, textScaleMin } from './playback/engine'
-// brightnessMin 仍用于设置面板的变暗下限；播放层音量面板已改用文字浓度/大小（与参考站一致）。
+import { beatVolumeMax, formatClock, modeColors, modeColorsDark, modeLabels, textOpacityMin, textScaleMin } from './playback/engine'
 import { glansCommands, nippleCommands } from './playback/commands'
 import { EdgeSession, type SessionFrame } from './playback/session'
 import { edgeStorageKey, readEdgeSettings, writeEdgeSettings, type EdgeSettings } from './playback/settings'
@@ -197,8 +196,13 @@ const videoDimmed = computed(() => {
   if (cooling.value) return !settings.value.keepVideoWhileCooling
   return mode.value === 'stop' && !settings.value.keepVideoOnStop
 })
-/** 播放层遮罩浓度：红色（不许碰）且没开「红色也播放视频」时压得更暗，与参考站一致。 */
-const dimLevel = computed(() => (videoDimmed.value ? Math.max(brightnessMin, Math.round(settings.value.brightness * 0.45)) : settings.value.brightness))
+/**
+ * 播放层遮罩浓度：对齐参考站的 `dim`（越大越暗，0 完全透明）。
+ * 红色暂停时参考站不改遮罩浓度，只把视频本体透明度降到 `1 - 0.2 * dim`，所以这里不再乘系数。
+ */
+const dimLevel = computed(() => Math.min(100, Math.max(0, settings.value.dim)))
+/** 视频本体透明度：参考站 play 态 `1 - 0.2 * dim`，拿到许可时恢复 1。 */
+const mediaOpacity = computed(() => (allowed.value ? 1 : 1 - 0.2 * (dimLevel.value / 100)))
 
 /** 相位切到红色/离开红色时同步视频：关掉「红色也播放」就暂停并压暗，绿黄恢复播放。 */
 function syncVideoPhase() {
@@ -272,7 +276,7 @@ const mirrorVisible = computed(() => settings.value.mirror.on && screen.value ==
 /** 铺满背景时叠一层模式色遮罩（参考站用暗色变体，浓度跟随变暗设置）。 */
 const mirrorDim = computed(() => {
   const level = Math.min(100, Math.max(0, dimLevel.value))
-  const alpha = Math.min(0.45, (0.45 * (100 - level)) / 80)
+  const alpha = Math.min(0.45, (0.45 * level) / 100)
   return rgbaOf(modeColorsDark[mode.value], alpha)
 })
 
@@ -1230,6 +1234,7 @@ onBeforeUnmount(() => {
             data-layout="background"
             :data-playing="videoDimmed ? 'false' : 'true'"
             :data-dim="Math.round(dimLevel)"
+            :style="{ opacity: mediaOpacity }"
             @pointerup="tapSeek"
           >
             <div
@@ -1425,7 +1430,8 @@ onBeforeUnmount(() => {
 .playback-runtime { position: fixed; inset: 0; z-index: 60; color: #fff; outline: none; }
 .playback-runtime:fullscreen { inset: 0; width: 100%; height: 100%; background: #000; }
 /* 媒体层要接收手势（拖拽缩放、双击快进），外层 .sd-media 是 pointer-events:none。 */
-.playback-media { position: absolute; inset: 0; overflow: hidden; pointer-events: auto; }
+.playback-media {
+  transition: opacity .5s ease; position: absolute; inset: 0; overflow: hidden; pointer-events: auto; }
 /* 镜子：前置摄像头画面左右翻转。铺满背景时压暗，播放视频时固定到右下角小窗 */
 .mirror-video { pointer-events: none; object-fit: cover; position: absolute; }
 .mirror-bg { inset: 0; width: 100%; height: 100%; transform: scaleX(-1); }

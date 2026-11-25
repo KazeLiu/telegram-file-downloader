@@ -1,7 +1,7 @@
 // 寸止玩法的全局设置：对齐参考实现的 settings 结构（去掉联机与语音播报）。
 // 与播放列表分离：列表负责「放哪些媒体」，设置负责「怎么玩」。
 import {
-  bpmRandomMax, bpmRandomMin, brightnessMin, customCommandLimit, customCommandTextLimit, extendLengthOrder, restMax, restMin,
+  bpmRandomMax, bpmRandomMin, dimMin, customCommandLimit, customCommandTextLimit, extendLengthOrder, restMax, restMin,
   textOpacityMin, textScaleMin, videoVolumeMax,
   type Categories, type CustomCommand, type Difficulty, type ExtendLength, type Finale, type Hand, type InstructionLength,
   toneAfterOrder, toneOrder, type Mix, type RedBeat, type RestMode, type ToneAfter, type ToneKind, type Tune
@@ -49,7 +49,8 @@ export interface EdgeSettings {
   metronome: boolean
   beatVolume: number
   mediaVolume: number
-  brightness: number
+  /** 视频变暗程度 0–100：0 完全透明（原亮度），100 最暗（对齐参考站的 dim）。 */
+  dim: number
   hideRemaining: boolean
   mixAudio: boolean
   /** 开始后是否提示打开悬浮小窗（参考站的 pip-want，只影响提示）。 */
@@ -121,7 +122,7 @@ export const defaultEdgeSettings: EdgeSettings = {
   metronome: true,
   beatVolume: 100,
   mediaVolume: 60,
-  brightness: 55,
+  dim: 55,
   hideRemaining: false,
   mixAudio: false,
   pipOffer: true,
@@ -314,7 +315,7 @@ export function normalizeEdgeSettings(raw: unknown): EdgeSettings {
     metronome: boolOr(raw.metronome, defaultEdgeSettings.metronome),
     beatVolume: clampNumber(raw.beatVolume, 0, 300, defaultEdgeSettings.beatVolume),
     mediaVolume: clampNumber(raw.mediaVolume, 0, videoVolumeMax, defaultEdgeSettings.mediaVolume),
-    brightness: clampNumber(raw.brightness, brightnessMin, 100, defaultEdgeSettings.brightness),
+    dim: clampNumber(raw.dim, dimMin, 100, defaultEdgeSettings.dim),
     hideRemaining: boolOr(raw.hideRemaining, defaultEdgeSettings.hideRemaining),
     mixAudio: boolOr(raw.mixAudio, defaultEdgeSettings.mixAudio),
     pipOffer: boolOr(raw.pipOffer, defaultEdgeSettings.pipOffer),
