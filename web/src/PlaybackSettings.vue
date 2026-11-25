@@ -348,7 +348,7 @@ void secondsLabel
     <header class="card-head">
       <div class="card-heading">
         <h3 class="card-title">玩法设置</h3>
-        <p class="card-summary">{{ summary }}</p>
+        <p class="card-summary" data-sundome-summary>{{ summary }}</p>
         <p v-if="statsLine" class="card-stats" data-sundome-stats>{{ statsLine }}</p>
         <div v-if="dayLines.length" class="card-days" data-sundome-days>
           <p v-for="(line, index) in dayLines" :key="index" :class="{ 'card-days-strong': index === 0 }">{{ line }}</p>
@@ -362,17 +362,17 @@ void secondsLabel
           </svg>
           {{ recordsText.open }}<span class="card-history-count">{{ historyCount }}</span>
         </button>
-        <p v-if="changedCount" class="card-changed" data-sundome-changed>与默认不同的项目：{{ changedCount }}</p>
-        <button type="button" class="text-button card-reset-all" :title="allArmed ? '再点一次把全部设置恢复为默认值' : '恢复全部默认设置，保留自己的指令'" @click="resetAll">{{ allArmed ? '确认恢复？' : '恢复默认设置' }}</button>
+        <p v-if="changedCount" class="card-changed" data-sundome-changed :data-sundome-changed-count="changedCount">与默认不同的项目：{{ changedCount }}</p>
+        <button type="button" class="text-button card-reset-all" data-sundome-reset-open-head :title="allArmed ? '再点一次把全部设置恢复为默认值' : '恢复全部默认设置，保留自己的指令'" @click="resetAll">{{ allArmed ? '确认恢复？' : '恢复默认设置' }}</button>
         <button v-if="canReset" type="button" class="text-button card-reset" :title="resetArmed ? '再点一次把本组恢复为默认值' : '只把本组恢复为默认值，其他分组不变'" @click="resetGroup">{{ resetLabel }}</button>
       </div>
     </header>
     <label class="settings-search">查找设置<input v-model="search" type="search" placeholder="例如：乳头、左手、速度、视频" /></label>
-    <div class="settings-tabs" role="group" aria-label="设置分类">
+    <div class="settings-tabs" role="group" aria-label="设置分类" data-sundome-tabs :data-sundome-hits="visible.length">
       <button v-for="group in groups" :key="group.id" type="button" :aria-pressed="!search && selected === group.id" @click="selectGroup(group.id)">{{ group.label }}</button>
     </div>
     <p v-if="!visible.length" class="muted" role="status">没有匹配的设置，请换个关键词。</p>
-    <section v-for="group in visible" :key="group.id" class="settings-section" :aria-label="`${group.label}设置`">
+    <section v-for="group in visible" :key="group.id" class="settings-section" :data-sundome-find="group.label" :aria-label="`${group.label}设置`">
       <h4 v-if="search" class="section-title">{{ group.label }}</h4>
 
       <template v-if="group.id === 'play'">
