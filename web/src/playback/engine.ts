@@ -87,7 +87,7 @@ export const finaleHints: Record<Finale, string> = {
   always: '时间到就允许。不用抽签',
   never: '时间到也禁止。一次都不能射',
   ruin: '可以射，但射出的瞬间松手，不碰任其流出',
-  continuous: '射完不结束。接着来下一轮，想停就停',
+  continuous: '许可后约 100 秒。射了也别停，每 25 秒一条「再来一次」',
   overtime: '没抽中也不会以禁止结束，而是加时，直到获得许可（每加时一次概率 +15%，加时 5 次后必定许可）'
 }
 
