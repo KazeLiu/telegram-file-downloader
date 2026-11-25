@@ -25,7 +25,7 @@ import {
   MIRROR_CONSTRAINTS, classifyMirrorError, mirrorErrorLabels, mirrorPlaceFor, mirrorSupport, mirrorText, stopStream,
   type MirrorError
 } from './playback/mirror'
-import { SoundEngine } from './playback/sound'
+import { SoundEngine, applyAudioSession } from './playback/sound'
 import { loadPlaybackQueue, PlaybackImageBuffer } from './playbackLoader'
 import {
   clockTime, exportConfiguration, imageKey, importConfiguration, mediaKey, mediaUrl, newPlaylist, orderedMedia,
@@ -369,6 +369,11 @@ function tapSeek(event: PointerEvent) {
 
 watch([videoMuted, videoLevel], syncVideoSound)
 watch(taskKey, maybeSwitchVideo)
+// 「边听音乐边玩」是 iPhone 才有的行为：设 ambient 时不会打断别的 App 的音乐。
+watch([() => settings.value.mixAudio, () => settings.value.metronome, () => settings.value.heartbeat], ([mix, beat, heart]) => {
+  if (screen.value !== 'playing') return
+  applyAudioSession(mix, beat || heart)
+})
 
 const scheduleEdge = ref<EdgeSettings>()
 watch(() => playlist.value?.id, () => { /* 保留列表选择 */ })
@@ -481,6 +486,7 @@ async function start() {
   availableMedia = []; imageBuffer.clear(); note.value = ''
   options.value = { ...item, roots: item.roots.slice() }
   imageSeconds.value = item.imageSeconds
+  applyAudioSession(settings.value.mixAudio, settings.value.metronome || settings.value.heartbeat)
   void sound.ensure()
   try {
     await loadPlaybackQueue(options.value, signal, async (batch, done) => {

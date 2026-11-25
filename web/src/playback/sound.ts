@@ -9,6 +9,22 @@ export interface SoundOptions {
   duck?: () => number
 }
 
+/**
+ * iPhone 的 Safari 支持 navigator.audioSession：设成 ambient 时不会打断别的 App 的音乐。
+ * 参考站在「边听音乐边玩」打开时设 ambient，否则有声音就设 playback；不支持的浏览器直接跳过。
+ */
+export function applyAudioSession(mixAudio: boolean, hasSound: boolean) {
+  const nav = navigator as Navigator & { audioSession?: { type: string } }
+  if (!nav.audioSession) return
+  const next = mixAudio ? 'ambient' : hasSound ? 'playback' : ''
+  if (!next) return
+  try {
+    if (nav.audioSession.type !== next) nav.audioSession.type = next
+  } catch {
+    // 个别版本只读，忽略即可
+  }
+}
+
 export class SoundEngine {
   private context: AudioContext | null = null
   private master: GainNode | null = null
