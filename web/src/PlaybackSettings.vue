@@ -8,7 +8,7 @@ import {
   textOpacityMin, textScaleMin, formatClock,
   customCommandLimit, customCommandTextLimit, difficultyHints, difficultyLabels, difficultyOrder,
   durationMax, durationMin, extendLengthLabels, extendLengthOrder, finaleHints, finaleLabels, finaleOrder, instructionLengthLabels,
-  instructionLengthOrder, mixOf, modeLabels, modeOrder, presets, presetLabels, presetOrder,
+  instructionLengthOrder, mixOf, modeLabels, modeOrder, presetLabels, presetNone, presetNotes, presets, presetOrder,
   redBeatLabels, redBeatOrder, restFixedChoices, restModeLabels, restModeOrder, restRangeChoices,
   rewardChoices, toneAfterLabels, toneAfterOrder, difficulties, permitRate,
   toneLabels, toneOrder,
@@ -192,6 +192,19 @@ function clampBpm(value: string, fallback: number) {
   return Math.min(bpmRandomMax, Math.max(bpmRandomMin, 5 * Math.round(parsed / 5)))
 }
 
+// 当前命中哪一档推荐预设（没有命中就是「自定义设置」）。
+const activePreset = computed<keyof typeof presets | null>(() => {
+  const item = settings.value
+  for (const key of presetOrder) {
+    const preset = presets[key]
+    if (item.minutes !== preset.minutes || item.durationRandom) continue
+    if (item.difficulty !== preset.difficulty || item.finale !== preset.finale) continue
+    if (Object.keys(preset.categories).some(cat => item.categories[cat as keyof typeof preset.categories] !== preset.categories[cat as keyof typeof preset.categories])) continue
+    return key
+  }
+  return null
+})
+
 // 推荐预设：只覆盖时长/难度/结局与三类开关，微调值（tune）一并归零，与参考站一致。
 function applyPreset(key: keyof typeof presets) {
   const preset = presets[key]
@@ -367,7 +380,8 @@ void secondsLabel
         <div class="chips">
           <button v-for="key in presetOrder" :key="key" type="button" class="chip" :aria-pressed="settings.minutes === presets[key].minutes && settings.difficulty === presets[key].difficulty && settings.finale === presets[key].finale" @click="applyPreset(key)">{{ presetLabels[key] }}</button>
         </div>
-        <p class="muted">点一下换一套推荐组合：{{ presetLabels.first }} = 5 分钟·简单·必定允许；{{ presetLabels.standard }} = 10 分钟·普通·抽签；{{ presetLabels.long }} = 20 分钟·困难·抽签。</p>
+        <p v-if="activePreset" class="muted" data-sundome-preset-note>{{ presetNotes[activePreset] }}</p>
+        <p v-else class="muted" data-sundome-preset-note>{{ presetNone }}</p>
 
         <h5 class="field-label">{{ focusLegend }}</h5>
         <div class="chips">

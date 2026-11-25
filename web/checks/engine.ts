@@ -12,7 +12,7 @@ import {
   multiDoneBody, multiEndText, multiLines, multiRoundLabel, multiRoundSeconds, multiRounds, multiTitle, multiWindowSeconds,
   filterByCategories, finaleOrder, finalHoldMs, formatClock, instructionLengthOrder, mixOf, modeColors, modeColorsDark, modeLabels,
   modeOrder, mulberry32, permitMaxGain, permitRate, permitStep, pickCommandAt, pickIndex, pickMode, planFocus,
-  presets, presetOrder, randomBpm, randomSeed, redBeatOrder, restFixedChoices, restMax, restMin, restRangeChoices,
+  presets, presetNone, presetNotes, presetOrder, randomBpm, randomSeed, redBeatOrder, restFixedChoices, restMax, restMin, restRangeChoices,
   restSeconds, rewardChoices, shareOf, swapHands, taskAt, taskSeconds, textOpacityMin, textScaleMin, timeShareOf, toneAfterOrder,
   toneAfterForCommand, toneForTask, pickToneLine, toneLabels, toneOrder, type EdgeMode
 } from '../src/playback/engine.ts'
@@ -771,6 +771,12 @@ assert.ok(mirrorText.consentYes.includes('允许'), '同意文案要说明会打
   const stamp = new Date(2026, 10, 25, 10, 32).getTime()
   assert.equal(recordTime(stamp), '2026/11/25 10:32')
   // 文案齐备
+  // 推荐预设的说明文案
+  assert.deepEqual(presetOrder, ['first', 'standard', 'long'])
+  assert.equal(presetNotes.first, '5分钟·简单·必定允许。关闭寸止指令和姿势类指令')
+  assert.equal(presetNotes.standard, '10分钟·普通·抽签（默认）')
+  assert.equal(presetNotes.long, '20分钟·困难·抽签')
+  assert.equal(presetNone, '自定义设置')
   // 悬浮小窗提示（pipOffer / pipSite）
   assert.equal(defaults.pipOffer, true)
   assert.equal(defaults.pipSite, '')

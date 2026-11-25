@@ -217,6 +217,15 @@ export const presets = {
 export type PresetKey = keyof typeof presets
 export const presetOrder: PresetKey[] = ['first', 'standard', 'long']
 export const presetLabels: Record<PresetKey, string> = { first: '第一次', standard: '标准', long: '慢慢来·长时间' }
+/** 每档预设的一句话说明（照参考站中文原文）。 */
+export const presetNotes: Record<PresetKey, string> = {
+  first: '5分钟·简单·必定允许。关闭寸止指令和姿势类指令',
+  standard: '10分钟·普通·抽签（默认）',
+  long: '20分钟·困难·抽签'
+}
+/** 没有任何一档预设命中时的标签。 */
+export const presetNone = '自定义设置'
+
 
 export interface Mix {
   go: number
