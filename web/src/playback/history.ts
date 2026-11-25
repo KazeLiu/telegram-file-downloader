@@ -87,3 +87,54 @@ export function statsSummary(stats: EdgeStats) {
   parts.push(`忍住 ${stats.edges} 次`, `最长 ${stats.longest} 分钟`)
   return `${parts.join(' · ')}（本机记录）`
 }
+
+/** 「射了」单独记一档：中途结束了几次、最长坚持了多久（对齐参考站的 lost 存储）。 */
+export interface LostRecord {
+  /** 中途结束过几次 */
+  count: number
+  /** 中途结束的各局里最长坚持了多少毫秒 */
+  bestMs: number
+}
+
+export const lostStorageKey = 'shicun.edge.lost.v1'
+
+export const emptyLost: LostRecord = { count: 0, bestMs: 0 }
+
+export function normalizeLost(value: unknown): LostRecord {
+  if (!value || typeof value !== 'object') return { ...emptyLost }
+  const raw = value as Record<string, unknown>
+  return { count: whole(raw.count), bestMs: whole(raw.bestMs) }
+}
+
+export function readLost(value: string | null): LostRecord {
+  if (!value) return { ...emptyLost }
+  try {
+    return normalizeLost(JSON.parse(value))
+  } catch {
+    return { ...emptyLost }
+  }
+}
+
+export function writeLost(record: LostRecord) {
+  try {
+    localStorage.setItem(lostStorageKey, JSON.stringify(record))
+    return ''
+  } catch {
+    return '无法保存记录到本机，请检查浏览器存储空间或隐私设置。'
+  }
+}
+
+/** 记一次中途结束：次数 +1、最长取大；只有不是第一次且这次更久才算破纪录。 */
+export function addLost(record: LostRecord, elapsedMs: number) {
+  const span = Math.max(0, Math.round(elapsedMs))
+  return {
+    next: { count: record.count + 1, bestMs: Math.max(record.bestMs, span) } as LostRecord,
+    isBest: record.count > 0 && span > record.bestMs
+  }
+}
+
+/** 完成度百分比：中途结束时最多显示 99%，避免看成「已完成」。 */
+export function lostPct(elapsedMs: number, minutes: number) {
+  if (!(minutes > 0)) return 0
+  return Math.min(99, Math.max(0, Math.floor((elapsedMs / (60_000 * minutes)) * 100)))
+}

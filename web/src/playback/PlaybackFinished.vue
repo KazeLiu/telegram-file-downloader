@@ -14,9 +14,15 @@ const props = defineProps<{
   rounds: number
   /** 加时赛加了几次（0 表示没有加时；>0 时多显示一行「加时 N 次后获得许可」） */
   extends?: number
+  /** 中途结束（射了）累计几次 */
+  lostCount?: number
+  /** 中途结束的各局里最长坚持了多久（已格式化成 0:00） */
+  lostBest?: string
+  /** 这一次是不是破了自己的纪录 */
+  lostBestNow?: boolean
 }>()
 
-const emit = defineEmits<{ again: []; exit: [] }>()
+const emit = defineEmits<{ again: []; exit: []; penalty: [] }>()
 
 /** 结算文案：key 是结束原因，缺省落到 deny 那一套。 */
 const copy = computed(() => {
@@ -71,9 +77,11 @@ const background = computed(() => (copy.value.ruin
   ? 'radial-gradient(ellipse at 50% 30%, #c86a2a 0%, #6b2f0f 55%, #2a1206 100%)'
   : 'radial-gradient(ellipse at 50% 30%, #ff4d6d 0%, #a4123a 55%, #3a0612 100%)'))
 
-/** 三格统计：时间 / 指令 / 忍住，和参考站一致。 */
+/** 三格统计：时间 / 指令 / 忍住，和参考站一致（中途结束第一格叫「坚持时间」）。 */
+const lost = computed(() => props.outcome === 'lost')
+
 const facts = computed(() => [
-  { label: '时间', value: props.elapsed },
+  { label: lost.value ? '坚持时间' : '时间', value: props.elapsed },
   { label: '指令', value: `${props.commands}次` },
   { label: '忍住', value: `${props.held}次` }
 ])
@@ -94,6 +102,9 @@ const facts = computed(() => [
       加时 {{ props.extends }} 次后获得许可
     </p>
     <p class="sd-body" data-sundome-done-body>{{ copy.body }}</p>
+    <p v-if="lost && props.lostBestNow" class="sd-lost-best" data-sundome-lost-best>
+      在中途结束的各局里，这次坚持得最久
+    </p>
     <dl class="sd-facts">
       <div v-for="fact in facts" :key="fact.label" data-sundome-done-stat>
         <dt>{{ fact.label }}</dt>
@@ -101,10 +112,19 @@ const facts = computed(() => [
       </div>
     </dl>
     <p v-if="rounds > 1" class="sd-rounds">第 {{ rounds }} 轮</p>
+    <p v-if="lost && (props.lostCount ?? 0) > 0" class="sd-lost-record" data-sundome-lost-record>
+      中途结束 {{ props.lostCount }} 次 · 最长坚持 {{ props.lostBest }}（只存在这台设备里）
+    </p>
     <div class="sd-actions" data-sundome-done-actions>
       <button class="sd-primary" type="button" data-sundome-again @click="emit('again')">再来一次</button>
+      <button v-if="lost" class="sd-secondary" type="button" data-sundome-lost-penalty @click="emit('penalty')">
+        带惩罚再来一局
+      </button>
       <button class="sd-secondary" type="button" @click="emit('exit')">返回播放列表</button>
     </div>
+    <p v-if="lost" class="sd-lost-note" data-sundome-lost-penalty-note>
+      惩罚会把下一局的结局设为「必定禁止」。随时可以在设置里改回来。
+    </p>
   </div>
 </template>
 
@@ -127,6 +147,9 @@ const facts = computed(() => [
   color: rgba(255, 255, 255, .88); text-wrap: balance; word-break: auto-phrase;
 }
 .sd-extend-result { margin: 8px 0 0; font-size: 14px; font-weight: 700; color: #ffd0dc; }
+.sd-lost-best { margin: 10px 0 0; font-size: 14px; font-weight: 700; color: #ffd0dc; }
+.sd-lost-record { margin: 14px 0 0; font-size: 12px; color: rgba(255, 255, 255, .6); }
+.sd-lost-note { margin: 12px 0 0; max-width: 26rem; font-size: 12px; line-height: 1.6; color: rgba(255, 255, 255, .55); }
 .sd-facts { display: flex; gap: 24px; margin: 24px 0 0; padding: 0; }
 .sd-facts > div {
   display: flex; flex-direction: column; gap: 4px; padding: 10px 20px;

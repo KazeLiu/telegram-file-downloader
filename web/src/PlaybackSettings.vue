@@ -5,7 +5,7 @@ import type { Playlist } from './playback'
 import { settingsSummary } from './playback/summary'
 import {
   adjustMix, beatVolumeMax, bpmRandomMax, bpmRandomMin, brightnessMin, categoryHints, categoryLabels, categoryOrder,
-  textOpacityMin, textScaleMin,
+  textOpacityMin, textScaleMin, formatClock,
   customCommandLimit, customCommandTextLimit, difficultyHints, difficultyLabels, difficultyOrder,
   durationMax, durationMin, extendLengthLabels, extendLengthOrder, finaleHints, finaleLabels, finaleOrder, instructionLengthLabels,
   instructionLengthOrder, mixOf, modeLabels, modeOrder, presets, presetLabels, presetOrder,
@@ -21,7 +21,7 @@ import {
   MIRROR_CONSTRAINTS, classifyMirrorError, mirrorErrorLabels, mirrorPlaceLabels, mirrorPlaces, mirrorSupport, mirrorText,
   stopStream, type MirrorError
 } from './playback/mirror'
-import { emptyStats, readStats, statsStorageKey, statsSummary } from './playback/history'
+import { emptyLost, emptyStats, lostStorageKey, readLost, readStats, statsStorageKey, statsSummary } from './playback/history'
 import type { EdgeSettings } from './playback/settings'
 
 const settings = defineModel<EdgeSettings>({ required: true })
@@ -46,12 +46,19 @@ const activeTones = computed(() => toneOrder.filter(key => settings.value.tones[
 /** 本机成绩：只读给设置页顶部那行看，清除要再点一次确认。 */
 const stats = ref(readStats(typeof localStorage === 'undefined' ? null : localStorage.getItem(statsStorageKey)))
 const statsLine = computed(() => statsSummary(stats.value))
+/** 「射了」的记录：中途结束次数与最长坚持（只存在本机）。 */
+const lost = ref(readLost(typeof localStorage === 'undefined' ? null : localStorage.getItem(lostStorageKey)))
+const lostLine = computed(() => (lost.value.count
+  ? `中途结束 ${lost.value.count} 次 · 最长坚持 ${formatClock(lost.value.bestMs)}（只存在这台设备里）`
+  : ''))
 const statsArmed = ref(false)
 function clearStats() {
   if (!statsArmed.value) { statsArmed.value = true; return }
   statsArmed.value = false
   try { localStorage.setItem(statsStorageKey, JSON.stringify(emptyStats)) } catch { /* 存不进去就当没清 */ }
+  try { localStorage.setItem(lostStorageKey, JSON.stringify(emptyLost)) } catch { /* 同上 */ }
   stats.value = { ...emptyStats }
+  lost.value = { ...emptyLost }
 }
 
 function selectGroup(id: string) {
@@ -588,6 +595,12 @@ void secondsLabel
         <template v-if="statsLine">
           <h5 class="field-label">本机成绩</h5>
           <p class="muted" data-sundome-stats-line>{{ statsLine }}</p>
+          <p v-if="lostLine" class="muted" data-sundome-lost-line>{{ lostLine }}</p>
+          <button type="button" class="text-button" data-sundome-stats-clear @click="clearStats">{{ statsArmed ? '确认清除？' : '清除本机成绩' }}</button>
+        </template>
+        <template v-else-if="lostLine">
+          <h5 class="field-label">本机成绩</h5>
+          <p class="muted" data-sundome-lost-line>{{ lostLine }}</p>
           <button type="button" class="text-button" data-sundome-stats-clear @click="clearStats">{{ statsArmed ? '确认清除？' : '清除本机成绩' }}</button>
         </template>
       </template>

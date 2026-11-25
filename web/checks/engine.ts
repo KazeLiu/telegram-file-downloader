@@ -22,7 +22,7 @@ import { EdgeSession } from '../src/playback/session.ts'
 import {
   MIRROR_CONSTRAINTS, classifyMirrorError, mirrorPlaceFor, mirrorPlaces, mirrorPlaceLabels, mirrorText, stopStream
 } from '../src/playback/mirror.ts'
-import { addSession, emptyStats, normalizeStats, readStats, statsSummary } from '../src/playback/history.ts'
+import { addLost, addSession, emptyLost, emptyStats, lostPct, normalizeLost, normalizeStats, readLost, readStats, statsSummary } from '../src/playback/history.ts'
 
 // —— 常量口径 ——
 assert.deepEqual(difficultyOrder, ['easy', 'normal', 'hard', 'hell'])
@@ -558,6 +558,28 @@ assert.deepEqual(mirrorPlaces, ['bg', 'corner'])
 assert.equal(mirrorPlaceLabels.bg, '铺满背景（调暗）')
 assert.equal(mirrorPlaceLabels.corner, '右下角小窗')
 assert.ok(mirrorText.consentYes.includes('允许'), '同意文案要说明会打开摄像头')
+{
+  // 「射了」的记录：次数 +1、最长取大，只有不是第一次且更久才算破纪录。
+  assert.deepEqual(emptyLost, { count: 0, bestMs: 0 })
+  const first = addLost(emptyLost, 90_000)
+  assert.deepEqual(first.next, { count: 1, bestMs: 90_000 })
+  assert.equal(first.isBest, false, '第一次没有可比对象，不算破纪录')
+  const second = addLost(first.next, 120_000)
+  assert.equal(second.isBest, true)
+  assert.deepEqual(second.next, { count: 2, bestMs: 120_000 })
+  const third = addLost(second.next, 60_000)
+  assert.equal(third.isBest, false, '这次更短，不算破纪录')
+  assert.deepEqual(third.next, { count: 3, bestMs: 120_000 })
+  assert.deepEqual(normalizeLost({ count: -4, bestMs: 'x' }), emptyLost)
+  assert.deepEqual(normalizeLost(null), emptyLost)
+  assert.deepEqual(readLost('not json'), emptyLost)
+  assert.deepEqual(readLost('{"count":3,"bestMs":180000}'), { count: 3, bestMs: 180_000 })
+  // 完成度最多显示 99%，避免看成已完成。
+  assert.equal(lostPct(30_000, 10), 5)
+  assert.equal(lostPct(600_000, 10), 99)
+  assert.equal(lostPct(0, 10), 0)
+  assert.equal(lostPct(30_000, 0), 0)
+}
 {
   // 停流必须逐个 track 停掉，否则摄像头指示灯不灭。
   const stopped: string[] = []

@@ -20,7 +20,7 @@ import { beatVolumeMax, brightnessMin, formatClock, modeColors, modeLabels, text
 import { glansCommands, nippleCommands } from './playback/commands'
 import { EdgeSession, type SessionFrame } from './playback/session'
 import { edgeStorageKey, readEdgeSettings, writeEdgeSettings, type EdgeSettings } from './playback/settings'
-import { addSession, readStats, statsStorageKey, writeStats } from './playback/history'
+import { addLost, addSession, lostPct, lostStorageKey, readLost, readStats, statsStorageKey, writeLost, writeStats, type LostRecord } from './playback/history'
 import {
   MIRROR_CONSTRAINTS, classifyMirrorError, mirrorErrorLabels, mirrorPlaceFor, mirrorSupport, mirrorText, stopStream,
   type MirrorError
@@ -95,6 +95,9 @@ let suppressClick = false
 let lastMode = ''
 let lastTask = -1
 let statsDone = false
+/** 中途结束（射了）的记录：次数与最长坚持，只存本机。 */
+const lostRecord = ref<LostRecord>({ count: 0, bestMs: 0 })
+const lostBestNow = ref(false)
 /** 红色（不许碰）时由我们主动暂停视频，避免被 videoPaused 当成用户暂停整局。 */
 let videoHold = false
 /** Document PiP 小窗句柄（关掉后置空）。 */
@@ -579,8 +582,21 @@ function recordStats(reason: FinishReason) {
   try { stored = localStorage.getItem(statsStorageKey) } catch { return }
   const next = addSession(readStats(stored), reason, instance.minutes, instance.held)
   writeStats(next)
+  recordLost(reason)
 }
 
+/** 「射了」单独记一档：中途结束次数与最长坚持（对齐参考站的 lost 存储）。 */
+function recordLost(reason: FinishReason) {
+  if (reason !== 'lost') return
+  const instance = session.value
+  if (!instance) return
+  let stored: string | null = null
+  try { stored = localStorage.getItem(lostStorageKey) } catch { return }
+  const result = addLost(readLost(stored), instance.elapsed)
+  writeLost(result.next)
+  lostRecord.value = result.next
+  lostBestNow.value = result.isBest
+}
 function advancePending() {
   if (!pendingAdvance || screen.value !== 'playing' || runtimeSettings.value
     || (queueLoading.value && queue.value.length <= 1)) return
@@ -905,9 +921,18 @@ function restart() {
   if (!options.value) { backToLists(); return }
   imageBuffer.clear(); imageLoad++
   stopMirror()
+  lostBestNow.value = false
   const cycle = playbackCycle(availableMedia, options.value, preferences.shownImages)
   queue.value = cycle.queue; preferences.shownImages = cycle.shownImages
   beginSession()
+}
+
+/** 「带惩罚再来一局」：把下一局的结局改成「必定禁止」，然后立刻重开。 */
+function penaltyRestart() {
+  settings.value.finale = 'never'
+  persistEdge()
+  note.value = ''
+  restart()
 }
 function closeGuide() {
   guideOpen.value = false
@@ -964,6 +989,10 @@ onMounted(() => {
     const storedEdge = localStorage.getItem(edgeStorageKey)
     if (storedEdge) settings.value = readEdgeSettings(storedEdge)
   } catch { /* 设置读不出来就用默认值 */ }
+  try {
+    const storedLost = localStorage.getItem(lostStorageKey)
+    if (storedLost) lostRecord.value = readLost(storedLost)
+  } catch { /* 记录读不出来就当没玩过 */ }
   if (!preferences.playlists.length) createPlaylist()
   if (!playlist.value) preferences.selected = preferences.playlists[0]!.id
   setupModel.ready = true
@@ -1058,8 +1087,12 @@ onBeforeUnmount(() => {
       :commands="commandCount"
       :rounds="frame?.round ?? round"
       :extends="session?.extends ?? 0"
+      :lost-count="lostRecord.count"
+      :lost-best="clockTime(lostRecord.bestMs)"
+      :lost-best-now="lostBestNow"
       @again="restart"
       @exit="backToLists"
+      @penalty="penaltyRestart"
     />
 
     <div v-else ref="playerElement" class="playback-runtime" tabindex="-1">
