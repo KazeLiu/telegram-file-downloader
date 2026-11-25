@@ -94,6 +94,7 @@ interface DifficultyProfile {
 | `switchVideoPerCommand` | boolean（每换一条指令就切下一个视频） | `false` |
 | `bpmRandom` | `{ on: boolean, min: 20–300, max: 20–300 }`（开启后每条绿黄指令的 BPM 在范围内重随机，红色固定 60 不参与） | `{ on: false, min: 60, max: 160 }` |
 | `heartbeatSync` | boolean（心跳跟随 BPM；关掉后红色带 BPM 时心跳仍固定 60） | `true` |
+| `bpm` | `Record<string, number>`（逐条 BPM 覆盖：键是口令下标，0 表示这条不打节拍，0 值不落盘） | `{}` |
 | `vibrate` | boolean（仅手机有效） | `true` |
 | `vibrateOn` | `{ command, edge, finish }: boolean` | 全 `true` |
 | `toy` | boolean（飞机杯道具模式：并入 20 条道具口令，并剔除 `bareHand` / `shaft` 的手部口令） | `false` |
@@ -108,6 +109,8 @@ interface DifficultyProfile {
 | `videoSound` | `'off' \\| 'end' \\| 'always'`（视频声音） | `'end'` |
 | `skipIntro` | boolean（视频从中间开始播放） | `false` |
 | `mirror` | `{ on: boolean, place: 'bg' \\| 'corner' }`（前置摄像头，仅在播放中开启） | `{ false, 'corner' }` |
+| `pipOffer` | boolean（开始后提示打开悬浮小窗，只影响提示） | `true` |
+| `pipSite` | string（常看的网站，只存本机；必须是 `http(s)://` 开头，≤200 字，否则存空串） | `''` |
 
 导出：`edgeStorageKey`、`edgeSchemaVersion`、`defaultEdgeSettings`、`normalizeEdgeSettings(raw)`、
 `readEdgeSettings(value: string | null)`、`writeEdgeSettings(settings): string`（返回错误串，空串＝成功）。
@@ -343,10 +346,10 @@ export const cooldownHint = '已记录忍住。下一条指令前不许碰。'
 | 组 | 字段 |
 | --- | --- |
 | 玩法 | 推荐预设 `presets`、只玩乳头 / 龟头 `nipple` `glans`、道具模式 `toy` `aneros`、时长 `minutes` + `durationRandom`、难度 `difficulty`、自己调 `tune`（许可概率 / 三相位 mix）、结局 `finale` + `allowRuin`、`rewardSeconds`、`rest`、`instructionLength`、图例与规则句 |
-| 指令 | 分类 `categories`、惯用手 `hand`、口吻 `tones` + `toneLine(show/before/after)`、自定义口令 `custom`（≤30 条 / 60 字）、逐条启停 `disabled`（按 `modeOrder` 分组列 `maleCommands`） |
+| 指令 | 分类 `categories`、惯用手 `hand`、口吻 `tones` + `toneLine(show/before/after)`、自定义口令 `custom`（≤30 条 / 60 字）、逐条启停 `disabled` + 逐条 BPM `bpm`（按 `modeOrder` 分组列 `maleCommands`，每行一个 BPM 数字框） |
 | 视频·图片 | 直接绑 `Playlist`：`kind / order / imageCount / imageTiming / imageSeconds / bpm(20–300) / loop / favoritesOnly` + `keepVideoOnStop` + `switchVideoPerCommand` + `keepVideoWhileCooling` + `videoSound` + `skipIntro` + `fit` / `pos` + `textOpacity` / `textScale` |
 | 声音 | `metronome` + `beatVolume(0–300)`、`mediaVolume(0–100)`、`heartbeat` + `heartbeatVolume(0–300)` + `redBeat` + `heartbeatSync`、`bpmRandom(on/min/max)`、`vibrate` + `vibrateOn(command/edge/finish)` |
-| 其他 | `hideRemaining`、`dim(0–100)`、`mixAudio`、`mirror(on/place)` + 前置摄像头同意卡、连续天数（`shicun.edge.days.v1`）、本机成绩行（`shicun.edge.stats.v1`）、历史成绩入口（`shicun.edge.history.v1` + `shicun.edge.tally.v1`） |
+| 其他 | `hideRemaining`、`dim(0–100)`、`mixAudio`、`pipOffer` + `pipSite`（边看别的视频边玩的悬浮小窗提示）、`mirror(on/place)` + 前置摄像头同意卡、连续天数（`shicun.edge.days.v1`）、本机成绩行（`shicun.edge.stats.v1`）、历史成绩入口（`shicun.edge.history.v1` + `shicun.edge.tally.v1`） |
 
 ### 单部位模式（`web/src/playback/focus.ts`）
 

@@ -188,13 +188,16 @@ defineProps<{
   textScale: number
   textOpacityMin: number   // 30
   textScaleMin: number     // 60
+  textScaleMax: number     // 100
+  dim: number              // 变暗程度 0–100（0 = 完全透明，100 = 0.45 遮罩；对齐参考站）
 }>()
-defineEmits<{ update: [payload: { key: 'mediaVolume' | 'beatVolume' | 'textOpacity' | 'textScale'; value: number }] }>()
+defineEmits<{ update: [payload: { key: 'mediaVolume' | 'beatVolume' | 'textOpacity' | 'textScale' | 'dim'; value: number }] }>()
 ```
 
 - 右上卡片：`width: min(288px, calc(100vw - 24px))`、`border: 1px solid rgba(255,255,255,.15)`、`background: rgba(0,0,0,.95)`、圆角 12px。
 - 五行滑杆：视频音量 0–100 / 节拍声 0–`beatVolumeMax` / 指令文字不透明度 / 指令文字大小 60–100 / 视频变暗程度 0–100，每行结构照参考站 `ah`（标题 + 右侧百分比 + 下方 range + 灰色说明 12px/60%）。
-- **不含**心跳音量与视频变暗——这两项在设置面板的「声音」「其他」组。
+- 视频行说明带 `data-sundome-volume-locked="play"`（iOS 上改不了视频音量，提示把节拍声调到 100% 以上平衡）。
+- **不含**心跳音量——这一项在设置面板的「声音」组。
 
 ## PlaybackGuide.vue
 
@@ -249,3 +252,12 @@ defineEmits<{ close: [skipped: boolean] }>()
 - 摘要行格式形如 `10 分钟 · 普通 · 抽签 · 指令 88 种 · 许可率 70% · 不许碰 5–10 秒 · 节拍声开`。
 - 「其他」组含镜子（前置摄像头）：开关先弹同意卡（`mirrorText.consentTitle/consentBody`），点「允许使用摄像头」才 `getUserMedia`；
   失败按 `classifyMirrorError` 出中文提示并保持关闭；开启后可选位置（`铺满背景（调暗）` / `右下角小窗`）。
+- 分类栏是 `role="tablist"`，每个按钮 `role="tab"` 带 `aria-controls`；每个分组 `<section role="tabpanel" :data-sundome-tab-panel="groupId" :aria-labelledby>`。
+- 搜索框 `data-sundome-settings-search`：有关键词时逐项过滤（`applyFind()` 遍历 `.settings-section` 的直接子元素，
+  `H5` 作为分组标题决定「本节后续全显示」，其余按自身文本命中决定 `hidden`），命中数写 `data-sundome-tabs` 的 `data-sundome-hits`，
+  无命中显示 `p[data-sundome-find-none]`「没有匹配的设置，请换个关键词。」
+- 头部「恢复默认设置」按钮 `data-sundome-reset-open-head`，点击后在卡片头下方出确认条 `div[data-sundome-reset="confirm"]`
+  （文案「要把设置恢复成默认吗？」+ `data-sundome-reset-yes`「恢复」+ `data-sundome-reset-no`「取消」）；
+  恢复完成后头部出现 `span[data-sundome-reset-done]`「已恢复默认设置」（`watch(settings, …, { flush: 'sync' })` 有任何改动就清掉）。
+- 「指令」组的逐条启停是行式列表（`ul.command-rows > li`：口令文字 + 可选分类小字 + `input[type=number][data-sundome-bpm-input]` + `button[role=switch][data-sundome-cmd]`），
+  BPM 框 `min=0 max=300`、`title`/`aria-label` 为「BPM（0=无节拍）」，值等于原 BPM 或 0；改回原值即从 `settings.bpm` 删掉该键。
