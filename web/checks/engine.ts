@@ -19,6 +19,10 @@ import {
 import { abuseLines, feetLines, strongLines, sweetLines, teaseLines, toneNotes } from '../src/playback/tones.ts'
 import { anerosCommands, focusGlansCommands, focusNippleCommands, maleCommands, toyCommands } from '../src/playback/commands.ts'
 import { addDay, dayKey, daysBetween, daysStorageKey, daysSummary, daysText, daysView, emptyDays, hoursLeftToday, nextMilestone, normalizeDays, readDays, writeDays } from '../src/playback/days.ts'
+import {
+  countResult, emptyTally, parseRecords, pushRecord, readRecords, readTally, recordOutcome, recordOrder, recordTime,
+  recordsStorageKey, recordsText, stamps, tallyFromStats, tallyStorageKey, writeRecords, writeTally
+} from '../src/playback/records.ts'
 import { focusAllowBelow, focusAreas, focusLabels } from '../src/playback/focus.ts'
 import { defaultEdgeSettings, edgeSchemaVersion, edgeStorageKey, normalizeEdgeSettings, readEdgeSettings, writeEdgeSettings } from '../src/playback/settings.ts'
 import { EdgeSession } from '../src/playback/session.ts'
@@ -706,6 +710,84 @@ assert.ok(mirrorText.consentYes.includes('允许'), '同意文案要说明会打
     assert.deepEqual(readDays(store.get(daysStorageKey) ?? null), first.next)
   } finally {
     if (original) Object.defineProperty(globalThis, 'localStorage', original)
+    else delete (globalThis as { localStorage?: unknown }).localStorage
+  }
+}
+
+// ---- 历史成绩（最近 30 条 + 累计）----
+{
+  assert.deepEqual(recordOrder, ['success', 'ruin', 'fail', 'lost'])
+  // 结局映射与参考站一致
+  assert.equal(recordOutcome('allow'), 'success')
+  assert.equal(recordOutcome('duration'), 'success')
+  assert.equal(recordOutcome('ruin'), 'ruin')
+  assert.equal(recordOutcome('lost'), 'lost')
+  assert.equal(recordOutcome('deny'), 'fail')
+  assert.equal(recordOutcome('manual'), 'fail')
+  assert.equal(recordOutcome('queue'), 'fail')
+  // 累计：第一次玩时 seeded 变成 true，序号从 1 开始
+  const counted = countResult(emptyTally, 'allow')
+  assert.equal(counted.nth, 1)
+  assert.deepEqual(counted.next, { n: 1, r: { success: 1, ruin: 0, fail: 0, lost: 0 }, seeded: true })
+  assert.equal(countResult(counted.next, 'lost').nth, 2)
+  assert.equal(countResult(counted.next, 'lost').next.r.lost, 1)
+  // 旧成绩迁移：seeded 为真就不再动
+  const seeded = { n: 7, r: { success: 3, ruin: 1, fail: 2, lost: 1 }, seeded: true }
+  assert.equal(tallyFromStats(seeded, 10, 5, 2, 3, 1), seeded)
+  const migrated = tallyFromStats(emptyTally, 2, 1, 0, 1, 1)
+  assert.deepEqual(migrated, { n: 3, r: { success: 1, ruin: 0, fail: 1, lost: 1 }, seeded: false })
+  // 详细记录的解析：坏数据丢掉、按时间倒序、最多 30 条
+  const sample = { t: 1_700_000_000_000, o: 'success', m: 10, c: 24, e: 3, d: 'normal', n: 5 }
+  assert.deepEqual(parseRecords([sample])[0], { ...sample })
+  assert.deepEqual(parseRecords([{ ...sample, o: 'win' }]), [], '未知结局丢掉')
+  assert.deepEqual(parseRecords([{ ...sample, t: 0 }]), [], '没有时间戳丢掉')
+  assert.deepEqual(parseRecords(null), [])
+  const older = { ...sample, t: sample.t - 1000 }
+  const sorted = parseRecords([older, sample])
+  assert.equal(sorted[0].t, sample.t)
+  // 夹取与可选字段
+  const clamped = parseRecords([{ t: sample.t, o: 'lost', m: 999, c: -5, e: 9999, d: 'nope', n: -1, ms: 90_000, x: 2, k: true }])[0]
+  assert.equal(clamped.m, 180)
+  assert.equal(clamped.c, 0)
+  assert.equal(clamped.e, 99)
+  assert.equal(clamped.d, 'normal')
+  assert.equal(clamped.n, 0)
+  assert.equal(clamped.ms, 90_000)
+  assert.equal(clamped.x, 2)
+  assert.equal(clamped.k, true)
+  assert.equal(parseRecords([{ ...sample, o: 'success' }])[0].ms, undefined, '非中途结束不写 ms')
+  // 只留最近 30 条
+  const many = Array.from({ length: 40 }, (_, index) => ({ ...sample, t: sample.t + index }))
+  const kept = pushRecord(parseRecords(many.slice(0, 30)), { ...sample, t: sample.t + 100 })
+  assert.equal(kept.length, 30)
+  assert.equal(kept[0].t, sample.t + 100)
+  assert.equal(parseRecords(many).length, 30)
+  // 集章
+  assert.deepEqual(stamps(1), { index: 1, sheets: 0 })
+  assert.deepEqual(stamps(10), { index: 10, sheets: 0 })
+  assert.deepEqual(stamps(11), { index: 1, sheets: 1 })
+  assert.deepEqual(stamps(25), { index: 5, sheets: 2 })
+  // 时间文案
+  const stamp = new Date(2026, 10, 25, 10, 32).getTime()
+  assert.equal(recordTime(stamp), '2026/11/25 10:32')
+  // 文案齐备
+  assert.equal(recordsText.title, '历史成绩')
+  assert.equal(recordsText.empty, '还没有详细记录。从下一局开始保存。')
+  // 存取往返
+  const store2 = new Map<string, string>()
+  const stub2 = { getItem: (key: string) => store2.get(key) ?? null, setItem: (key: string, value: string) => void store2.set(key, value), removeItem: (key: string) => void store2.delete(key) }
+  const original2 = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  Object.defineProperty(globalThis, 'localStorage', { value: stub2, configurable: true })
+  try {
+    assert.equal(writeRecords([sample]), '')
+    assert.equal(store2.get(recordsStorageKey), JSON.stringify([sample]))
+    assert.deepEqual(readRecords(store2.get(recordsStorageKey) ?? null), [sample])
+    assert.equal(writeTally(counted.next), '')
+    assert.deepEqual(readTally(store2.get(tallyStorageKey) ?? null), counted.next)
+    assert.deepEqual(readRecords('not json'), [])
+    assert.deepEqual(readTally('not json'), emptyTally)
+  } finally {
+    if (original2) Object.defineProperty(globalThis, 'localStorage', original2)
     else delete (globalThis as { localStorage?: unknown }).localStorage
   }
 }

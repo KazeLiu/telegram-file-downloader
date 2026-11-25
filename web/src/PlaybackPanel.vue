@@ -23,6 +23,10 @@ import { edgeStorageKey, readEdgeSettings, writeEdgeSettings, type EdgeSettings 
 import { addLost, addSession, lostPct, lostStorageKey, readLost, readStats, statsStorageKey, writeLost, writeStats, type LostRecord } from './playback/history'
 import { addDay, daysStorageKey, readDays, writeDays, type EdgeDays } from './playback/days'
 import {
+  countResult, pushRecord, readRecords, readTally, recordOutcome, recordsStorageKey, tallyStorageKey, writeRecords, writeTally,
+  type ResultRecord
+} from './playback/records'
+import {
   MIRROR_CONSTRAINTS, classifyMirrorError, mirrorErrorLabels, mirrorPlaceFor, mirrorSupport, mirrorText, stopStream,
   type MirrorError
 } from './playback/mirror'
@@ -591,6 +595,7 @@ function finish(reason: FinishReason) {
   buzz([60, 40, 60, 40, 120], 'finish')
   recordStats(reason)
   recordDay()
+  recordResult(reason)
   finishedReason.value = reason
   screen.value = 'finished'
   error.value = ''
@@ -631,6 +636,36 @@ function recordLost(reason: FinishReason) {
   lostRecord.value = result.next
   lostBestNow.value = result.isBest
 }
+/**
+ * 把这一局写进「历史成绩」：累计 +1，并插一条详细记录（最近 30 条）。
+ * 结局映射与参考站一致：allow/duration→success、ruin→ruin、lost→lost，其余→fail。
+ */
+function recordResult(reason: FinishReason) {
+  const instance = session.value
+  if (!instance) return
+  let storedTally: string | null = null
+  let storedRecords: string | null = null
+  try {
+    storedTally = localStorage.getItem(tallyStorageKey)
+    storedRecords = localStorage.getItem(recordsStorageKey)
+  } catch { return }
+  const counted = countResult(readTally(storedTally), reason)
+  writeTally(counted.next)
+  const record: ResultRecord = {
+    t: Date.now(),
+    o: recordOutcome(reason),
+    m: instance.minutes,
+    c: Math.max(0, commandCount.value),
+    e: instance.held,
+    d: settings.value.difficulty,
+    n: counted.nth
+  }
+  if (reason === 'lost') record.ms = Math.max(0, Math.round(instance.elapsed))
+  if (instance.extends > 0) record.x = instance.extends
+  if (settings.value.tune.mix) record.k = true
+  writeRecords(pushRecord(readRecords(storedRecords), record))
+}
+
 function advancePending() {
   if (!pendingAdvance || screen.value !== 'playing' || runtimeSettings.value
     || (queueLoading.value && queue.value.length <= 1)) return

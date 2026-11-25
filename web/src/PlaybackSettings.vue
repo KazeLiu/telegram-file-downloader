@@ -24,6 +24,8 @@ import {
 } from './playback/mirror'
 import { emptyLost, emptyStats, lostStorageKey, readLost, readStats, statsStorageKey, statsSummary } from './playback/history'
 import { daysStorageKey, daysSummary, emptyDays, readDays } from './playback/days'
+import PlaybackHistory from './playback/PlaybackHistory.vue'
+import { readTally, recordsText, tallyStorageKey } from './playback/records'
 import type { EdgeSettings } from './playback/settings'
 
 const settings = defineModel<EdgeSettings>({ required: true })
@@ -56,6 +58,19 @@ const dayLines = computed(() => daysSummary(days.value))
 const lostLine = computed(() => (lost.value.count
   ? `中途结束 ${lost.value.count} 次 · 最长坚持 ${formatClock(lost.value.bestMs)}（只存在这台设备里）`
   : ''))
+const history = ref<InstanceType<typeof PlaybackHistory>>()
+const historyOpen = ref(false)
+/** 累计局数（顶部「记录 N」按钮上的数字）：只读一次，打开弹窗时再刷新。 */
+function historyNumber() {
+  if (typeof localStorage === 'undefined') return 0
+  return readTally(localStorage.getItem(tallyStorageKey)).n
+}
+const historyCount = ref(historyNumber())
+function openHistory() {
+  history.value?.reload()
+  historyCount.value = historyNumber()
+  historyOpen.value = true
+}
 const statsArmed = ref(false)
 function clearStats() {
   if (!statsArmed.value) { statsArmed.value = true; return }
@@ -325,6 +340,13 @@ void secondsLabel
         </div>
       </div>
       <div class="head-actions">
+        <button v-if="historyCount" type="button" class="card-history" data-sundome-history-open="setup" @click="openHistory">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <polyline points="12 7 12 12 15 14" />
+          </svg>
+          {{ recordsText.open }}<span class="card-history-count">{{ historyCount }}</span>
+        </button>
         <p v-if="changedCount" class="card-changed" data-sundome-changed>与默认不同的项目：{{ changedCount }}</p>
         <button type="button" class="text-button card-reset-all" :title="allArmed ? '再点一次把全部设置恢复为默认值' : '恢复全部默认设置，保留自己的指令'" @click="resetAll">{{ allArmed ? '确认恢复？' : '恢复默认设置' }}</button>
         <button v-if="canReset" type="button" class="text-button card-reset" :title="resetArmed ? '再点一次把本组恢复为默认值' : '只把本组恢复为默认值，其他分组不变'" @click="resetGroup">{{ resetLabel }}</button>
@@ -646,6 +668,7 @@ void secondsLabel
         </template>
       </template>
     </section>
+    <PlaybackHistory ref="history" :open="historyOpen" @close="historyOpen = false" />
   </div>
 </template>
 
@@ -657,6 +680,24 @@ void secondsLabel
 .card-title { margin: 0; font-size: 20px; line-height: 1.4; }
 .card-summary { margin: 0; font-size: 14px; line-height: 1.6; color: var(--color-muted); overflow-wrap: anywhere; }
 .head-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+.card-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--color-selection);
+  border-radius: 999px;
+  background: var(--color-canvas);
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.card-history:hover { border-color: var(--color-primary); }
+.card-history-count { color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .card-changed { margin: 0; font-size: 12px; color: var(--color-muted); }
 .card-days { margin: 2px 0 0; display: grid; gap: 2px; }
 .card-days p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--color-muted); }
