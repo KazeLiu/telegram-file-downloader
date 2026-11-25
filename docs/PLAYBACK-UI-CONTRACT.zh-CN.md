@@ -91,13 +91,14 @@ defineProps<{
   toneBefore?: string     // 口吻前置短句，空串表示不显示
   toneAfter?: string      // 口吻后置短句，空串表示不显示
 }>()
-defineEmits<{ hold: []; lost: [] }>()
+defineEmits<{ hold: []; lost: []; guide: [] }>()
 ```
 
 - 结构：模式胶囊（`data-sundome-mode-label`，`letter-spacing .25em`）＋ `N BPM` 与跳动圆点 → 指令（`data-sundome-command`，`font-size: 28px`，≥640px `48px`，`font-weight: 700`，`letter-spacing: -.025em`，`text-shadow: 0 0 28px rgba(0,0,0,.35)`）→ 指令小字（`data-sundome-hint`，16px，70% 白）→ 倒计时条（`data-sundome-task-bar`，160×4px，`animation: sd-shrink linear forwards`，时长 = `taskSeconds`）→ 「忍住了」主按钮（`data-sundome-edge`，`min-width: 100px`、`padding: 12px 24px`、2px 白边、圆角 999）→ 提示「在快射的前一刻停下来了就按。按下后切换成“等它平息”」→ 「已忍住 N 次」→ `note` → 「射了」（`data-sundome-lost`，13px，55% 白，下划线）。
 - 指令**按「。！？」逐句渲染**（参考站的 `Sentences`）：每句 `<span class="sd-sentence">`（`display: inline-block; max-width: 100%; word-break: keep-all; overflow-wrap: anywhere`），句子之间不切断词。
 - 「射了」先弹二次确认 `data-sundome-lost-ask`（`记为中途结束的一局吗？` ＋ 白底「记录并结束」`data-sundome-lost-yes` / 描边「继续」`data-sundome-lost-no`），换条（`taskKey` 变化）时自动收起。
 - `cooling` 时主按钮文案变「等它平息…」并禁用。
+- 暂停时（`paused && !cooling && !asking`）在「射了」下方多给一个「查看操作说明」入口（`data-sundome-guide-open`，药丸 12px，emit `guide`），点开重看引导；关掉引导时不会重复标记「已看过」以外的状态。
 - 口吻短句：`toneBefore` 渲染在指令**上方**（`data-sundome-tone="before"`，18px／≥640px 24px，700，`.85` 白），`toneAfter` 渲染在指令**下方**（`data-sundome-tone="after"`，16px／20px）；同时有前置时指令的上边距收到 12px。文字只做展示，不朗读。
 
 ## PlaybackBottom.vue
@@ -148,13 +149,18 @@ defineProps<{
   commands: number
   rounds: number
   extends?: number         // 加时次数；>0 时多显示一行「加时 N 次后获得许可」
+  lostCount?: number       // 中途结束累计次数
+  lostBest?: string        // 中途结束里最长的坚持时间（'5:20'）
+  lostBestNow?: boolean    // 这一次是不是破了自己的纪录
 }>()
-defineEmits<{ again: []; exit: [] }>()
+defineEmits<{ again: []; exit: []; penalty: [] }>()
 ```
 
 - 根 `data-sundome="done"` 带 `:data-result="copy.ruin ? 'ruin' : 'success'"`，背景同 `PlaybackReward` 的橙／粉两套。
 - 文案六路：`allow|duration` → Finished／坚持到底了／撑满了时间，拿到了许可。；`ruin` → Ruined／松手收场／如果在射出的瞬间松手了，就算成功。…；`lost` → Lost／没忍住，射了／坚持了 {elapsed}，完成了设定的 {minutes} 分钟中的 {percent}%。；`manual` → Finished／就到这儿；`queue` → Finished／素材放完了；其余 → Denied／今天被禁止了／没有拿到许可。…
-- 三格统计（`data-sundome-done-stat`）：时间 / 指令（`N次`）/ 忍住（`N次`）；动作区 `data-sundome-done-actions` 内「再来一次」（`data-sundome-again`）与「返回播放列表」。
+- 三格统计（`data-sundome-done-stat`）：时间 / 指令（`N次`）/ 忍住（`N次`）；中途结束时第一格改叫「坚持时间」。
+- 中途结束额外三行：破纪录提示（`data-sundome-lost-best`）、「中途结束 N 次 · 最长坚持 m:ss（只存在这台设备里）」（`data-sundome-lost-record`）、惩罚说明（`data-sundome-lost-penalty-note`）；动作区多一个「带惩罚再来一局」（`data-sundome-lost-penalty`，emit `penalty`），会把下一局结局改成「必定禁止」后立刻重开。
+- 动作区 `data-sundome-done-actions` 内还有「再来一次」（`data-sundome-again`）与「返回播放列表」。
 - 按钮均需 `min-height: 0`（同上，覆盖全局 44px）。
 
 ## PlaybackVolumePopover.vue
